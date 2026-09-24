@@ -11,6 +11,7 @@ from grounded.infra.migrations import (
     ChecksumMismatchError,
     InvalidMigrationFileError,
     Migration,
+    OutOfOrderMigrationError,
     UnknownAppliedMigrationError,
     checksum,
     discover_migrations,
@@ -74,6 +75,15 @@ class TestPlan:
     def test_edited_applied_migration_aborts(self, migrations: list[Migration]) -> None:
         applied = {"0001_first": "0" * 64}
         with pytest.raises(ChecksumMismatchError, match="0001_first"):
+            plan(migrations, applied)
+
+    def test_pending_migration_older_than_applied_aborts(self, tmp_path: Path) -> None:
+        # e.g. a branch adding 0002 merged after 0003 was already applied somewhere
+        for name in ("0001_first.sql", "0002_late.sql", "0003_third.sql"):
+            _write(tmp_path, name)
+        migrations = discover_migrations(tmp_path)
+        applied = {m.version: m.checksum for m in migrations if m.version != "0002_late"}
+        with pytest.raises(OutOfOrderMigrationError, match="0002_late"):
             plan(migrations, applied)
 
     def test_applied_migration_missing_on_disk_aborts(self, migrations: list[Migration]) -> None:

@@ -114,9 +114,9 @@ docs/        PRD, technical design, database design
 
 > Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. `ingest` arrives in Phase 1 and the question UI in Phase 5.
 >
-> **Windows:** psycopg's async driver can't run on the default Proactor event loop. Start the API with `--reload`
-> (as below), which makes uvicorn use the Selector loop. Linux and macOS are unaffected. The `python` on your PATH
-> doesn't matter: always go through `uv run`.
+> **Windows:** start the API with `grounded serve` (as below), not bare `uvicorn`: psycopg's async driver can't run
+> on the Proactor event loop that uvicorn picks there, and `serve` selects a compatible one. Always go through
+> `uv run`; the `python` on your PATH doesn't matter.
 
 ```bash
 cp .env.example .env
@@ -135,7 +135,7 @@ uv run grounded ingest --ref <fastapi-tag> --activate
 ```
 
 ```bash
-uv run uvicorn grounded.main:app --reload --port 8000
+uv run grounded serve --reload --port 8000
 ```
 
 ```bash

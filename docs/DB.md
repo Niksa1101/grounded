@@ -425,6 +425,7 @@ and then deleted by the ingest CLI (`grounded index prune`). Chunks and document
 
 - Files: `backend/migrations/NNNN_short_name.sql` (4-digit, sequential). Forward-only; no down migrations.
 - Runner (`grounded migrate`) applies pending files in order, each in its own transaction, and records `version` + `checksum` in `schema_migrations`.
+- A pending file numbered below the newest applied one aborts the run (e.g. a late-merged branch): renumber it instead.
 - **Never edit an applied migration.** If the checksum differs from the recorded one, the runner aborts. Fixes go into a new migration.
 - Checksums are sha256 over the file with CRLF normalized to LF (`.gitattributes` also forces LF), so a Windows checkout doesn't look like an edit.
 - The runner (`grounded.infra.migrations`) uses **sync** psycopg: it is offline tooling, not the request path. It takes a Postgres advisory lock so two concurrent runs can't interleave. Files run with no bind parameters, so psycopg uses the simple query protocol and a file may hold several statements.

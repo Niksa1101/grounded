@@ -24,12 +24,15 @@ LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 _LOCAL_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/grounded"
 _LOCAL_TEST_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/grounded_test"
 
+# The repo-root .env (this file is backend/src/grounded/settings.py). Anchored to the source tree,
+# not the working directory, so no stray .env above the repo can leak in. In a deployed install the
+# path doesn't exist and is ignored: the HF Space and CI use real env vars.
+_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        # Relative to the working directory: the repo-root .env works when running from the root or
-        # from backend/. A missing file is ignored (CI and the HF Space use real env vars).
-        env_file=("../.env", ".env"),
+        env_file=_ENV_FILE,
         env_file_encoding="utf-8",
         extra="ignore",
         frozen=True,
@@ -109,11 +112,16 @@ class Settings(BaseSettings):
 
     def _check_prod(self) -> None:
         """Fail fast on a misconfigured deploy instead of serving with dev defaults."""
-        missing = [
-            name.upper()
-            for name in ("database_url", "proxy_shared_secret", "ip_hash_secret")
-            if name not in self.model_fields_set
-        ]
+        missing: list[str] = []
+        for name in ("database_url", "proxy_shared_secret", "ip_hash_secret"):
+            value: SecretStr | None = getattr(self, name)
+            # An env var that exists but is blank (an unfilled deploy secret) counts as missing.
+            if (
+                name not in self.model_fields_set
+                or value is None
+                or not value.get_secret_value().strip()
+            ):
+                missing.append(name.upper())
         if missing:
             raise ValueError(f"APP_ENV=prod requires explicit {', '.join(missing)}")
         if self.allow_direct_api:

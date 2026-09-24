@@ -5,12 +5,15 @@ Later phases add the ingest, index, eval, ask and golden commands.
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import Annotated
 
 import typer
+import uvicorn
 from psycopg.conninfo import conninfo_to_dict
 
+from grounded.infra.logging import configure_logging
 from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
 from grounded.infra.migrations import migrate as run_migrations
 from grounded.settings import get_settings
@@ -21,7 +24,34 @@ app = typer.Typer(no_args_is_help=True, help="Grounded command-line tools.")
 @app.callback()
 def main() -> None:
     """Grounded command-line tools."""
-    # An explicit callback keeps `migrate` a subcommand even while it is the only command.
+    # An explicit callback keeps commands as subcommands (`grounded migrate`), whatever their count.
+
+
+@app.command()
+def serve(
+    host: Annotated[str, typer.Option(help="Interface to bind (0.0.0.0 in a container).")] = (
+        "127.0.0.1"
+    ),
+    port: Annotated[int, typer.Option(help="Port to listen on.")] = 8000,
+    reload: Annotated[bool, typer.Option(help="Restart on code changes (dev only).")] = False,
+) -> None:
+    """Run the API with uvicorn: app factory, JSON logs, no access log."""
+    configure_logging(get_settings().log_level)
+    uvicorn.run(
+        "grounded.main:create_app",
+        factory=True,
+        host=host,
+        port=port,
+        reload=reload,
+        # uvicorn's access log prints raw client IPs (AGENTS.md §6.13). Request logging with an
+        # HMAC'd IP comes with request_logs.
+        access_log=False,
+        # Keep our JSON root logger instead of uvicorn's own dictConfig.
+        log_config=None,
+        # psycopg async can't run on the Proactor loop, which uvicorn picks on Windows unless it
+        # runs the server in a subprocess (--reload/--workers). Elsewhere uvicorn's choice is fine.
+        loop="asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto",
+    )
 
 
 def _describe_target(conninfo: str) -> str:

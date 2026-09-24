@@ -64,6 +64,18 @@ class TestProdGuard:
         for name in ("DATABASE_URL", "PROXY_SHARED_SECRET", "IP_HASH_SECRET"):
             assert name in message
 
+    @pytest.mark.parametrize("name", ["database_url", "proxy_shared_secret", "ip_hash_secret"])
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_prod_rejects_blank_values(self, name: str, blank: str) -> None:
+        # An env var that exists but is empty (e.g. an unfilled deploy secret) is not "configured".
+        values = {
+            "database_url": "postgresql://app@db/grounded",
+            "proxy_shared_secret": "x" * 32,
+            "ip_hash_secret": "y" * 32,
+        } | {name: blank}
+        with pytest.raises(ValidationError, match=name.upper()):
+            make_settings(app_env="prod", **values)
+
     def test_prod_rejects_direct_api(self) -> None:
         with pytest.raises(ValidationError, match="ALLOW_DIRECT_API"):
             make_settings(
@@ -90,3 +102,11 @@ def test_env_example_lists_every_setting() -> None:
     text = env_example.read_text(encoding="utf-8")
     listed = set(re.findall(r"^#? ?([A-Z][A-Z0-9_]*)=", text, re.MULTILINE))
     assert listed == {name.upper() for name in Settings.model_fields}
+
+
+def test_env_file_is_the_repo_root_env_regardless_of_working_directory() -> None:
+    # A CWD-relative "../.env" would pick up a stray .env above the repo when run from the root.
+    env_file = Path(str(Settings.model_config.get("env_file")))
+    assert env_file.is_absolute()
+    assert env_file.name == ".env"
+    assert (env_file.parent / ".env.example").is_file()

@@ -614,7 +614,7 @@ Notes:
 
 ### Backend — Hugging Face Space (Docker)
 - Free CPU Space: sleeps after ~48 h without traffic (verify current policy). The daily keepalive prevents that.
-- `Dockerfile`: `python:3.12-slim`, install uv, `uv sync --frozen --no-dev`, copy `src/`, `migrations/`, `prompts/`, `pricing.toml`. Run as **uid 1000** (Spaces requirement). `EXPOSE 7860`. `CMD uvicorn grounded.main:app --host 0.0.0.0 --port 7860 --proxy-headers`.
+- `Dockerfile`: `python:3.12-slim`, install uv, `uv sync --frozen --no-dev`, copy `src/`, `migrations/`, `prompts/`, `pricing.toml`. Run as **uid 1000** (Spaces requirement). `EXPOSE 7860`. `CMD grounded serve --host 0.0.0.0 --port 7860` (uvicorn via the app factory, JSON logs, access log off because it prints raw IPs).
 - Space metadata README (`infra/hf-space/README.md`): `sdk: docker`, `app_port: 7860`. It is pushed to the Space repo root; the project README stays in GitHub.
 - Secrets in Space settings: DB URL (app role, pooled), provider keys, `PROXY_SHARED_SECRET`, `IP_HASH_SECRET`.
 - Startup: open pool, load the active index version, warm providers lazily. `/readyz` reflects readiness.

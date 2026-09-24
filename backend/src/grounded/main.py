@@ -1,7 +1,8 @@
 """FastAPI app factory and lifespan.
 
-``create_app`` takes explicit settings so tests can build isolated apps; the module-level ``app`` is
-what uvicorn serves (``uvicorn grounded.main:app``).
+``create_app`` takes explicit settings so tests can build isolated apps. There is deliberately no
+module-level ``app``: importing this module must not read settings. Serve it with ``grounded serve``
+(or ``uvicorn --factory grounded.main:create_app``).
 """
 
 from __future__ import annotations
@@ -37,6 +38,3 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.settings = settings
     app.include_router(health_router)
     return app
-
-
-app = create_app()

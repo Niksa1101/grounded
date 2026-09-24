@@ -6,6 +6,8 @@ Rules it enforces:
 - An applied file must never change: every recorded checksum is verified before anything runs,
   and a mismatch aborts the whole run.
 - A recorded version with no file on disk also aborts (an applied migration was deleted or renamed).
+- A pending file numbered below the newest applied one aborts: applying it late would give that
+  database a different history than a fresh one.
 - A session-level advisory lock serializes concurrent runners (e.g. two CI jobs on one database).
 
 This is offline tooling, not the request path, so it uses the synchronous psycopg API.
@@ -53,6 +55,14 @@ class ChecksumMismatchError(MigrationError):
 
 class UnknownAppliedMigrationError(MigrationError):
     pass
+
+
+class OutOfOrderMigrationError(MigrationError):
+    pass
+
+
+class MigrationDatabaseError(MigrationError):
+    """The database could not be reached or the runner's own bookkeeping queries failed."""
 
 
 class MigrationFailedError(MigrationError):
@@ -126,7 +136,17 @@ def plan(migrations: list[Migration], applied: dict[str, str]) -> list[Migration
             f"applied migrations were edited: {', '.join(mismatched)}. "
             "Never edit an applied migration; add a new one instead."
         )
-    return [m for m in migrations if m.version not in applied]
+    pending = [m for m in migrations if m.version not in applied]
+    if applied:
+        # Versions start with the zero-padded number, so string order is numeric order.
+        newest_applied = max(applied)
+        late = [m.version for m in pending if m.version < newest_applied]
+        if late:
+            raise OutOfOrderMigrationError(
+                f"pending migrations are older than the newest applied one ({newest_applied}): "
+                f"{', '.join(late)}. Renumber them after {newest_applied}."
+            )
+    return pending
 
 
 def migrate(conninfo: str, directory: Path = DEFAULT_MIGRATIONS_DIR) -> MigrationReport:
@@ -135,10 +155,18 @@ def migrate(conninfo: str, directory: Path = DEFAULT_MIGRATIONS_DIR) -> Migratio
 
     # autocommit: the advisory lock is session-level (released when the connection closes, even on
     # error) and each conn.transaction() below is a real BEGIN/COMMIT.
-    with psycopg.connect(conninfo, autocommit=True) as conn:
-        conn.execute("SELECT pg_advisory_lock(%s)", (_ADVISORY_LOCK_KEY,))
-        conn.execute(_BOOTSTRAP_SQL)
-        rows = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
+    try:
+        conn = psycopg.connect(conninfo, autocommit=True)
+    except psycopg.Error as exc:
+        raise MigrationDatabaseError(f"cannot connect: {exc}") from exc
+
+    with conn:
+        try:
+            conn.execute("SELECT pg_advisory_lock(%s)", (_ADVISORY_LOCK_KEY,))
+            conn.execute(_BOOTSTRAP_SQL)
+            rows = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
+        except psycopg.Error as exc:
+            raise MigrationDatabaseError(f"cannot read migration history: {exc}") from exc
         applied: dict[str, str] = {version: recorded for version, recorded in rows}
 
         pending = plan(migrations, applied)

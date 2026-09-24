@@ -1,7 +1,9 @@
 """Shared fixtures.
 
 Two guarantees for every test (AGENTS.md §8):
-- **No real network.** Name resolution and socket connects to anything but localhost fail loudly.
+- **No real network.** Name resolution, socket connects and psycopg connections to anything but
+  localhost fail loudly. psycopg is guarded separately because libpq opens its sockets in C, out of
+  reach of the ``socket`` patch (a ``hostaddr=`` IP skips Python name resolution entirely).
 - **Never a real database.** Integration tests get a fresh local ``*_test`` database, migrated
   once per session and dropped at the end. The fixture refuses any non-local host or non-``_test``
   name, so a misconfigured TEST_DATABASE_URL can't touch Neon.
@@ -33,6 +35,8 @@ _LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 def _check_host(host: object) -> None:
     if host is None or (isinstance(host, str | bytes) and _decode(host) in _LOCAL_HOSTS):
         return
+    if isinstance(host, str) and host.startswith("/"):  # Unix-domain socket directory
+        return
     raise NetworkBlockedError(f"tests must not call external hosts (attempted {host!r})")
 
 
@@ -40,10 +44,22 @@ def _decode(host: str | bytes) -> str:
     return host.decode() if isinstance(host, bytes) else host
 
 
+def _check_conninfo(conninfo: str, kwargs: dict[str, Any]) -> None:
+    params = conninfo_to_dict(conninfo)
+    for key in ("host", "hostaddr"):
+        value = kwargs.get(key) or params.get(key)
+        # libpq accepts comma-separated lists for multi-host failover.
+        for host in str(value or "").split(","):
+            if host.strip():
+                _check_host(host.strip())
+
+
 @pytest.fixture(autouse=True)
 def _block_network(monkeypatch: pytest.MonkeyPatch) -> None:
     real_getaddrinfo = socket.getaddrinfo
     real_connect = socket.socket.connect
+    real_psycopg_connect = psycopg.Connection.connect
+    real_psycopg_connect_async = psycopg.AsyncConnection.connect
 
     def guarded_getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
         _check_host(host)
@@ -54,8 +70,25 @@ def _block_network(monkeypatch: pytest.MonkeyPatch) -> None:
             _check_host(address[0])
         real_connect(self, address)
 
+    def guarded_psycopg_connect(conninfo: str = "", **kwargs: Any) -> psycopg.Connection[Any]:
+        _check_conninfo(conninfo, kwargs)
+        return real_psycopg_connect(conninfo, **kwargs)
+
+    async def guarded_psycopg_connect_async(
+        conninfo: str = "", **kwargs: Any
+    ) -> psycopg.AsyncConnection[Any]:
+        _check_conninfo(conninfo, kwargs)
+        return await real_psycopg_connect_async(conninfo, **kwargs)
+
     monkeypatch.setattr(socket, "getaddrinfo", guarded_getaddrinfo)
     monkeypatch.setattr(socket.socket, "connect", guarded_connect)
+    # psycopg.connect is a module-level alias of Connection.connect, so both are patched. The pool
+    # connects through AsyncConnection.connect.
+    monkeypatch.setattr(psycopg, "connect", guarded_psycopg_connect)
+    monkeypatch.setattr(psycopg.Connection, "connect", staticmethod(guarded_psycopg_connect))
+    monkeypatch.setattr(
+        psycopg.AsyncConnection, "connect", staticmethod(guarded_psycopg_connect_async)
+    )
 
 
 @pytest.fixture(scope="session")
