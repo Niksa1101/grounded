@@ -57,6 +57,13 @@ def test_pool_min_cannot_exceed_max() -> None:
 
 
 class TestProdGuard:
+    @pytest.fixture(autouse=True)
+    def _unset_guarded_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # make_settings honors real env vars, and CI sets DATABASE_URL for the job; without this
+        # the "missing" case would depend on where the tests run.
+        for name in ("DATABASE_URL", "PROXY_SHARED_SECRET", "IP_HASH_SECRET"):
+            monkeypatch.delenv(name, raising=False)
+
     def test_prod_requires_explicit_database_and_secrets(self) -> None:
         with pytest.raises(ValidationError) as excinfo:
             make_settings(app_env="prod")
