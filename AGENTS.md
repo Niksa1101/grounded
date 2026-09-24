@@ -127,7 +127,7 @@ Ask the Author before:
 
 ## 10. Commands
 
-Available once Phase 0 lands (keep this list current):
+Backend commands run from `backend/`; `ingest` and `eval` arrive in Phases 1–2, promptfoo in Phase 4 (keep this list current):
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d db
@@ -150,6 +150,10 @@ uv run pytest
 ```
 
 ```bash
+uv run grounded serve --reload --port 8000
+```
+
+```bash
 uv run grounded ingest --ref <fastapi-tag> --activate
 ```
 
@@ -164,6 +168,10 @@ npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 ```bash
 cd frontend && npm run lint && npm run typecheck && npm run build
 ```
+
+Run the API through `grounded serve`, not bare `uvicorn`: it uses the app factory, keeps logs JSON, turns off uvicorn's
+access log (it prints raw client IPs) and picks an event loop psycopg async can use on Windows. On Windows, use
+`uv run python`, not the `python` on PATH. Integration tests need Docker running.
 
 Before saying a task is done, run the relevant checks and report the actual output: lint, types, tests, and evals if quality-affecting.
 If something was skipped or failed, say so plainly.

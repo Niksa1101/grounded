@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| Status | Planning — Phase 0 not started |
+| Status | Phase 0 (Foundations) in progress |
 | Owner / Author | probniprobic4@gmail.com |
 | Last updated | 2026-09-24 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
@@ -185,7 +185,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | Accounts & keys checklist: GitHub repo, Neon project, Google AI Studio (Gemini) key, Groq key, Cohere trial key, Hugging Face account + Space, Vercel account | A |
 | `git init`, monorepo layout (`backend/`, `frontend/`, `eval/`, `infra/`, `docs/`), `.gitignore`, `.env.example` | G |
 | Backend: uv project (Python 3.12), ruff, pyright, pytest, pydantic-settings config, FastAPI app factory with lifespan, `/healthz`, `/readyz` | G |
-| `infra/docker-compose.yml` with `pgvector/pgvector:pg17` | G |
+| `infra/docker-compose.yml` with `pgvector/pgvector:0.8.6-pg17-trixie` (tag pinned) | G |
 | SQL migration runner + `0001_init.sql` (full schema from DB.md) | G |
 | Typer CLI entry point `grounded` (`migrate` command) | G |
 | Frontend: Next.js (App Router, TypeScript strict, Tailwind, shadcn/ui) scaffold | G |

@@ -1,0 +1,11 @@
+# Normalize line endings in the repo; Windows checkouts get LF too, so migration checksums and
+# prompt hashes are identical on every OS.
+* text=auto eol=lf
+*.sql text eol=lf
+*.md text eol=lf
+
+# Binary files
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff2 binary
