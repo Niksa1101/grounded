@@ -24,7 +24,7 @@
 | Local dev | Docker `pgvector/pgvector:0.8.6-pg17-trixie`, db `grounded`, port `5433` | `DATABASE_URL=postgresql://grounded:grounded@localhost:5433/grounded` |
 | Tests | Same container, db `grounded_test` (created/dropped by the pytest session) | `TEST_DATABASE_URL` |
 | CI | GitHub Actions service container `pgvector/pgvector:0.8.6-pg17-trixie` | set in workflow |
-| Production | Neon project `grounded`, branch `main` | runtime: **pooled** URL (`-pooler` host) as `app` role; migrations/ingest: **direct** URL as owner role |
+| Production | Neon project `grounded` (AWS US East 2), branch `production` | runtime: **pooled** URL (`-pooler` host) as `app` role; migrations/ingest: **direct** URL as owner role |
 
 Neon notes:
 - Neon scales compute to zero after inactivity; the first query after idle pays a wake-up (~0.5–1 s). This is measured, not hidden.
@@ -402,7 +402,7 @@ Percentiles over cached requests are excluded from stage latency, since a cache 
 
 ## 9. Retention and housekeeping
 
-Run daily by `keepalive.yml` (owner connection):
+Run daily by `housekeeping.yml` (owner connection):
 
 ```sql
 -- Privacy: strip user text and pseudonymous IDs after 30 days.
