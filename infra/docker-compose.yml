@@ -1,0 +1,24 @@
+# Local development database (DB.md §2). CI uses the same image as a service container.
+#   docker compose -f infra/docker-compose.yml up -d db
+name: grounded
+
+services:
+  db:
+    # Tag pinned to the pgvector release so local, CI and the documented behavior match.
+    image: pgvector/pgvector:0.8.6-pg17-trixie
+    environment:
+      POSTGRES_USER: grounded
+      POSTGRES_PASSWORD: grounded  # local-only credential, never used outside this container
+      POSTGRES_DB: grounded
+    ports:
+      - "5433:5432"  # 5433 avoids clashing with a locally installed Postgres on 5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U grounded -d grounded"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  pgdata:

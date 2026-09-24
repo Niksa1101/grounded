@@ -1,0 +1,30 @@
+# Secrets: only .env.example is committed
+.env
+.env.*
+!.env.example
+
+# Caches and generated eval output (AGENTS.md §11)
+.cache/
+eval/results/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.pyright/
+.coverage
+htmlcov/
+dist/
+build/
+
+# Node / Next.js (frontend/.gitignore covers the rest)
+node_modules/
+.next/
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

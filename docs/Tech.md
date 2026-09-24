@@ -83,6 +83,8 @@ The point is to show the mechanics.
 ```
 .
 ├── AGENTS.md                      # rules for agents and humans
+├── LICENSE                        # MIT
+├── .env.example                   # every Settings variable, no values
 ├── README.md                      # portfolio-facing product spec
 ├── docs/                          # PRD.md, Tech.md, DB.md, images/
 ├── backend/
@@ -107,9 +109,9 @@ The point is to show the mechanics.
 │   │   │   ├── confidence.py      # heuristic [A]
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
 │   │   ├── evals/                 # metrics.py [A], retrieval_runner.py, gate.py [A], report.py, judge.py
-│   │   ├── infra/                 # db.py, kvcache.py (SQLite), answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
+│   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
 │   │   └── observability/         # request_log.py, cost.py
-│   └── tests/                     # unit/, integration/, conftest.py, fixtures/
+│   └── tests/                     # unit/, integration/, conftest.py (fixtures), support.py (helpers), fixtures/
 ├── eval/
 │   ├── golden/                    # golden_set.v1.jsonl, README.md (labeling guide)
 │   ├── promptfoo/                 # promptfooconfig.yaml, provider.py, asserts.py, tests_loader.py
@@ -125,13 +127,18 @@ The point is to show the mechanics.
 ## 4. Configuration
 
 All configuration is loaded once through `grounded.settings.Settings` (pydantic-settings, env vars, `.env` in dev).
-Code never reads `os.environ` directly. `.env.example` lists every variable, with no real values.
+Code never reads `os.environ` directly. `.env.example` lists every variable, with no real values (a unit test keeps it in sync with `Settings`).
+`APP_ENV=prod` refuses to start without an explicit `DATABASE_URL`, `PROXY_SHARED_SECRET` and `IP_HASH_SECRET`,
+or with `ALLOW_DIRECT_API=true`.
 
 | Variable | Example / default | Purpose |
 |---|---|---|
 | `APP_ENV` | `dev` \| `test` \| `prod` \| `eval` | behavior switches (see §15.6) |
+| `LOG_LEVEL` | `INFO` | stdlib logging level |
 | `DATABASE_URL` | pooled Neon URL (app role) | runtime |
-| `DATABASE_URL_DIRECT` | direct Neon URL (owner) | migrate/ingest/retention |
+| `DATABASE_URL_DIRECT` | direct Neon URL (owner) | migrate/ingest/retention; falls back to `DATABASE_URL` when unset |
+| `TEST_DATABASE_URL` | `postgresql://grounded:grounded@localhost:5433/grounded_test` | pytest only; must be a local `*_test` DB |
+| `DB_POOL_MIN_SIZE`, `DB_POOL_MAX_SIZE`, `DB_POOL_TIMEOUT_S` | `1`, `5`, `5` | runtime connection pool (DB.md §2) |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `COHERE_API_KEY` | — | providers |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | `gemini-embedding-001` / `768` | must match active index version |
 | `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list (eval: `gemini`) |
@@ -143,7 +150,7 @@ Code never reads `os.environ` directly. `.env.example` lists every variable, wit
 | `RERANK_MODEL`, `RERANK_DAILY_CAP` | pinned, `30` | trial quota protection (~1k/month) |
 | `K_DENSE`, `K_FTS`, `K_FUSED`, `K_CONTEXT`, `RRF_K` | `20`, `20`, `40`, `5`, `60` | retrieval config |
 | `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `30` | per IP hash |
-| `DAILY_LLM_BUDGET` | below provider free RPD | global cap |
+| `DAILY_LLM_BUDGET` | below provider free RPD | global cap; optional until Phase 5 |
 | `ANSWER_CACHE_TTL_DAYS` | `30` | ≤ retention |
 | `PROXY_SHARED_SECRET` | random 32+ bytes | FE→BE auth |
 | `IP_HASH_SECRET` | random 32+ bytes | HMAC for IPs |
@@ -454,7 +461,7 @@ Base path `/v1`. JSON only. Errors share one shape:
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/healthz` | public | process up (used by keepalive) |
-| GET | `/readyz` | public | DB reachable + active index loaded |
+| GET | `/readyz` | public | DB reachable + active index loaded (Phases 0–2: DB reachable + schema present; reports `active_index_version` but doesn't require it until Phase 3) |
 | POST | `/v1/ask` | proxy secret | body `AskRequest` → `AskResponse` |
 | GET | `/v1/metrics/summary?window=7d` | proxy secret | aggregates for the dashboard (no question text) |
 

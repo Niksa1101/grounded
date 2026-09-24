@@ -2,7 +2,7 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: planning, Phase 0 not started.** Everything below describes the target system. Sections marked
+> 🚧 **Status: Phase 0 (Foundations) in progress.** Everything below describes the target system. Sections marked
 > _TBD_ are filled in only from committed eval results and real measurements, never by hand.
 
 | | |
@@ -112,7 +112,11 @@ docs/        PRD, technical design, database design
 
 ## Quickstart (local)
 
-> Available after Phase 0. Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS.
+> Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. `ingest` arrives in Phase 1 and the question UI in Phase 5.
+>
+> **Windows:** psycopg's async driver can't run on the default Proactor event loop. Start the API with `--reload`
+> (as below), which makes uvicorn use the Selector loop. Linux and macOS are unaffected. The `python` on your PATH
+> doesn't matter: always go through `uv run`.
 
 ```bash
 cp .env.example .env
@@ -145,6 +149,10 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run 
 ```
 
 ```bash
+cd frontend && npm run lint && npm run typecheck && npm run build
+```
+
+```bash
 uv run grounded eval retrieval --config dense --config fts --config hybrid
 ```
 
@@ -156,7 +164,7 @@ npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | ⬜ |
+| 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | 🟡 in progress |
 | 1 | Ingestion, golden set, dense baseline | ⬜ |
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ⬜ |
 | 3 | `/v1/ask` with structured output, citations, confidence | ⬜ |
@@ -171,6 +179,6 @@ Phase details and exit criteria: [docs/PRD.md §9](docs/PRD.md#9-delivery-phases
 
 ## License and attribution
 
-Code: MIT (see `LICENSE`, added in Phase 0).
+Code: MIT (see [`LICENSE`](LICENSE)).
 Corpus: [FastAPI documentation](https://github.com/fastapi/fastapi) © Sebastián Ramírez, MIT License. Grounded is an
 independent project, not affiliated with or endorsed by FastAPI.
