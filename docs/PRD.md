@@ -20,7 +20,7 @@ citations that link to the exact docs section, a status (`answered | partial | i
 per-claim confidence. Quality is measured with a golden set, retrieval metrics (Recall@k, MRR, nDCG) and
 generation metrics (faithfulness, correctness, refusal accuracy). Regressions are blocked in CI.
 
-The whole system runs on free tiers (Neon, Hugging Face Spaces, Vercel, Gemini, Groq, Cohere trial).
+The whole system runs on free tiers (Neon, Vercel, Gemini, Groq, Cohere trial).
 Cost is reported as *shadow cost* (what it would cost at paid list prices).
 
 ## 2. Problem & motivation
@@ -182,7 +182,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 
 | Task | Owner |
 |---|---|
-| Accounts & keys checklist: GitHub repo, Neon project, Google AI Studio (Gemini) key, Groq key, Cohere trial key, Hugging Face account + Space, Vercel account | A |
+| Accounts & keys checklist: GitHub repo, Neon project, Google AI Studio (Gemini) key, Groq key, Cohere trial key, Vercel account | A |
 | `git init`, monorepo layout (`backend/`, `frontend/`, `eval/`, `infra/`, `docs/`), `.gitignore`, `.env.example` | G |
 | Backend: uv project (Python 3.12), ruff, pyright, pytest, pydantic-settings config, FastAPI app factory with lifespan, `/healthz`, `/readyz` | G |
 | `infra/docker-compose.yml` with `pgvector/pgvector:0.8.6-pg17-trixie` (tag pinned) | G |
@@ -296,10 +296,10 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | Proxy secret check + trusted client-IP header | G |
 | Next.js ask page: markers, source cards, status badge, low-confidence hint, debug row, privacy notice, cold-start state | G |
 | Route Handler proxy `/api/ask` (secret header, client IP, timeout) | G |
-| Dockerfile (non-root uid 1000, port 7860) + HF Space deploy workflow | G |
+| Backend Vercel project config (root `backend/`, FastAPI entrypoint, function region, production-only secrets) | G |
 | Neon production: migrate, ingest via `workflow_dispatch` | G (run by A) |
-| Vercel project (root `frontend/`), env vars | A |
-| `keepalive.yml`: daily ping + retention SQL | G |
+| Vercel projects (frontend root `frontend/`, backend root `backend/`), env vars | A |
+| `housekeeping.yml`: daily retention SQL | G |
 | README v1: architecture, real eval table, cost/latency method, failure modes v1, live URL | G draft, A final |
 
 **Exit criteria (MVP definition of done)**
@@ -350,7 +350,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Free-tier quotas (Gemini RPD/RPM, Groq TPM, Cohere ~1k/month) | Demo down, eval inconclusive | Caches everywhere, budget caps, fallback, concurrency 1, `inconclusive` outcome, rerank cap |
-| Cold starts (HF Space sleep after 48 h, Neon scale-to-zero) | Bad first impression | Daily keepalive, UI "waking up" state, cold start measured in README |
+| Cold starts (serverless function, Neon scale-to-zero) | Bad first impression | UI "waking up" state, cold start measured in README |
 | GitHub disables scheduled workflows after 60 days of repo inactivity | Keepalive silently stops | Documented. Periodic commits or manual re-enable. Check in Phase 9 |
 | Vercel function time limit on free plan | Proxy times out on slow answers | Set `maxDuration`, backend deadline < proxy timeout, verify current plan limits |
 | LLM judge bias/noise | Misleading metrics | Different provider than generator, pinned model, temp 0, rubric, measured human agreement |
@@ -390,7 +390,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 | D21 | Metrics/tools | Retrieval metrics in Python; generation metrics in promptfoo |
 | D22 | Judge | Different provider (Groq), pinned, temp 0, agreement measured |
 | D23 | CI gate | Two tiers (always / `run-eval` label + main); quota → inconclusive |
-| D24 | Hosting | Backend on HF Spaces (Docker) + daily ping; frontend on Vercel |
+| D24 | Hosting | Backend on Vercel Functions (FastAPI, Fluid compute) as its own Vercel project; frontend on Vercel. Changed 2026-09-24: HF Docker Spaces now require a paid PRO plan |
 | D25 | FE↔BE | Next.js Route Handler proxy with shared secret |
 | D26 | Observability | Own `request_logs` table + public aggregate dashboard |
 | D27 | Cost | Shadow cost from dated pricing file |
@@ -416,6 +416,8 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 
 - Golden set composition: ~8 factual, ~8 how-to, ~5 code-centric, ~4 multi-section, ~5 unanswerable (adjust while curating).
 - Public GitHub repo, MIT license, FastAPI docs attributed.
-- Neon region chosen closest to the HF Space region (verify where the Space runs).
+- Neon project is in AWS US East 2 (Ohio). The backend function region is set closest to it in Phase 5 (Vercel's default is `iad1`, US East).
+- Serverless backend (D24): in-process state is per function instance. The in-memory rate limiter (D31) and the circuit breaker (Phase 7) must be revisited: likely a Postgres-backed counter for rate limiting, and an accepted per-instance breaker. Decide in Phase 5 / Phase 7.
+- Vercel Hobby is non-commercial only: no ads or paid features on the demo.
 - Exact model IDs (Gemini Flash, Groq model, judge model, Cohere rerank model, embedding model) are pinned in config at implementation time after checking current availability and free-tier limits. They are never assumed from memory.
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.

@@ -14,7 +14,7 @@ Read the relevant sections before changing anything.
 Grounded is a RAG service over a frozen snapshot of the FastAPI docs. It uses hybrid retrieval (pgvector + Postgres FTS
 + RRF, optional Cohere rerank) and Pydantic-validated structured answers with per-claim citations and confidence.
 An eval harness (Python retrieval metrics + promptfoo generation metrics) gates PRs in CI. The backend is FastAPI on
-Hugging Face Spaces, the frontend a thin Next.js app on Vercel, and the database Neon Postgres. Everything runs on free tiers.
+Vercel Functions, the frontend a thin Next.js app on Vercel, and the database Neon Postgres. Everything runs on free tiers.
 **The primary goals are learning and a portfolio**: the Author must be able to explain and defend every core part.
 
 ## 2. Language
@@ -183,7 +183,7 @@ If something was skipped or failed, say so plainly.
 - PR description template: **What / Why / How tested / Eval impact** (numbers or "none: no quality-affecting change") / **Docs updated**.
 - Docs are part of the change: if behavior, schema, config or commands change, update PRD/Tech/DB/README/AGENTS **in the same PR**.
 - Never commit secrets, `.env`, `.cache/`, `eval/results/`, or large generated files. `.env.example` stays complete and value-free.
-- Don't push, merge, deploy, or trigger production workflows (`ingest.yml`, `deploy-backend.yml`) without the Author's explicit go-ahead.
+- Don't push, merge, deploy, or trigger production workflows (`ingest.yml`, a Vercel production deploy) without the Author's explicit go-ahead.
 
 ## 12. Definition of done (per PR)
 
