@@ -5,9 +5,9 @@
 
 | | |
 |---|---|
-| Status | Phase 0 (Foundations) in progress |
+| Status | Phase 0 done; Phase 1 (Ingestion, golden set, dense baseline) next |
 | Owner / Author | probniprobic4@gmail.com |
-| Last updated | 2026-09-24 |
+| Last updated | 2026-09-25 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
 
 ---

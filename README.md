@@ -2,7 +2,7 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phase 0 (Foundations) in progress.** Everything below describes the target system. Sections marked
+> 🚧 **Status: Phase 0 (Foundations) done; Phase 1 (ingestion, golden set, dense baseline) next.** Everything below describes the target system. Sections marked
 > _TBD_ are filled in only from committed eval results and real measurements, never by hand.
 
 | | |
@@ -164,7 +164,7 @@ npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | 🟡 in progress |
+| 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | ✅ done |
 | 1 | Ingestion, golden set, dense baseline | ⬜ |
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ⬜ |
 | 3 | `/v1/ask` with structured output, citations, confidence | ⬜ |
