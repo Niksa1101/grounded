@@ -71,6 +71,7 @@ def test_discover_pages_selects_english_docs_in_path_order() -> None:
     pages = discover_pages(CORPUS_MINI)
     assert [p.source_path for p in pages] == [
         "docs/en/docs/advanced/settings.md",
+        "docs/en/docs/advanced/templates.md",
         "docs/en/docs/index.md",
         "docs/en/docs/tutorial/background-tasks.md",
         "docs/en/docs/tutorial/index.md",

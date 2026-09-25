@@ -6,6 +6,7 @@ license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi>=0.141.1",
+    "markdown-it-py>=4.2.0",
     "pgvector>=0.5.0",
     "psycopg-pool>=3.3.3",
     "psycopg[binary]>=3.3.6",
@@ -30,6 +31,8 @@ build-backend = "uv_build"
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# Fixture trees mimic other repos (e.g. the FastAPI docs examples); they are data, not our code.
+extend-exclude = ["tests/fixtures"]
 
 [tool.ruff.lint]
 select = [
@@ -50,6 +53,7 @@ pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
 include = ["src", "tests"]
+exclude = ["tests/fixtures", "**/__pycache__", "**/.*"]
 # Strict on the package, basic on tests (Tech.md §2).
 typeCheckingMode = "basic"
 strict = ["src"]
