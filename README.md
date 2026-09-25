@@ -2,7 +2,7 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phase 0 (Foundations) in progress.** Everything below describes the target system. Sections marked
+> 🚧 **Status: Phase 0 (Foundations) done; Phase 1 (ingestion, golden set, dense baseline) next.** Everything below describes the target system. Sections marked
 > _TBD_ are filled in only from committed eval results and real measurements, never by hand.
 
 | | |
@@ -37,7 +37,7 @@ frozen snapshot of the official docs, and it **measures** how well it does that.
 ```mermaid
 flowchart LR
     U[Browser] --> FE[Next.js on Vercel<br/>/api/ask proxy]
-    FE -- shared secret --> API[FastAPI on HF Spaces]
+    FE -- shared secret --> API[FastAPI on Vercel Functions]
     API --> EMB[Gemini embeddings]
     API --> DB[(Neon Postgres<br/>pgvector + FTS)]
     API -. optional .-> RR[Cohere rerank]
@@ -86,17 +86,17 @@ fallback rate and shadow cost per 1k questions, with methodology.
 Known in advance (expanded with observed examples in Phase 9):
 - **Postgres full-text search is not true BM25.** The ablation rows show what lexical search actually contributes.
 - **Small golden set.** With ~25 answerable questions, one question ≈ 4 percentage points. Tolerances reflect that.
-- **Free-tier constraints:** the backend may need up to a minute to wake up; daily quotas can exhaust the demo budget.
+- **Free-tier constraints:** the first request after idle pays a cold start (serverless function + Neon wake-up); daily quotas can exhaust the demo budget.
 - **Frozen corpus:** answers reflect the pinned FastAPI docs version, not the live site.
 - **Privacy:** the demo uses free AI API tiers, which may use inputs to improve models. Don't enter personal data.
 - **Cohere trial key** is non-production. Serving real users needs a paid key or a local re-ranker.
-- **Scheduled keepalive** stops if the repo has no activity for 60 days (GitHub policy).
+- **Scheduled housekeeping** (retention SQL) stops if the repo has no activity for 60 days (GitHub policy).
 
 ## Tech stack
 
 Python 3.12 · FastAPI · Pydantic v2 · psycopg 3 · PostgreSQL 17 + pgvector (Neon) · Gemini (embeddings + generation)
 · Groq (fallback + judge) · Cohere Rerank · promptfoo · pytest · uv · ruff · pyright · Next.js + TypeScript + Tailwind
-· GitHub Actions · Hugging Face Spaces · Vercel
+· GitHub Actions · Vercel (frontend + backend functions)
 
 No LangChain, LlamaIndex, LiteLLM or ORMs. The mechanics are implemented and tested directly.
 
@@ -106,7 +106,7 @@ No LangChain, LlamaIndex, LiteLLM or ORMs. The mechanics are implemented and tes
 backend/     FastAPI app, ingest CLI, retrieval, generation, evals (Python package `grounded`)
 frontend/    Next.js UI (ask page, metrics dashboard, proxy route handlers)
 eval/        golden set, promptfoo config, committed baselines
-infra/       docker-compose (pgvector), Hugging Face Space metadata
+infra/       docker-compose (pgvector for local dev and CI)
 docs/        PRD, technical design, database design
 ```
 
@@ -164,7 +164,7 @@ npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | 🟡 in progress |
+| 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | ✅ done |
 | 1 | Ingestion, golden set, dense baseline | ⬜ |
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ⬜ |
 | 3 | `/v1/ask` with structured output, citations, confidence | ⬜ |

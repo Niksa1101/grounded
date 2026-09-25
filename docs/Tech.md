@@ -21,7 +21,7 @@ flowchart LR
         FE[Next.js UI<br/>/ and /metrics]
         PX[Route Handlers<br/>/api/ask · /api/metrics]
     end
-    subgraph HF["Hugging Face Space (Docker)"]
+    subgraph BE["Vercel Function (FastAPI)"]
         API[FastAPI /v1/*]
         RET[Retrieval<br/>dense + FTS + RRF]
         GEN[Generation<br/>provider router]
@@ -72,7 +72,7 @@ context → budget reserve → generate (structured) → validate/retry/fallback
 | Eval | promptfoo (pinned version via `npx promptfoo@<ver>`) | Python provider + Python assertions |
 | Frontend | Next.js (App Router), TypeScript strict, Tailwind, shadcn/ui, react-markdown + remark-gfm + syntax highlighting | npm |
 | DB | PostgreSQL 17 + pgvector (Neon / Docker) | see DB.md |
-| Hosting | HF Spaces (Docker) backend, Vercel frontend | free tiers |
+| Hosting | Vercel: frontend (Next.js) and backend (FastAPI as a Vercel Function) | free tiers |
 | CI/CD | GitHub Actions | 5 workflows (§17) |
 
 Explicitly **not** used: LangChain, LlamaIndex, LiteLLM, Instructor, SQLAlchemy/ORMs, vector DB SaaS.
@@ -88,7 +88,7 @@ The point is to show the mechanics.
 ├── README.md                      # portfolio-facing product spec
 ├── docs/                          # PRD.md, Tech.md, DB.md, images/
 ├── backend/
-│   ├── pyproject.toml  uv.lock  Dockerfile
+│   ├── pyproject.toml  uv.lock
 │   ├── migrations/                # 0001_init.sql, ...
 │   ├── prompts/                   # answer_v1.md, judge_faithfulness_v1.md, judge_correctness_v1.md
 │   ├── pricing.toml               # dated list prices for shadow cost
@@ -119,9 +119,8 @@ The point is to show the mechanics.
 │   └── results/                   # gitignored run outputs
 ├── frontend/                      # Next.js app (app/, components/, lib/)
 ├── infra/
-│   ├── docker-compose.yml         # pgvector for dev
-│   └── hf-space/README.md         # Space metadata (sdk: docker, app_port: 7860)
-└── .github/workflows/             # ci.yml, eval.yml, deploy-backend.yml, ingest.yml, keepalive.yml
+│   └── docker-compose.yml         # pgvector for dev
+└── .github/workflows/             # ci.yml, eval.yml, ingest.yml, housekeeping.yml
 ```
 
 ## 4. Configuration
@@ -460,7 +459,7 @@ Base path `/v1`. JSON only. Errors share one shape:
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| GET | `/healthz` | public | process up (used by keepalive) |
+| GET | `/healthz` | public | process up (liveness) |
 | GET | `/readyz` | public | DB reachable + active index loaded (Phases 0–2: DB reachable + schema present; reports `active_index_version` but doesn't require it until Phase 3) |
 | POST | `/v1/ask` | proxy secret | body `AskRequest` → `AskResponse` |
 | GET | `/v1/metrics/summary?window=7d` | proxy secret | aggregates for the dashboard (no question text) |
@@ -600,39 +599,40 @@ Rules: **no real network calls in pytest.** A socket-blocking fixture fails any 
 |---|---|---|
 | `ci.yml` | PR, push `main` | **backend**: `uv sync --frozen`, ruff check/format --check, pyright, pytest (pgvector service). **frontend**: `npm ci`, lint, typecheck, build. **retrieval-eval**: restore `.cache` (corpus + embeddings) → migrate → ingest pinned ref into service DB → retrieval eval (all configs) → gate vs `eval/baselines/retrieval.json` → job summary |
 | `eval.yml` | PR `labeled`/`synchronize` with label `run-eval`; push `main` | same DB setup → `npx promptfoo@<ver> eval -j 1` → gate → PR comment (create/update by marker `<!-- grounded-eval -->`) → upload HTML/JSON report artifact → on `main`: insert `eval_runs` |
-| `deploy-backend.yml` | push `main` touching `backend/**` (after `ci.yml` success) | build context = `backend/` + `infra/hf-space/README.md` → push to HF Space repo via `huggingface_hub` with `HF_TOKEN` |
 | `ingest.yml` | `workflow_dispatch(ref, activate)` | ingest into Neon with `DATABASE_URL_DIRECT`; prints index stats |
-| `keepalive.yml` | daily cron + `workflow_dispatch` | GET backend `/healthz` (keeps Space < 48 h idle) + retention SQL (DB.md §9) |
+| `housekeeping.yml` | daily cron + `workflow_dispatch` | retention SQL (DB.md §9) with `DATABASE_URL_DIRECT` |
 
 Notes:
-- Cron can't express "every 26 h", so it runs daily (still under the 48 h Space sleep window).
 - GitHub disables scheduled workflows after 60 days without repo activity. Documented in README limitations.
-- Secrets: `GEMINI_API_KEY`, `GROQ_API_KEY`, `COHERE_API_KEY`, `DATABASE_URL_DIRECT`, `HF_TOKEN`, `BACKEND_URL`. PR workflows only run for same-repo branches, so secrets are available.
+- Secrets: `GEMINI_API_KEY`, `GROQ_API_KEY`, `COHERE_API_KEY`, `DATABASE_URL_DIRECT`. Backend deploys go through the Vercel Git integration, not a workflow. PR workflows only run for same-repo branches, so secrets are available.
 - `.cache` key: `hash(FASTAPI_REF, chunking config, EMBEDDING_MODEL, EMBEDDING_DIM)` with a restore-key fallback. GitHub evicts caches unused for 7 days, which means one full re-embed (~3k texts), acceptable.
 
 ## 18. Deployment
 
-### Backend — Hugging Face Space (Docker)
-- Free CPU Space: sleeps after ~48 h without traffic (verify current policy). The daily keepalive prevents that.
-- `Dockerfile`: `python:3.12-slim`, install uv, `uv sync --frozen --no-dev`, copy `src/`, `migrations/`, `prompts/`, `pricing.toml`. Run as **uid 1000** (Spaces requirement). `EXPOSE 7860`. `CMD grounded serve --host 0.0.0.0 --port 7860` (uvicorn via the app factory, JSON logs, access log off because it prints raw IPs).
-- Space metadata README (`infra/hf-space/README.md`): `sdk: docker`, `app_port: 7860`. It is pushed to the Space repo root; the project README stays in GitHub.
-- Secrets in Space settings: DB URL (app role, pooled), provider keys, `PROXY_SHARED_SECRET`, `IP_HASH_SECRET`.
+### Backend — Vercel Functions (FastAPI)
+- A separate Vercel project with Root Directory `backend/`. Vercel runs the FastAPI app as one Vercel Function on Fluid compute and supports lifespan events (shutdown cleanup ≤ 500 ms).
+- Hobby limits (checked 2026-09-24, re-verify in Phase 5): max duration 300 s, 2 GB / 1 vCPU, Python bundle ≤ 500 MB; monthly allotment 1M invocations, 4 h Active CPU (time spent waiting on I/O, e.g. LLM calls, doesn't count), 360 GB-h provisioned memory; runtime logs kept 1 h; non-commercial use only.
+- Entrypoint: Vercel looks for a module-level FastAPI `app`. A thin entry module (`app = create_app()`) is referenced via `[tool.vercel] entrypoint` in `pyproject.toml`; `grounded.main` itself stays free of import-time side effects.
+- Deploys via the Vercel Git integration: production from `main` only. Preview deployments get no production secrets.
+- Production env: `APP_ENV=prod`, `DATABASE_URL` (app role, **pooled**), provider keys, `PROXY_SHARED_SECRET`, `IP_HASH_SECRET`.
+- Serverless consequences: no long-lived process. The DB pool is per instance (Neon's pooler absorbs connections). In-process state (rate limiter, circuit breaker) is per instance: see PRD §12. Durable telemetry lives in `request_logs`, not in platform logs. The filesystem is ephemeral.
+- Function region: set closest to Neon (AWS US East 2) in Phase 5.
 - Startup: open pool, load the active index version, warm providers lazily. `/readyz` reflects readiness.
-- The disk is ephemeral. Nothing persistent lives there.
+- Outside Vercel (local dev) the API runs with `grounded serve` (app factory, JSON logs, uvicorn access log off because it prints raw IPs).
 
 ### Frontend — Vercel
 - Project root directory `frontend/`. Env: `BACKEND_URL`, `PROXY_SHARED_SECRET` (server-only, never `NEXT_PUBLIC_`).
 - Route Handlers `app/api/ask/route.ts`, `app/api/metrics/route.ts`: forward to backend with the secret and `X-Client-IP` (from the platform's forwarded-for header), and a timeout slightly above `REQUEST_DEADLINE_S`.
-- **Function duration limit:** set `export const maxDuration` in the ask route and verify the current Hobby-plan maximum. It must exceed the backend deadline plus a possible Space wake-up, or the UI must show a retry state.
+- **Function duration limit:** set `export const maxDuration` in the ask route and verify the current Hobby-plan maximum. It must exceed the backend deadline plus a possible backend cold start, or the UI must show a retry state.
 
 ### Database — Neon
-- Project `grounded`, Postgres 17, region closest to the Space. Enable `vector`. Create role `app` (DB.md §5).
+- Project `grounded`, Postgres 17, AWS US East 2 (Ohio), default branch `production`. Enable `vector`. Create role `app` (DB.md §5).
 - Migrations and ingest via `workflow_dispatch` or locally with the direct URL.
 
 ## 19. Frontend
 
 - Pages: `/` (ask), `/metrics` (dashboard, Phase 8), `/about` optional (links to README sections).
-- Ask page states: idle · loading (after 5 s: "Waking up the free-tier backend, this can take up to a minute") · answered/partial · insufficient_context · rate_limited (with countdown) · budget_exhausted · error (with request_id).
+- Ask page states: idle · loading (after 5 s: "Waking up the free-tier backend…") · answered/partial · insufficient_context · rate_limited (with countdown) · budget_exhausted · error (with request_id).
 - Answer rendering: react-markdown + remark-gfm + code highlighting. `[n]` markers become buttons that focus/open the matching source card. Source cards show breadcrumb, snippet and an external link. Claims with confidence < 0.5 get a subtle indicator with a tooltip that says it is heuristic.
 - Debug row (collapsed): stage latencies, tokens, provider/model, fallback/cache/rerank flags, shadow cost, prompt/index version.
 - Privacy notice under the input: free AI APIs are used; do not enter personal data.
@@ -652,7 +652,7 @@ This list is expanded with observed examples in Phase 9. The README shows the fi
 | Invalid/missing citations | generation | server validation, retry, tracked rate |
 | Provider schema drift / unsupported schema features | adapters | simple schema, adapter tests, validation retry |
 | Quota exhaustion / 429 storms | providers | breaker, fallback, budget, cache, inconclusive evals |
-| Cold start latency | infra | keepalive, UI state, documented numbers |
+| Cold start latency | infra | UI state, documented numbers |
 | Stale corpus vs live docs | data | pinned tag shown in UI/meta; deliberate re-index |
 | Judge disagreement with humans | eval | agreement measured and published |
 | Small golden set noise | eval | n reported, tolerances ≥ 1 question |
