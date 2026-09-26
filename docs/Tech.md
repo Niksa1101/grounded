@@ -108,7 +108,7 @@ The point is to show the mechanics.
 │   │   │   ├── citations.py       # validation, mapping, marker rewrite
 │   │   │   ├── confidence.py      # heuristic [A]
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
-│   │   ├── evals/                 # metrics.py [A], retrieval_runner.py, gate.py [A], report.py, judge.py
+│   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), retrieval_runner.py, gate.py [A], report.py, judge.py
 │   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
 │   │   └── observability/         # request_log.py, cost.py
 │   └── tests/                     # unit/, integration/, conftest.py (fixtures), support.py (helpers), fixtures/
@@ -551,16 +551,19 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
 - `type ∈ {factual, how_to, code, multi_section, unanswerable}`. Unanswerable items have `relevant_sections: []` and a reference answer describing why.
 - Grades: **2** = contains the answer, **1** = useful context.
 - **Section matching rule:** a retrieved chunk matches label `path#anchor` iff same `source_path` and `anchor ∈ chunk.anchor_path` (so an H2 label also matches its H3 sub-chunks). A label without an anchor matches the whole page.
+- **No nested labels:** within one item, no label may be an ancestor of another (a page and a section on it, an H2 and one of its H3s). One chunk could then match two labels at the same rank and push nDCG above 1. The validator rejects them; the metrics raise if a chunk matches two labels.
+- A label on a small section that the chunker merged into a *previous* sibling never matches: the merged chunk carries the first section's `anchor_path` (§5.5). `golden validate --against-index` reports such labels; label the first section or the parent instead.
 - Changes to the golden set create a new version file (`v2`) and require new baselines. Items are never edited in place after baselines exist.
 - `eval/golden/README.md` holds the labeling guide.
 - `grounded golden draft --n 50` asks an LLM to propose candidate questions from random sections. The Author curates.
 
 ### 15.2 Retrieval eval (Python) [A: metrics]
 `uv run grounded eval retrieval --config hybrid [--config dense ...] --out eval/results/…json`
-- Per answerable question: run retrieval mode → ranked chunks → map to section labels (dedupe by first occurrence) → metrics.
-- **Recall@k** = |grade-2 labels matched in top-k| / |grade-2 labels|.
-- **MRR** = 1 / rank of the first grade-2 match (0 if none within `K_FUSED`).
-- **nDCG@k** with gain `2^grade − 1` over deduped section ranking; ideal DCG from labels.
+- Per answerable question: run retrieval mode → ranked chunks → rank of each label = 1-based position of the first **chunk** that matches it (each label counted once; every chunk takes a position, including further parts of an already ranked section, since those also fill the `K_CONTEXT` slots) → metrics. Contract and spec: `evals/metrics.py`, `tests/unit/test_metrics.py`.
+- **Recall@k** = |grade-2 labels ranked ≤ k| / |grade-2 labels|. Grade-1 labels don't count.
+- **MRR** = 1 / rank of the best-ranked grade-2 label over the whole retrieved list (`K_DENSE` or `K_FUSED`); 0 if none.
+- **nDCG@k** with gain `2^grade − 1` and discount `log2(rank + 1)` over labels ranked ≤ k; ideal DCG = all labels (both grades) sorted by grade, over the first `min(k, |labels|)` positions.
+- `k` beyond the retrieved list: missing positions are not relevant. A question without a grade-2 label, a grade other than 1 or 2, or `k < 1` is an error (unanswerable items are skipped, not scored 0).
 - Report means with `n`, and per-question rows for diffing.
 - Deterministic given caches. No LLM calls (only query embeddings, cached).
 

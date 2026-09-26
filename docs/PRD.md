@@ -210,7 +210,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | Gemini embeddings adapter (batching, `task_type`, 768 dims, L2 normalization, backoff) + SQLite embedding cache | G |
 | Ingest pipeline writing `index_versions`, `documents`, `chunks`; activation | G |
 | Golden set v1: Agent drafts ~50 candidate questions from random sections → Author selects, rewrites and labels 30 | A (curation) / G (drafts) |
-| **Retrieval metrics** (Recall@k, MRR, nDCG@k with section matching rules) | **A** |
+| **Retrieval metrics** (Recall@k, MRR, nDCG@k with section matching rules) | **A** (delegated to G by the Author, 2026-09-26) |
 | Retrieval eval runner + `dense` config + results JSON | G |
 
 **Exit criteria**
