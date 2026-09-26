@@ -35,6 +35,12 @@ def test_embedding_input_limit_cannot_exceed_tpm() -> None:
         make_settings(embedding_max_input_tokens=5000, embedding_tpm=4000)
 
 
+def test_embedding_batch_cannot_exceed_rpm() -> None:
+    # Every text in a batch counts as one request toward RPM.
+    with pytest.raises(ValidationError, match="EMBEDDING_BATCH_SIZE"):
+        make_settings(embedding_batch_size=50, embedding_rpm=40)
+
+
 def test_generator_providers_parse_comma_separated_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GENERATOR_PROVIDERS", " gemini , groq,")
     assert make_settings().generator_providers == ["gemini", "groq"]

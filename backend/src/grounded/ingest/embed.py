@@ -6,7 +6,9 @@ tests use ``FakeEmbedder`` (pytest never reaches the network).
 
 Free-tier limits for ``gemini-embedding-001`` (AI Studio, checked 2026-09-26): 100 RPM, 30K TPM,
 1K RPD; RPD resets at midnight Pacific. Max 2,048 input tokens per text, at most 100 texts per
-batch call. TPM is the binding limit for a full ingest (~230K tokens → roughly 10 minutes).
+batch call. The limits count **texts**, not HTTP calls: one 3-text batch showed up in AI Studio as
+1 API request but 3 "Embedding Requests" for the model. So RPM caps texts per minute, and a full
+ingest (~1-1.5K texts) needs two days of RPD; the cache lets the second day resume.
 
 This is offline tooling, so the retry loop may sleep; the request path (Phase 3) embeds a single
 question per request and never waits out a rate limit.
@@ -89,40 +91,49 @@ def l2_normalize(values: Sequence[float]) -> Vector:
 
 
 class _RateWindow:
-    """Requests and estimated tokens sent in the last 60 s, to stay under RPM and TPM."""
+    """Texts and estimated tokens sent in the last 60 s, to stay under RPM and TPM.
+
+    Gemini counts every text in a batch as one request toward RPM/RPD, so a batch "costs" as many
+    requests as it has texts.
+    """
 
     def __init__(self, rpm: int, tpm: int, clock: Callable[[], float]) -> None:
         self._rpm = rpm
         self._tpm = tpm
         self._clock = clock
-        self._sent: deque[tuple[float, int]] = deque()  # (sent_at, tokens), oldest first
+        self._sent: deque[tuple[float, int, int]] = (
+            deque()
+        )  # (sent_at, texts, tokens), oldest first
 
-    def wait_s(self, tokens: int) -> float:
-        """Seconds until a request of ``tokens`` fits in the window (0 if it fits now)."""
+    def wait_s(self, texts: int, tokens: int) -> float:
+        """Seconds until a batch of ``texts``/``tokens`` fits in the window (0 if it fits now)."""
         now = self._clock()
         while self._sent and self._sent[0][0] <= now - _WINDOW_S:
             self._sent.popleft()
-        count, used = len(self._sent), sum(t for _, t in self._sent)
-        if count < self._rpm and used + tokens <= self._tpm:
+        count = sum(n for _, n, _ in self._sent)
+        used = sum(t for _, _, t in self._sent)
+        if count + texts <= self._rpm and used + tokens <= self._tpm:
             return 0.0
-        # Drop the oldest requests one by one until both limits have room; the wait is the moment
+        # Drop the oldest batches one by one until both limits have room; the wait is the moment
         # the last dropped one leaves the window.
-        for sent_at, sent_tokens in self._sent:
-            count, used = count - 1, used - sent_tokens
-            if count < self._rpm and used + tokens <= self._tpm:
+        for sent_at, sent_texts, sent_tokens in self._sent:
+            count, used = count - sent_texts, used - sent_tokens
+            if count + texts <= self._rpm and used + tokens <= self._tpm:
                 return sent_at + _WINDOW_S - now
-        raise AssertionError("unreachable: an empty window always has room")  # pragma: no cover
+        # An empty window always has room: batches are capped at rpm texts and tpm tokens.
+        raise AssertionError("unreachable")  # pragma: no cover
 
-    def record(self, tokens: int) -> None:
-        self._sent.append((self._clock(), tokens))
+    def record(self, texts: int, tokens: int) -> None:
+        self._sent.append((self._clock(), texts, tokens))
 
 
 class GeminiEmbedder:
     """``gemini-embedding-001`` over the async ``google-genai`` client.
 
     Texts are packed into batches (≤ ``batch_size`` texts, ≤ ``tpm`` estimated tokens), paced to
-    the RPM/TPM window, and retried on 429/5xx/timeouts with backoff. A daily-quota 429 is raised
-    at once: waiting hours inside a CLI run helps nobody, and the cache keeps what was done.
+    the RPM/TPM window with every text counted as one request, and retried on 429/5xx/timeouts
+    with backoff. A daily-quota 429 is raised at once: waiting hours inside a CLI run helps
+    nobody, and the cache keeps what was done.
 
     Token counts are tiktoken *estimates* (``count_tokens``); Gemini's tokenizer differs. The
     Gemini API has no ``auto_truncate`` switch (the SDK allows it on Vertex only), so the length
@@ -146,6 +157,9 @@ class GeminiEmbedder:
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
     ) -> None:
+        if batch_size > rpm or max_input_tokens > tpm:
+            # A batch or a single text over the per-minute budget could never be sent.
+            raise ValueError("batch_size must be <= rpm and max_input_tokens <= tpm")
         self._client = client
         self._model = model
         self._dim = dim
@@ -213,9 +227,9 @@ class GeminiEmbedder:
     ) -> list[Vector]:
         attempt = 0
         while True:
-            if (wait := self._window.wait_s(tokens)) > 0:
+            if (wait := self._window.wait_s(len(batch), tokens)) > 0:
                 await self._sleep(wait)
-            self._window.record(tokens)  # a rejected request still counts against the limits
+            self._window.record(len(batch), tokens)  # a rejected call still counts toward limits
             self.api_calls += 1
             try:
                 return await self._call(batch, task_type)

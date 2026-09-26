@@ -116,6 +116,9 @@ class Settings(BaseSettings):
         if self.embedding_max_input_tokens > self.embedding_tpm:
             # A single text over the per-minute budget could never be sent.
             raise ValueError("EMBEDDING_MAX_INPUT_TOKENS must be <= EMBEDDING_TPM")
+        if self.embedding_batch_size > self.embedding_rpm:
+            # Every text in a batch counts as one request toward RPM.
+            raise ValueError("EMBEDDING_BATCH_SIZE must be <= EMBEDDING_RPM")
         if self.app_env == "prod":
             self._check_prod()
         return self

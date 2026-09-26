@@ -392,6 +392,17 @@ async def test_waits_for_a_free_request_slot() -> None:
     assert time.sleeps == [60.0]  # the third request waits for the first to leave the window
 
 
+async def test_every_text_in_a_batch_counts_toward_rpm() -> None:
+    # AI Studio showed one 3-text batch as 3 model requests, so RPM caps texts, not HTTP calls.
+    time = _FakeTime()
+    models = _FakeModels([])
+
+    await _embedder(models, time, rpm=4, batch_size=4).embed(["t"] * 6, "RETRIEVAL_DOCUMENT")
+
+    assert [len(c.contents) for c in models.calls] == [4, 2]
+    assert time.sleeps == [60.0]  # 4 + 2 texts > 4 per minute
+
+
 async def test_waits_for_token_budget() -> None:
     time = _FakeTime()
     models = _FakeModels([])
@@ -421,12 +432,24 @@ async def test_rejected_requests_count_against_the_window() -> None:
     time = _FakeTime()
     models = _FakeModels([_rate_limited(retry_delay="1s", quota_id=_PER_MINUTE)])
 
-    await _embedder(models, time, rpm=1).embed(["a"], "RETRIEVAL_DOCUMENT")
+    await _embedder(models, time, rpm=1, batch_size=1).embed(["a"], "RETRIEVAL_DOCUMENT")
 
     assert time.sleeps == [1.0, 59.0]
 
 
 # --- GeminiEmbedder: construction -----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param({"rpm": 10, "batch_size": 11}, id="batch-over-rpm"),
+        pytest.param({"tpm": 100, "max_input_tokens": 101}, id="input-over-tpm"),
+    ],
+)
+def test_limits_that_could_never_be_met_are_rejected(overrides: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="batch_size must be <= rpm"):
+        _embedder(_FakeModels([]), **overrides)
 
 
 @pytest.mark.parametrize(
