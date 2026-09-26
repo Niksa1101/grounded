@@ -250,3 +250,10 @@ def test_worked_example() -> None:
     assert ndcg_at_k(ranks, labels, 10) == pytest.approx(
         (3 / log2(3) + 1 / log2(5) + 3 / log2(10)) / ideal  # 0.5983
     )
+
+
+@pytest.mark.parametrize("grade", [0, 3])
+def test_grades_other_than_1_and_2_are_rejected(grade: int) -> None:
+    # A grade 3 would give gain 7 and could push nDCG above 1; 0 belongs in no label at all.
+    with pytest.raises(ValueError, match="grades"):
+        ndcg_at_k({A: 1}, {A: 2, B: grade}, 5)

@@ -553,7 +553,7 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
 - **Recall@k** = |grade-2 labels ranked ≤ k| / |grade-2 labels|. Grade-1 labels don't count.
 - **MRR** = 1 / rank of the best-ranked grade-2 label over the whole retrieved list (`K_DENSE` or `K_FUSED`); 0 if none.
 - **nDCG@k** with gain `2^grade − 1` and discount `log2(rank + 1)` over labels ranked ≤ k; ideal DCG = all labels (both grades) sorted by grade, over the first `min(k, |labels|)` positions.
-- `k` beyond the retrieved list: missing positions are not relevant. A question without a grade-2 label, or `k < 1`, is an error (unanswerable items are skipped, not scored 0).
+- `k` beyond the retrieved list: missing positions are not relevant. A question without a grade-2 label, a grade other than 1 or 2, or `k < 1` is an error (unanswerable items are skipped, not scored 0).
 - Report means with `n`, and per-question rows for diffing.
 - Deterministic given caches. No LLM calls (only query embeddings, cached).
 
