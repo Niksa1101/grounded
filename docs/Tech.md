@@ -191,20 +191,26 @@ fetch corpus → discover pages → resolve includes → parse headings → chun
 - Navigation names come from the H1 of each enclosing directory's `index.md` (`tutorial/` → "Tutorial - User Guide", `tutorial/security/` → "Security"), so `mkdocs.yml` isn't parsed. A directory's own `index.md` is the section page, so its nav path stops at the parent. A directory without an `index.md` title falls back to its name (logged).
 
 ### 5.3 Resolve code includes
-FastAPI docs pull code from `docs_src/`. Both syntaxes must be handled; verify against the pinned tag:
-- Legacy: a fenced block containing `{!../../docs_src/<path>!}` (optionally with line selections).
-- Current: `{* ../../docs_src/<path> hl[…] ln[…] *}`, which the site renders as tabs of variants (e.g. Python version / `Annotated` variants).
+FastAPI docs pull code from `docs_src/` (and once from `fastapi/` itself). Paths are relative to `docs/en/` (where mkdocs runs), e.g. `../../docs_src/x.py`. Both syntaxes exist at tag `0.141.1` and are expanded line by line before parsing, like the mkdocs preprocessors do:
+- Current (`markdown-include-variants`, 440 uses): a whole line `{* <path> hl[…] ln[…] title["…"] *}`.
+- Legacy (`mdx_include`, 6 uses): `{!<path>!}` or `{!> <path>!}` on its own line inside a fence the page already has; the line is replaced by the file's lines (keeping its indentation).
 
 Rules:
-- Replace the directive with a fenced ```` ```python ```` block containing the file contents.
-- If several variants exist, pick **one preferred variant** (newest Python version, `Annotated` style if present). Log which variant was chosen.
-- Strip rendering-only parameters (`hl[...]`, `ln[...]`). Respect line-range selection if present.
-- A missing file is an ingest **error** (fail loudly), not a silent skip.
+- A `{* *}` directive becomes a fenced ```` ```python ```` block with the file contents.
+- **Variant:** keep the file the directive references. The plugin shows that file first and puts the other variants (e.g. non-`Annotated`) in a collapsed "Other versions" panel, which is skipped. Preferring `Annotated` regardless would be wrong: at `0.141.1` three directives reference the non-`Annotated` file on purpose because the surrounding text explains that form. At this tag only `_py310` variants exist.
+- `ln[a:b,c:d]` keeps those 1-based inclusive ranges and adds the site's `# Code above omitted 👆` / `# Code here omitted 👈` / `# Code below omitted 👇` comments, so the excerpt reads as partial. `ln[0:0]` means the whole file.
+- `hl[…]` (and a legacy fence's `hl_lines="…"`) only highlight and are dropped. `title["app/main.py"]` stays on the fence as `title="app/main.py"`, because it names the file.
+- If the code contains a run of backticks, the fence is made longer than that run.
+- A missing file, a path outside the repository, an out-of-range `ln` or an unknown option is an ingest **error** (fail loudly), not a silent skip.
 
 ### 5.4 Headings and anchors
 - Parse with markdown-it-py so headings inside code fences are ignored.
 - FastAPI headings often carry explicit anchors: `## Create a task function { #create-a-task-function }`. Use the explicit anchor when present. Otherwise slugify like Python-Markdown's `toc` (lowercase, drop punctuation, spaces → `-`). Strip the `{ #… }` suffix from the visible heading text.
 - Breadcrumb = navigation section (from the path, e.g. `Tutorial - User Guide`) + H1 + H2 + H3 of the chunk.
+- Output of `ingest/markdown.py`: `ParsedDocument(source_path, url, title, nav_path, blocks, content_hash)`, where `blocks` is a flat, document-ordered sequence of `HeadingBlock(level, text, anchor, markdown)`, `TextBlock(markdown)` and `CodeBlock(markdown, lang)`. Block Markdown is sliced verbatim from the source lines (`token.map`), not re-rendered. The parser builds no sections or chunks; that is the chunker's job.
+- `TextBlock` = one top-level paragraph, list, table, blockquote or HTML block. Admonition/tab markers (`/// tip` … `///`, `//// tab | …`) aren't CommonMark containers; a container that holds only text is merged into one `TextBlock` (so a tip isn't cut from its marker), while one holding code or a heading stays flat so the `CodeBlock` stays atomic.
+- Dropped before/while parsing: YAML front matter, Jinja `{% raw %}` markers, HTML comments, HTML blocks containing Jinja (e.g. the home page's sponsor grids, generated from data files), thematic breaks.
+- `content_hash = sha256(resolved Markdown)`, i.e. the text after includes and the drops above, which is what the blocks come from.
 
 ### 5.5 Chunking [A]
 Contract for `chunk_document(doc: ParsedDocument, cfg: ChunkingConfig) -> list[Chunk]`:
