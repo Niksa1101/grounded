@@ -131,7 +131,7 @@ cd backend && uv sync && uv run grounded migrate
 ```
 
 ```bash
-uv run grounded ingest --ref <fastapi-tag> --activate
+uv run grounded ingest --ref 0.141.1 --activate
 ```
 
 ```bash
@@ -180,5 +180,5 @@ Phase details and exit criteria: [docs/PRD.md §9](docs/PRD.md#9-delivery-phases
 ## License and attribution
 
 Code: MIT (see [`LICENSE`](LICENSE)).
-Corpus: [FastAPI documentation](https://github.com/fastapi/fastapi) © Sebastián Ramírez, MIT License. Grounded is an
+Corpus: [FastAPI documentation](https://github.com/fastapi/fastapi) at tag `0.141.1` (commit `95f8322`) © Sebastián Ramírez, MIT License. Grounded is an
 independent project, not affiliated with or endorsed by FastAPI.

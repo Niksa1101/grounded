@@ -156,7 +156,7 @@ or with `ALLOW_DIRECT_API=true`.
 | `ALLOW_DIRECT_API` | `false` (true only in dev) | bypass proxy secret locally |
 | `REQUEST_DEADLINE_S` | `25` | must be < proxy timeout |
 | `CACHE_DIR` | `.cache` | SQLite caches, cloned corpus |
-| `FASTAPI_REF` | pinned tag | corpus version |
+| `FASTAPI_REF` | `0.141.1` | pinned corpus tag (commit `95f8322e`) |
 
 Retrieval settings are grouped into a frozen `RetrievalConfig` whose canonical JSON is hashed
 (`retrieval_config_hash`). The hash is logged per request, used in cache keys and recorded per eval run.
