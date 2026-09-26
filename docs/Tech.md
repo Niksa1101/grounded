@@ -98,7 +98,7 @@ The point is to show the mechanics.
 │   │   ├── cli.py                 # Typer: migrate, ingest, index, eval, ask, golden
 │   │   ├── api/                   # routes_ask.py, routes_metrics.py, routes_health.py, deps.py, errors.py, security.py
 │   │   ├── schemas/               # llm.py (LLMAnswer), api.py (AskRequest/AskResponse), eval.py (GoldenItem)
-│   │   ├── ingest/                # types.py, corpus.py, markdown.py, includes.py, chunker.py [A], embed.py, pipeline.py
+│   │   ├── ingest/                # types.py, corpus.py, markdown.py, includes.py, tokens.py, chunker.py [A], embed.py, pipeline.py
 │   │   ├── retrieval/             # dense.py, lexical.py [A], hybrid.py [A], rerank.py, config.py, types.py
 │   │   ├── generation/
 │   │   │   ├── providers/         # base.py (Protocol), gemini.py, groq.py, fake.py
@@ -150,6 +150,8 @@ or with `ALLOW_DIRECT_API=true`.
 | `LLM_MAX_OUTPUT_TOKENS` | `800` | answer length cap |
 | `RERANK_PROVIDER` | `none` \| `cohere` | feature flag |
 | `RERANK_MODEL`, `RERANK_DAILY_CAP` | pinned, `30` | trial quota protection (~1k/month) |
+| `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`, `CHUNK_MIN_TOKENS` | `450`, `50`, `40` | chunking config (§5.5); min < max, overlap < max |
+| `TOKENIZER_ENCODING` | `o200k_base` | tiktoken encoding for chunk sizing (approximate counts) |
 | `K_DENSE`, `K_FTS`, `K_FUSED`, `K_CONTEXT`, `RRF_K` | `20`, `20`, `40`, `5`, `60` | retrieval config |
 | `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `30` | per IP hash |
 | `DAILY_LLM_BUDGET` | below provider free RPD | global cap; optional until Phase 5 |
@@ -205,25 +207,33 @@ Rules:
 - `hl[…]` (and a legacy fence's `hl_lines="…"`) only highlight and are dropped. `title["app/main.py"]` stays on the fence as `title="app/main.py"`, because it names the file.
 - If the code contains a run of backticks, the fence is made longer than that run.
 - A missing file, a path outside the repository, an out-of-range `ln` or an unknown option is an ingest **error** (fail loudly), not a silent skip.
+- **Noise code is dropped after parsing** (Author decision, 2026-09-26). A code block identical to an earlier one on the same page is dropped, keeping the first. The docs re-include one file per section with other lines highlighted, so repeats are common: 138 blocks on 55 pages at `0.141.1`. A block holding embedded binary data (a base64 run of ≥ 400 characters) is dropped too: it has nothing to retrieve and risks the embedding input limit. At `0.141.1` that is one block, an image in `advanced/stream-data.md`.
 
 ### 5.4 Headings and anchors
 - Parse with markdown-it-py so headings inside code fences are ignored.
 - FastAPI headings often carry explicit anchors: `## Create a task function { #create-a-task-function }`. Use the explicit anchor when present. Otherwise slugify like Python-Markdown's `toc` (lowercase, drop punctuation, spaces → `-`). Strip the `{ #… }` suffix from the visible heading text.
 - Breadcrumb = navigation section (from the path, e.g. `Tutorial - User Guide`) + H1 + H2 + H3 of the chunk.
 - Output of `ingest/markdown.py`: `ParsedDocument(source_path, url, title, nav_path, blocks, content_hash)`, where `blocks` is a flat, document-ordered sequence of `HeadingBlock(level, text, anchor, markdown)`, `TextBlock(markdown)` and `CodeBlock(markdown, lang)`. Block Markdown is sliced verbatim from the source lines (`token.map`), not re-rendered. The parser builds no sections or chunks; that is the chunker's job.
-- `TextBlock` = one top-level paragraph, list, table, blockquote or HTML block. Admonition/tab markers (`/// tip` … `///`, `//// tab | …`) aren't CommonMark containers; a container that holds only text is merged into one `TextBlock` (so a tip isn't cut from its marker), while one holding code or a heading stays flat so the `CodeBlock` stays atomic.
+- `TextBlock(markdown, kind, items)` = one top-level paragraph, list, table, blockquote or HTML block. Admonition/tab markers (`/// tip` … `///`, `//// tab | …`) aren't CommonMark containers; a container that holds only text is merged into one `TextBlock` (so a tip isn't cut from its marker), while one holding code or a heading stays flat so the `CodeBlock` stays atomic.
+- `kind ∈ {paragraph, list, table, blockquote, html, container}` tells the chunker how a block may be split without re-parsing Markdown. For lists, `items` holds each top-level item verbatim with its marker (nested lists stay inside their item); it is empty for every other kind.
 - Dropped before/while parsing: YAML front matter, Jinja `{% raw %}` markers, HTML comments, HTML blocks containing Jinja (e.g. the home page's sponsor grids, generated from data files), thematic breaks.
 - `content_hash = sha256(resolved Markdown)`, i.e. the text after includes and the drops above, which is what the blocks come from.
 
 ### 5.5 Chunking [A]
-Contract for `chunk_document(doc: ParsedDocument, cfg: ChunkingConfig) -> list[Chunk]`:
-- Primary boundaries: H2 and H3 sections. Text before the first H2 is the page-intro chunk (anchor `''`).
-- A section longer than `max_tokens` (~450) is split recursively (paragraph → sentence), with `overlap_tokens` (~50) of overlap.
-- A fenced code block is **atomic**: never split. A single code block larger than `max_tokens` becomes its own chunk (allowed to exceed, flagged in stats).
-- Very small sections (< `min_tokens`, ~40) merge with the following sibling section under the same parent. The merged chunk keeps the first section's anchor and the common parent breadcrumb.
+Contract for `chunk_document(doc: ParsedDocument, cfg: ChunkingConfig, count_tokens: TokenCounter) -> list[Chunk]`.
+`ChunkingConfig` (frozen: `max_tokens`, `overlap_tokens`, `min_tokens`, `tokenizer`, `strategy="headers"`) and `Chunk`
+live in `ingest/types.py`. `ChunkingConfig.canonical_json()` is stored as `index_versions.chunking_config` and feeds
+`config_hash`. The full rule set is the docstring of `ingest/chunker.py`; the spec tests are `tests/unit/test_chunker.py`. Summary:
+- Primary boundaries: H2 and H3 sections. Text between the H1 and the first H2/H3 is the page-intro chunk (anchor `''`). H4–H6 are ordinary content. A chunk's content starts with its section's heading line.
+- A parent directly followed by its child (intro → H2/H3, H2 → H3) isn't a chunk when it is empty (always) or its own content is < `min_tokens` (if the child stays ≤ `max_tokens`): its heading line and text are prepended to the child, which keeps its metadata. This chains (small intro → small H2 → H3). A section left with nothing but heading lines (no child took it) yields no chunk.
+- A section longer than `max_tokens` (~450) is split by greedy packing of blocks; a paragraph that doesn't fit breaks into sentences, a list into its top-level items. Overlap (≤ `overlap_tokens`, ~50) is whole trailing sentences of a paragraph that ends the previous part; nothing else is copied.
+- Code blocks, tables, list items, containers, HTML and blockquotes are **atomic**: never split. An atomic block larger than `max_tokens` becomes its own chunk (allowed to exceed, flagged in stats).
+- Very small sections (< `min_tokens`, ~40) merge with an adjacent sibling under the same parent (next first, else previous) if the result stays ≤ `max_tokens`. The merged chunk keeps the first section's anchor and the common parent breadcrumb. The intro never merges.
 - Each chunk has `section_id = "<source_path>#<deepest anchor>"`, `anchor_path` (outermost → deepest), `breadcrumb`, `heading_level`, `ordinal`.
-- Pure and deterministic: same input + config → identical output (tests depend on it).
-- Token counts use the shared tokenizer helper (approximate; model tokenizers differ).
+- Sentence ends: `.`/`!`/`?` (plus closing quotes, brackets, emphasis) before whitespace, except inside inline code and after `e.g.`, `i.e.`, `vs.`, `cf.`. Versions and URLs (`3.10`, `a.b.com`) don't split, since no whitespace follows the dot.
+- Pure and deterministic: same input + config + counter → identical output (tests depend on it).
+- On tag `0.141.1` with the defaults (450/50/40, `o200k_base`): 125 pages → 1,045 chunks, ~196K tokens, p50 152 / p95 423 / max 1,356 tokens. 13 chunks exceed 450, and each is a single atomic block (code, table, HTML).
+- `count_tokens` is injected: ingest uses tiktoken (`ingest/tokens.py`, `TOKENIZER_ENCODING`), the tests a "one word = one token" counter. Counts are approximate (model tokenizers differ). tiktoken downloads its encoding on first use; pytest blocks the network, so CI warms `TIKTOKEN_CACHE_DIR` (cached by `actions/cache`) in a step before the tests.
 
 ### 5.6 Hash, embed, cache
 - `content_hash = sha256(breadcrumb_text + "\n\n" + content)`. The embedded text is exactly that string (heading context measurably helps retrieval).

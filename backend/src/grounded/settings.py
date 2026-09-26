@@ -77,6 +77,12 @@ class Settings(BaseSettings):
     rerank_model: str | None = None
     rerank_daily_cap: int = Field(default=30, ge=0)
 
+    # --- Chunking (grouped into ChunkingConfig, stored per index version) ----------------------
+    chunk_max_tokens: int = Field(default=450, gt=0)
+    chunk_overlap_tokens: int = Field(default=50, ge=0)
+    chunk_min_tokens: int = Field(default=40, gt=0)
+    tokenizer_encoding: str = "o200k_base"  # tiktoken; approximate counts for sizing only
+
     # --- Retrieval (grouped into a hashed RetrievalConfig in Phase 2) --------------------------
     k_dense: int = Field(default=20, gt=0)
     k_fts: int = Field(default=20, gt=0)
@@ -119,6 +125,10 @@ class Settings(BaseSettings):
         if self.embedding_batch_size > self.embedding_rpm:
             # Every text in a batch counts as one request toward RPM.
             raise ValueError("EMBEDDING_BATCH_SIZE must be <= EMBEDDING_RPM")
+        if not self.chunk_min_tokens < self.chunk_max_tokens:
+            raise ValueError("CHUNK_MIN_TOKENS must be < CHUNK_MAX_TOKENS")
+        if not self.chunk_overlap_tokens < self.chunk_max_tokens:
+            raise ValueError("CHUNK_OVERLAP_TOKENS must be < CHUNK_MAX_TOKENS")
         if self.app_env == "prod":
             self._check_prod()
         return self

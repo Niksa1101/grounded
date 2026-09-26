@@ -74,6 +74,24 @@ def test_answer_cache_ttl_cannot_exceed_retention() -> None:
         make_settings(answer_cache_ttl_days=31)
 
 
+def test_chunking_defaults_match_tech_md() -> None:
+    s = make_settings()
+    assert (s.chunk_max_tokens, s.chunk_overlap_tokens, s.chunk_min_tokens) == (450, 50, 40)
+    assert s.tokenizer_encoding == "o200k_base"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"chunk_min_tokens": 450}, "CHUNK_MIN_TOKENS"),
+        ({"chunk_overlap_tokens": 450}, "CHUNK_OVERLAP_TOKENS"),
+    ],
+)
+def test_chunk_sizes_must_fit_under_max(overrides: dict[str, int], message: str) -> None:
+    with pytest.raises(ValidationError, match=message):
+        make_settings(**overrides)
+
+
 def test_pool_min_cannot_exceed_max() -> None:
     with pytest.raises(ValidationError, match="DB_POOL_MIN_SIZE"):
         make_settings(db_pool_min_size=6, db_pool_max_size=5)
