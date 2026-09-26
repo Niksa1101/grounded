@@ -238,3 +238,35 @@ def test_content_hash_is_sha256_of_the_resolved_markdown() -> None:
     source = (CORPUS_MINI / page.source_path).read_text(encoding="utf-8")
     unresolved = hashlib.sha256(source.replace("\r\n", "\n").encode()).hexdigest()
     assert doc.content_hash != unresolved  # includes are part of the hashed content
+
+
+# --- Noise code blocks --------------------------------------------------------------------------
+
+
+def _code(text: str) -> list[str]:
+    return [b.markdown for b in _parse(text).blocks if isinstance(b, CodeBlock)]
+
+
+def test_repeated_identical_code_block_is_kept_once() -> None:
+    fence = "```python\nx = 1\n```"
+    text = f"# T\n\n## A\n\n{fence}\n\n## B\n\n{fence}\n\n```python\nx = 2\n```\n\n{fence}\n"
+    assert _code(text) == [fence, "```python\nx = 2\n```"]
+    # The sections around the dropped repeats are still there.
+    assert [h.anchor for h in _headings(text)] == ["t", "a", "b"]
+
+
+def test_same_code_in_another_language_is_not_a_repeat() -> None:
+    text = "# T\n\n```python\nx = 1\n```\n\n```console\nx = 1\n```\n"
+    assert len(_code(text)) == 2
+
+
+def test_code_block_with_embedded_binary_data_is_dropped() -> None:
+    blob = "iVBORw0KGgo" + "A" * 500 + "=="
+    text = f'# T\n\nText.\n\n```python\nimage = "{blob}"\n```\n\n```python\nok = 1\n```\n'
+    assert _code(text) == ["```python\nok = 1\n```"]
+
+
+def test_long_ordinary_code_line_is_not_binary_data() -> None:
+    # Identifiers and dotted paths break the run with "_", "." or spaces long before 400 chars.
+    line = "result = " + " + ".join(f"some_module.value_{i}" for i in range(60))
+    assert len(_code(f"# T\n\n```python\n{line}\n```\n")) == 1

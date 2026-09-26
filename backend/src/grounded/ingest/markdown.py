@@ -8,6 +8,12 @@ code fence is code, not a heading, and a fence inside a list stays inside that l
 is sliced from the source lines (``token.map``) instead of re-rendered, so what gets chunked,
 embedded and shown to the LLM is exactly the Markdown the docs contain.
 
+Two kinds of code block are dropped after parsing, because they only add noise to retrieval
+(Author decision, 2026-09-26): a repeat of an identical code block earlier on the same page (the
+docs re-include one file per section with other lines highlighted, and highlights are stripped),
+and a block carrying embedded binary data (a long base64 run, e.g. an image in a string literal:
+nothing to retrieve, and a risk for the embedding model's input limit).
+
 Things the site renders but this parser keeps as plain text: admonitions (``/// note`` … ``///``)
 and tabs (``//// tab | …``) are not CommonMark containers, so their marker lines become text blocks
 and their contents are parsed normally.
@@ -46,6 +52,8 @@ _ANCHOR_RE = re.compile(r"\s*\{\s*#(?P<id>[^\s}]+)[^}]*\}\s*$")
 _JINJA_RAW_RE = re.compile(r"^\s*\{%-?\s*(?:end)?raw\s*-?%\}\s*$")
 # Opening line of a pymdownx block (admonition, details, tab): "/// tip", "//// tab | Python 3.10+".
 _CONTAINER_OPEN_RE = re.compile(r"^(?P<fence>/{3,})\s*[A-Za-z]")
+# Embedded binary data: base64 has no spaces, so real code never has a run this long.
+_BLOB_RE = re.compile(r"[A-Za-z0-9+/]{400,}={0,2}")
 # Python-Markdown toc's de-duplication suffix: "title", "title_1", "title_2", ...
 _ID_COUNT_RE = re.compile(r"^(?P<base>.*)_(?P<n>[0-9]+)$")
 # Top-level token → TextBlock.kind (lists are handled separately: they also carry their items).
@@ -74,7 +82,7 @@ def parse_markdown(text: str, page: PageRef, root: Path) -> ParsedDocument:
     text = "\n".join(line for line in text.split("\n") if not _JINJA_RAW_RE.match(line))
     content_hash = hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    blocks = _blocks(text, page.source_path)
+    blocks = _drop_noise_code(_blocks(text, page.source_path), page.source_path)
     title = next((b.text for b in blocks if isinstance(b, HeadingBlock) and b.level == 1), None)
     if not title:
         raise ParseError(f"{page.source_path}: page has no H1 title")
@@ -158,6 +166,29 @@ def _blocks(text: str, source_path: str) -> list[Block]:
     pending = _merge_prose_containers(pending, lines)
     heading_blocks = _heading_blocks(headings)
     return [heading_blocks[item] if isinstance(item, int) else item for item, _, _ in pending]
+
+
+def _drop_noise_code(blocks: list[Block], source_path: str) -> list[Block]:
+    """Keep the first of identical code blocks on a page; drop those with embedded binary data."""
+    seen: set[str] = set()
+    kept: list[Block] = []
+    repeats = blobs = 0
+    for block in blocks:
+        if isinstance(block, CodeBlock):
+            if _BLOB_RE.search(block.markdown):
+                blobs += 1
+                continue
+            if block.markdown in seen:
+                repeats += 1
+                continue
+            seen.add(block.markdown)
+        kept.append(block)
+    if repeats or blobs:
+        logger.debug(
+            "code blocks dropped",
+            extra={"page": source_path, "repeats": repeats, "blobs": blobs},
+        )
+    return kept
 
 
 def _merge_prose_containers(

@@ -207,6 +207,7 @@ Rules:
 - `hl[…]` (and a legacy fence's `hl_lines="…"`) only highlight and are dropped. `title["app/main.py"]` stays on the fence as `title="app/main.py"`, because it names the file.
 - If the code contains a run of backticks, the fence is made longer than that run.
 - A missing file, a path outside the repository, an out-of-range `ln` or an unknown option is an ingest **error** (fail loudly), not a silent skip.
+- **Noise code is dropped after parsing** (Author decision, 2026-09-26). A code block identical to an earlier one on the same page is dropped, keeping the first. The docs re-include one file per section with other lines highlighted, so repeats are common: 138 blocks on 55 pages at `0.141.1`. A block holding embedded binary data (a base64 run of ≥ 400 characters) is dropped too: it has nothing to retrieve and risks the embedding input limit. At `0.141.1` that is one block, an image in `advanced/stream-data.md`.
 
 ### 5.4 Headings and anchors
 - Parse with markdown-it-py so headings inside code fences are ignored.
@@ -231,7 +232,7 @@ live in `ingest/types.py`. `ChunkingConfig.canonical_json()` is stored as `index
 - Each chunk has `section_id = "<source_path>#<deepest anchor>"`, `anchor_path` (outermost → deepest), `breadcrumb`, `heading_level`, `ordinal`.
 - Sentence ends: `.`/`!`/`?` (plus closing quotes, brackets, emphasis) before whitespace, except inside inline code and after `e.g.`, `i.e.`, `vs.`, `cf.`. Versions and URLs (`3.10`, `a.b.com`) don't split, since no whitespace follows the dot.
 - Pure and deterministic: same input + config + counter → identical output (tests depend on it).
-- On tag `0.141.1` with the defaults (450/50/40, `o200k_base`): 125 pages → 1,093 chunks, ~229K tokens, p50 165 / p95 439 tokens. 28 chunks exceed 450, and each is a single atomic block (code, table, HTML).
+- On tag `0.141.1` with the defaults (450/50/40, `o200k_base`): 125 pages → 1,045 chunks, ~196K tokens, p50 152 / p95 423 / max 1,356 tokens. 13 chunks exceed 450, and each is a single atomic block (code, table, HTML).
 - `count_tokens` is injected: ingest uses tiktoken (`ingest/tokens.py`, `TOKENIZER_ENCODING`), the tests a "one word = one token" counter. Counts are approximate (model tokenizers differ). tiktoken downloads its encoding on first use; pytest blocks the network, so CI warms `TIKTOKEN_CACHE_DIR` (cached by `actions/cache`) in a step before the tests.
 
 ### 5.6 Hash, embed, cache
