@@ -112,7 +112,7 @@ docs/        PRD, technical design, database design
 
 ## Quickstart (local)
 
-> Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. `ingest` arrives in Phase 1 and the question UI in Phase 5.
+> Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. The question UI arrives in Phase 5. The first `ingest` needs `GEMINI_API_KEY` and `EMBEDDING_MODEL` in `.env`, and takes two days on the free embedding tier (daily quota); re-running the same command resumes from the cache.
 >
 > **Windows:** start the API with `grounded serve` (as below), not bare `uvicorn`: psycopg's async driver can't run
 > on the Proactor event loop that uvicorn picks there, and `serve` selects a compatible one. Always go through

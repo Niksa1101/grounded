@@ -158,3 +158,11 @@ def test_env_file_is_the_repo_root_env_regardless_of_working_directory() -> None
     assert env_file.is_absolute()
     assert env_file.name == ".env"
     assert (env_file.parent / ".env.example").is_file()
+
+
+def test_relative_cache_dir_is_anchored_at_the_repo_root(tmp_path: Path) -> None:
+    # Commands run from backend/ and CI from the root; both must share one .cache/.
+    repo_root = Path(__file__).resolve().parents[3]
+    assert make_settings().cache_dir == repo_root / ".cache"
+    assert make_settings(cache_dir="custom").cache_dir == repo_root / "custom"
+    assert make_settings(cache_dir=tmp_path).cache_dir == tmp_path
