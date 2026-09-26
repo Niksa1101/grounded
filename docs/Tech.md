@@ -224,12 +224,14 @@ Contract for `chunk_document(doc: ParsedDocument, cfg: ChunkingConfig, count_tok
 live in `ingest/types.py`. `ChunkingConfig.canonical_json()` is stored as `index_versions.chunking_config` and feeds
 `config_hash`. The full rule set is the docstring of `ingest/chunker.py`; the spec tests are `tests/unit/test_chunker.py`. Summary:
 - Primary boundaries: H2 and H3 sections. Text between the H1 and the first H2/H3 is the page-intro chunk (anchor `''`). H4–H6 are ordinary content. A chunk's content starts with its section's heading line.
-- A parent directly followed by its child (intro → H2/H3, H2 → H3) isn't a chunk when it is empty (always) or its own content is < `min_tokens` (if the child stays ≤ `max_tokens`): its heading line and text are prepended to the child, which keeps its metadata. This chains (small intro → small H2 → H3).
+- A parent directly followed by its child (intro → H2/H3, H2 → H3) isn't a chunk when it is empty (always) or its own content is < `min_tokens` (if the child stays ≤ `max_tokens`): its heading line and text are prepended to the child, which keeps its metadata. This chains (small intro → small H2 → H3). A section left with nothing but heading lines (no child took it) yields no chunk.
 - A section longer than `max_tokens` (~450) is split by greedy packing of blocks; a paragraph that doesn't fit breaks into sentences, a list into its top-level items. Overlap (≤ `overlap_tokens`, ~50) is whole trailing sentences of a paragraph that ends the previous part; nothing else is copied.
 - Code blocks, tables, list items, containers, HTML and blockquotes are **atomic**: never split. An atomic block larger than `max_tokens` becomes its own chunk (allowed to exceed, flagged in stats).
 - Very small sections (< `min_tokens`, ~40) merge with an adjacent sibling under the same parent (next first, else previous) if the result stays ≤ `max_tokens`. The merged chunk keeps the first section's anchor and the common parent breadcrumb. The intro never merges.
 - Each chunk has `section_id = "<source_path>#<deepest anchor>"`, `anchor_path` (outermost → deepest), `breadcrumb`, `heading_level`, `ordinal`.
+- Sentence ends: `.`/`!`/`?` (plus closing quotes, brackets, emphasis) before whitespace, except inside inline code and after `e.g.`, `i.e.`, `vs.`, `cf.`. Versions and URLs (`3.10`, `a.b.com`) don't split, since no whitespace follows the dot.
 - Pure and deterministic: same input + config + counter → identical output (tests depend on it).
+- On tag `0.141.1` with the defaults (450/50/40, `o200k_base`): 125 pages → 1,093 chunks, ~229K tokens, p50 165 / p95 439 tokens. 28 chunks exceed 450, and each is a single atomic block (code, table, HTML).
 - `count_tokens` is injected: ingest uses tiktoken (`ingest/tokens.py`, `TOKENIZER_ENCODING`), the tests a "one word = one token" counter. Counts are approximate (model tokenizers differ). tiktoken downloads its encoding on first use; pytest blocks the network, so CI warms `TIKTOKEN_CACHE_DIR` (cached by `actions/cache`) in a step before the tests.
 
 ### 5.6 Hash, embed, cache

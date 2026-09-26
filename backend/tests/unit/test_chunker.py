@@ -13,7 +13,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from grounded.ingest.chunker import chunk_document
+import pytest
+
+from grounded.ingest.chunker import _split_sentences, chunk_document
 from grounded.ingest.corpus import discover_pages
 from grounded.ingest.markdown import parse_page
 from grounded.ingest.tokens import TokenCounter
@@ -548,3 +550,34 @@ def test_corpus_mini_pages_chunk_cleanly() -> None:
         for block in parsed.blocks:
             if isinstance(block, CodeBlock):
                 assert any(block.markdown in c.content for c in chunks), page.source_path
+
+
+# --- Implementation choices the contract leaves open ------------------------------------------
+
+
+def test_a_heading_with_nothing_under_it_yields_no_chunk() -> None:
+    # Alpha has no blocks and its next section (Beta) is a sibling, not a child to take it.
+    b = sents("b", 6)
+    [beta] = body(doc(h(2, "Alpha"), h(2, "Beta"), para(*b)))
+    assert beta.anchor_path == ("beta",)
+    assert beta.content.split() == words("## Beta", *b)
+
+
+def test_a_page_of_headings_only_has_no_chunks() -> None:
+    assert run(doc(h(2, "Alpha"), h(3, "Beta"), h(2, "Gamma"), intro=False)) == []
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("One two. Three four! Five? Six", ["One two.", "Three four!", "Five?", "Six"]),
+        ("Use a tool, e.g. pip. Then run it.", ["Use a tool, e.g. pip.", "Then run it."]),
+        ("It needs Python 3.10 or newer. Done.", ["It needs Python 3.10 or newer.", "Done."]),
+        ("Call `app.get(). ` first. Then go.", ["Call `app.get(). ` first.", "Then go."]),
+        ('He said "stop." Then left.', ['He said "stop."', "Then left."]),
+        ("A **bold claim.** Next one.", ["A **bold claim.**", "Next one."]),
+        ("Line one\ncontinues here. Next.", ["Line one\ncontinues here.", "Next."]),
+    ],
+)
+def test_sentence_boundaries(text: str, expected: list[str]) -> None:
+    assert list(_split_sentences(text)) == expected

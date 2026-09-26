@@ -206,7 +206,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 |---|---|
 | Corpus fetch: clone FastAPI at pinned tag into `.cache/corpus`, record SHA | G |
 | Markdown parsing + `docs_src` include resolution (both include syntaxes, preferred variant, strip highlight params) | G |
-| **Header-aware chunker** (breadcrumbs, anchors, max tokens, overlap, never split code) | **A** |
+| **Header-aware chunker** (breadcrumbs, anchors, max tokens, overlap, never split code) | **A** (delegated to G by the Author, 2026-09-26) |
 | Gemini embeddings adapter (batching, `task_type`, 768 dims, L2 normalization, backoff) + SQLite embedding cache | G |
 | Ingest pipeline writing `index_versions`, `documents`, `chunks`; activation | G |
 | Golden set v1: Agent drafts ~50 candidate questions from random sections → Author selects, rewrites and labels 30 | A (curation) / G (drafts) |
