@@ -42,6 +42,9 @@ jobs:
       APP_ENV: test
       DATABASE_URL: postgresql://grounded:grounded@localhost:5433/grounded
       TEST_DATABASE_URL: postgresql://grounded:grounded@localhost:5433/grounded_test
+      # tiktoken downloads its encoding file on first use; pytest blocks the network, so the file
+      # is fetched (or restored) here before the tests run.
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/tiktoken
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: astral-sh/setup-uv@v10.2.0
@@ -56,6 +59,13 @@ jobs:
         run: uv run ruff format --check .
       - name: Pyright
         run: uv run pyright
+      - name: Restore tiktoken cache
+        uses: actions/cache@v6.1.0
+        with:
+          path: ${{ env.TIKTOKEN_CACHE_DIR }}
+          key: tiktoken-o200k_base-v1
+      - name: Warm tiktoken cache
+        run: uv run python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
       - name: Pytest
         run: uv run pytest
 

@@ -33,6 +33,7 @@ from grounded.ingest.types import (
     PageRef,
     ParsedDocument,
     TextBlock,
+    TextKind,
 )
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,13 @@ _JINJA_RAW_RE = re.compile(r"^\s*\{%-?\s*(?:end)?raw\s*-?%\}\s*$")
 _CONTAINER_OPEN_RE = re.compile(r"^(?P<fence>/{3,})\s*[A-Za-z]")
 # Python-Markdown toc's de-duplication suffix: "title", "title_1", "title_2", ...
 _ID_COUNT_RE = re.compile(r"^(?P<base>.*)_(?P<n>[0-9]+)$")
+# Top-level token → TextBlock.kind (lists are handled separately: they also carry their items).
+# Anything else that reaches a text block (a paragraph, a lone container marker) is "paragraph".
+_TEXT_KINDS: Final[dict[str, TextKind]] = {
+    "table_open": "table",
+    "blockquote_open": "blockquote",
+    "html_block": "html",
+}
 
 
 class ParseError(Exception):
@@ -138,8 +146,12 @@ def _blocks(text: str, source_path: str) -> list[Block]:
                 continue
             case "html_block" if _is_unrenderable_html(token):
                 dropped += 1
+            case "bullet_list_open" | "ordered_list_open":
+                items = tuple(_slice(lines, *span) for span in _list_item_spans(tokens, i))
+                pending.append((TextBlock(markdown=source, kind="list", items=items), start, end))
             case _:
-                pending.append((TextBlock(markdown=source), start, end))
+                kind = _TEXT_KINDS.get(token.type, "paragraph")
+                pending.append((TextBlock(markdown=source, kind=kind), start, end))
 
     if dropped:
         logger.debug("html blocks dropped", extra={"page": source_path, "count": dropped})
@@ -178,10 +190,23 @@ def _merge_prose_containers(
             continue  # nested in a container that was already merged
         merged.extend(pending[index:open_index])
         start, end = pending[open_index][1], pending[close_index][2]
-        merged.append((TextBlock(markdown=_slice(lines, start, end)), start, end))
+        container = TextBlock(markdown=_slice(lines, start, end), kind="container")
+        merged.append((container, start, end))
         index = close_index + 1
     merged.extend(pending[index:])
     return merged
+
+
+def _list_item_spans(tokens: list[Token], list_index: int) -> list[tuple[int, int]]:
+    """Source line spans of the top-level items of the list opened at ``tokens[list_index]``."""
+    opening = tokens[list_index]
+    spans: list[tuple[int, int]] = []
+    for token in tokens[list_index + 1 :]:
+        if token.level == opening.level and token.nesting < 0:
+            break  # the list's own closing token
+        if token.type == "list_item_open" and token.level == opening.level + 1 and token.map:
+            spans.append((token.map[0], token.map[1]))
+    return spans
 
 
 def _slice(lines: list[str], start: int, end: int) -> str:

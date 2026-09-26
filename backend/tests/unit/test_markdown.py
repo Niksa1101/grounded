@@ -98,16 +98,43 @@ def test_blocks_are_verbatim_in_document_order() -> None:
     )
     assert doc.blocks == (
         HeadingBlock(level=1, text="Title", anchor="title", markdown="# Title"),
-        TextBlock(markdown="Intro *text*."),
-        TextBlock(markdown="* one\n* two"),
-        TextBlock(markdown="| a | b |\n|---|---|\n| 1 | 2 |"),
+        TextBlock(markdown="Intro *text*.", kind="paragraph"),
+        TextBlock(markdown="* one\n* two", kind="list", items=("* one", "* two")),
+        TextBlock(markdown="| a | b |\n|---|---|\n| 1 | 2 |", kind="table"),
         CodeBlock(markdown="```Python\nx = 1\n```", lang="python"),
         CodeBlock(markdown="    indented()", lang=""),
         # the thematic break is dropped; raw HTML is kept as text
-        TextBlock(markdown='<div class="termy">'),
-        TextBlock(markdown="$ run"),
-        TextBlock(markdown="</div>"),
+        TextBlock(markdown='<div class="termy">', kind="html"),
+        TextBlock(markdown="$ run", kind="paragraph"),
+        TextBlock(markdown="</div>", kind="html"),
     )
+
+
+def test_list_items_are_top_level_and_verbatim() -> None:
+    doc = _parse(
+        "# T\n\n1. First item\n   * nested a\n   * nested b\n2. Second\n\n   continued.\n\n"
+        "- loose one\n\n- loose two\n"
+    )
+    ordered, bullet = doc.blocks[1:]
+    assert isinstance(ordered, TextBlock)
+    assert ordered.kind == "list"
+    # A nested list stays inside its item; a continuation paragraph belongs to its item.
+    assert ordered.items == (
+        "1. First item\n   * nested a\n   * nested b",
+        "2. Second\n\n   continued.",
+    )
+    assert bullet == TextBlock(
+        markdown="- loose one\n\n- loose two", kind="list", items=("- loose one", "- loose two")
+    )
+
+
+def test_non_list_text_blocks_have_no_items() -> None:
+    doc = _parse("# T\n\nPara.\n\n> quote\n\n| a |\n|---|\n| 1 |\n")
+    assert [(b.kind, b.items) for b in doc.blocks[1:] if isinstance(b, TextBlock)] == [
+        ("paragraph", ()),
+        ("blockquote", ()),
+        ("table", ()),
+    ]
 
 
 def test_heading_inside_code_fence_is_code() -> None:
@@ -123,25 +150,25 @@ def test_h4_and_deeper_are_heading_blocks_too() -> None:
 def test_prose_admonition_becomes_one_text_block() -> None:
     doc = _parse("# T\n\n/// tip | Pro tip\n\nFirst.\n\n* a list\n\n///\n\nAfter.\n")
     assert doc.blocks[1:] == (
-        TextBlock(markdown="/// tip | Pro tip\n\nFirst.\n\n* a list\n\n///"),
-        TextBlock(markdown="After."),
+        TextBlock(markdown="/// tip | Pro tip\n\nFirst.\n\n* a list\n\n///", kind="container"),
+        TextBlock(markdown="After.", kind="paragraph"),
     )
 
 
 def test_nested_prose_containers_merge_into_the_outermost() -> None:
     doc = _parse("# T\n\n//// tab | A\n\n/// note\n\nInner.\n\n///\n\n////\n")
     assert doc.blocks[1:] == (
-        TextBlock(markdown="//// tab | A\n\n/// note\n\nInner.\n\n///\n\n////"),
+        TextBlock(markdown="//// tab | A\n\n/// note\n\nInner.\n\n///\n\n////", kind="container"),
     )
 
 
 def test_container_with_code_stays_flat_so_code_stays_atomic() -> None:
     doc = _parse("# T\n\n/// note\n\nSee:\n\n```python\nx = 1\n```\n\n///\n")
     assert doc.blocks[1:] == (
-        TextBlock(markdown="/// note"),
-        TextBlock(markdown="See:"),
+        TextBlock(markdown="/// note", kind="paragraph"),
+        TextBlock(markdown="See:", kind="paragraph"),
         CodeBlock(markdown="```python\nx = 1\n```", lang="python"),
-        TextBlock(markdown="///"),
+        TextBlock(markdown="///", kind="paragraph"),
     )
 
 
@@ -152,7 +179,7 @@ def test_front_matter_jinja_html_and_comments_are_dropped() -> None:
     )
     assert doc.blocks == (
         HeadingBlock(level=1, text="Home", anchor="home", markdown="# Home"),
-        TextBlock(markdown="Text."),
+        TextBlock(markdown="Text.", kind="paragraph"),
     )
 
 
