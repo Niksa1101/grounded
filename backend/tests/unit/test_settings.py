@@ -18,6 +18,29 @@ def test_defaults_match_tech_md() -> None:
     assert s.allow_direct_api is False
 
 
+def test_embedding_defaults_match_the_free_tier() -> None:
+    s = make_settings()
+    assert (s.embedding_batch_size, s.embedding_rpm, s.embedding_tpm) == (100, 100, 30_000)
+    assert (s.embedding_max_input_tokens, s.embedding_max_retries) == (2048, 5)
+    assert s.embedding_timeout_s == 30.0
+
+
+def test_embedding_batch_size_is_capped_at_the_api_maximum() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(embedding_batch_size=101)
+
+
+def test_embedding_input_limit_cannot_exceed_tpm() -> None:
+    with pytest.raises(ValidationError, match="EMBEDDING_MAX_INPUT_TOKENS"):
+        make_settings(embedding_max_input_tokens=5000, embedding_tpm=4000)
+
+
+def test_embedding_batch_cannot_exceed_rpm() -> None:
+    # Every text in a batch counts as one request toward RPM.
+    with pytest.raises(ValidationError, match="EMBEDDING_BATCH_SIZE"):
+        make_settings(embedding_batch_size=50, embedding_rpm=40)
+
+
 def test_generator_providers_parse_comma_separated_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GENERATOR_PROVIDERS", " gemini , groq,")
     assert make_settings().generator_providers == ["gemini", "groq"]
