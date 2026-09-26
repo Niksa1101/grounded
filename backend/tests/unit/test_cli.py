@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -132,3 +133,83 @@ def test_ingest_reports_unreachable_database_without_traceback(
     assert result.exit_code == 1
     assert "Database error:" in result.output
     assert isinstance(result.exception, SystemExit)
+
+
+# --- golden (against corpus_mini, no database) -----------------------------------------------
+
+BG = "docs/en/docs/tutorial/background-tasks.md"
+
+
+def golden_file(tmp_path: Path, *sections: str) -> Path:
+    item = {
+        "id": "q001",
+        "question": "How do I run a function after returning a response?",
+        "type": "how_to",
+        "answerable": True,
+        "reference_answer": "Use BackgroundTasks.",
+        "relevant_sections": [{"section": s, "grade": 2} for s in sections],
+    }
+    path = tmp_path / "golden.jsonl"
+    path.write_text(json.dumps(item) + "\n", encoding="utf-8")
+    return path
+
+
+@pytest.mark.usefixtures("mini_corpus")
+def test_golden_validate_reports_counts_and_resolves_labels(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    use_settings(monkeypatch, fastapi_ref="0.0.1")
+    result = runner.invoke(
+        app, ["golden", "validate", str(golden_file(tmp_path, f"{BG}#using-backgroundtasks"))]
+    )
+    assert result.exit_code == 0, result.output
+    assert "golden.jsonl: 1 items, 1 answerable" in result.output
+    assert re.search(r"how_to\s+1\s+\(target ~8\)", result.output)
+    assert "All labels resolve." in result.output
+
+
+@pytest.mark.usefixtures("mini_corpus")
+def test_golden_validate_fails_on_unresolved_labels(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    use_settings(monkeypatch, fastapi_ref="0.0.1")
+    result = runner.invoke(app, ["golden", "validate", str(golden_file(tmp_path, f"{BG}#nope"))])
+    assert result.exit_code == 1
+    assert f"corpus: q001: {BG}#nope matches no chunk" in result.output
+
+
+def test_golden_validate_fails_on_an_invalid_file(tmp_path: Path) -> None:
+    path = tmp_path / "golden.jsonl"
+    path.write_text('{"id": "x"}\n', encoding="utf-8")
+    result = runner.invoke(app, ["golden", "validate", str(path)])
+    assert result.exit_code == 1
+    assert "Invalid golden set:" in result.output
+    assert "golden.jsonl:1: question: Field required" in result.output
+
+
+@pytest.mark.usefixtures("mini_corpus")
+def test_golden_sections_lists_a_page(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings(monkeypatch, fastapi_ref="0.0.1")
+    result = runner.invoke(app, ["golden", "sections", "tutorial/background-tasks.md"])
+    assert result.exit_code == 0, result.output
+    assert f"  {BG}#using-backgroundtasks  (" in result.output
+    assert f"    {BG}#technical-details  (" in result.output  # H3 indented under its H2
+    assert "Background Tasks > Create a task function > Technical Details" in result.output
+
+    missing = runner.invoke(app, ["golden", "sections", "nope.md"])
+    assert missing.exit_code == 1
+    assert "not a page of this corpus" in missing.output
+
+
+@pytest.mark.usefixtures("mini_corpus")
+def test_golden_sample_is_seeded(monkeypatch: pytest.MonkeyPatch) -> None:
+    use_settings(monkeypatch, fastapi_ref="0.0.1")
+    first = runner.invoke(app, ["golden", "sample", "--n", "2", "--seed", "1"])
+    again = runner.invoke(app, ["golden", "sample", "--n", "2", "--seed", "1"])
+    assert first.exit_code == 0, first.output
+    assert first.stdout == again.stdout
+    assert len(first.stdout.strip().splitlines()) == 2
+
+    too_many = runner.invoke(app, ["golden", "sample", "--n", "99"])
+    assert too_many.exit_code == 1
+    assert "asked for 99 sections" in too_many.output

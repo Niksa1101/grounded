@@ -1,6 +1,6 @@
 """``grounded`` command-line entry point (Typer).
 
-Later phases add the eval, ask and golden commands.
+Later phases add the eval and ask commands.
 """
 
 from __future__ import annotations
@@ -14,6 +14,18 @@ import typer
 import uvicorn
 from psycopg.conninfo import conninfo_to_dict
 
+from grounded.evals.golden import (
+    GOLDEN_DIR,
+    TARGET_TYPE_COUNTS,
+    GoldenSetError,
+    active_index_chunks,
+    load_golden_set,
+    normalize_page,
+    page_sections,
+    resolve_labels,
+    sample_sections,
+    type_counts,
+)
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
 from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
@@ -26,6 +38,7 @@ from grounded.ingest.markdown import ParseError
 from grounded.ingest.pipeline import (
     EmbeddingQuotaExhaustedError,
     IngestError,
+    PreparedCorpus,
     count_uncached,
     index_spec,
     list_index_versions,
@@ -33,13 +46,15 @@ from grounded.ingest.pipeline import (
     token_stats,
 )
 from grounded.ingest.pipeline import ingest as run_ingest
-from grounded.ingest.tokens import make_token_counter
+from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
-from grounded.settings import get_settings
+from grounded.settings import Settings, get_settings
 
 app = typer.Typer(no_args_is_help=True, help="Grounded command-line tools.")
 index_app = typer.Typer(no_args_is_help=True, help="Inspect index versions.")
 app.add_typer(index_app, name="index")
+golden_app = typer.Typer(no_args_is_help=True, help="Draft, label and validate the golden set.")
+app.add_typer(golden_app, name="golden")
 
 _EMBEDDINGS_CACHE = "embeddings.sqlite"
 
@@ -142,19 +157,10 @@ def ingest(
     """Build an index version from a pinned FastAPI tag: parse, chunk, embed, store, verify."""
     settings = get_settings()
     configure_logging(settings.log_level)
-    ref = ref or settings.fastapi_ref
-    if not ref:
-        raise _fail("No tag given: pass --ref or set FASTAPI_REF.")
     if not settings.embedding_model:
         raise _fail("EMBEDDING_MODEL must be set to the pinned embedding model ID.")
-
-    cfg = ChunkingConfig.from_settings(settings)
-    count_tokens = make_token_counter(cfg.tokenizer)
-    try:
-        checkout = fetch_corpus(ref, settings.cache_dir)
-        corpus = prepare_corpus(checkout, cfg, count_tokens)
-    except (CorpusError, IncludeError, ParseError, IngestError) as exc:
-        raise _fail(f"Ingest aborted: {exc}") from exc
+    corpus, count_tokens = _prepare_corpus(settings, ref)
+    checkout, cfg = corpus.checkout, corpus.chunking
     spec = index_spec(
         checkout,
         cfg,
@@ -252,8 +258,108 @@ def index_list(
         )
 
 
+def _prepare_corpus(settings: Settings, ref: str | None) -> tuple[PreparedCorpus, TokenCounter]:
+    """Fetch (or reuse) the pinned checkout, then parse and chunk it with the configured chunker."""
+    ref = ref or settings.fastapi_ref
+    if not ref:
+        raise _fail("No tag given: pass --ref or set FASTAPI_REF.")
+    cfg = ChunkingConfig.from_settings(settings)
+    count_tokens = make_token_counter(cfg.tokenizer)
+    try:
+        checkout = fetch_corpus(ref, settings.cache_dir)
+        return prepare_corpus(checkout, cfg, count_tokens), count_tokens
+    except (CorpusError, IncludeError, ParseError, IngestError) as exc:
+        raise _fail(f"Corpus preparation failed: {exc}") from exc
+
+
 def _describe_stats(stats: dict[str, int], max_tokens: int) -> str:
     return (
         f"~{stats['total']} tokens (p50 {stats['p50']}, p95 {stats['p95']}, max {stats['max']}; "
         f"{stats['over_max']} over {max_tokens})"
     )
+
+
+_REF_OPTION = typer.Option(help="FastAPI tag. Default: FASTAPI_REF.", show_default=False)
+
+
+@golden_app.command("sample")
+def golden_sample(
+    n: Annotated[int, typer.Option(help="How many sections to draw.")] = 50,
+    seed: Annotated[int, typer.Option(help="RNG seed; record it with the candidates.")] = 20260926,
+    ref: Annotated[str | None, _REF_OPTION] = None,
+) -> None:
+    """Draw random H2/H3 sections of the chunked corpus to draft candidate questions from."""
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    corpus, _ = _prepare_corpus(settings, ref)
+    chunks = corpus.chunks
+    try:
+        sample = sample_sections(chunks, n, seed)
+    except ValueError as exc:
+        raise _fail(str(exc)) from exc
+    breadcrumbs = {chunk.section_id: chunk.breadcrumb_text for chunk in chunks}
+    for section_id in sample:
+        typer.echo(f"{section_id}  {breadcrumbs[section_id]}")
+
+
+@golden_app.command("sections")
+def golden_sections(
+    page: Annotated[str, typer.Argument(help="docs/en/docs/<page>.md or <page>.md")],
+    ref: Annotated[str | None, _REF_OPTION] = None,
+) -> None:
+    """List a page's labelable sections as the chunker produced them."""
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    corpus, _ = _prepare_corpus(settings, ref)
+    sections = page_sections(corpus.chunks, normalize_page(page))
+    if not sections:
+        raise _fail(f"No chunks for {normalize_page(page)}: not a page of this corpus.")
+    for info in sections:
+        indent = "  " * max(0, info.heading_level - 1)
+        parts = f", {info.chunk_count} chunks" if info.chunk_count > 1 else ""
+        typer.echo(f"{indent}{info.section_id}  ({info.token_count} tokens{parts})")
+        typer.echo(f"{indent}    {info.breadcrumb_text}")
+
+
+@golden_app.command("validate")
+def golden_validate(
+    path: Annotated[Path, typer.Argument(help="Golden-set JSONL file.")] = GOLDEN_DIR
+    / "golden_set.v1.jsonl",
+    against_index: Annotated[
+        bool, typer.Option(help="Also resolve labels against the active index in the database.")
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            help="Database for --against-index. Default: DATABASE_URL_DIRECT, else DATABASE_URL.",
+            show_default=False,
+        ),
+    ] = None,
+    ref: Annotated[str | None, _REF_OPTION] = None,
+) -> None:
+    """Check the schema, unique IDs and type balance, and resolve every label to chunks."""
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    try:
+        items = load_golden_set(path)
+    except (GoldenSetError, OSError) as exc:
+        raise _fail(f"Invalid golden set:\n{exc}") from exc
+
+    counts = type_counts(items)
+    answerable = sum(1 for item in items if item.answerable)
+    typer.echo(f"{path.name}: {len(items)} items, {answerable} answerable")
+    for kind, target in TARGET_TYPE_COUNTS.items():
+        typer.echo(f"  {kind:<14} {counts[kind]:>3}  (target ~{target})")
+
+    corpus, _ = _prepare_corpus(settings, ref)
+    problems = [f"corpus: {p}" for p in resolve_labels(items, corpus.chunks)]
+    if against_index:
+        conninfo = database_url or settings.migration_database_url.get_secret_value()
+        try:
+            version_id, indexed = active_index_chunks(conninfo)
+        except (GoldenSetError, psycopg.Error) as exc:
+            raise _fail(f"Cannot read the active index: {exc}") from exc
+        problems += [f"index {version_id}: {p}" for p in resolve_labels(items, indexed)]
+    if problems:
+        raise _fail("Label problems:\n" + "\n".join(f"  {p}" for p in problems))
+    typer.echo("All labels resolve" + (" in the corpus and the index." if against_index else "."))
