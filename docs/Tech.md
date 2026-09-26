@@ -109,7 +109,7 @@ The point is to show the mechanics.
 │   │   │   ├── confidence.py      # heuristic [A]
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
 │   │   ├── evals/                 # metrics.py [A], retrieval_runner.py, gate.py [A], report.py, judge.py
-│   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
+│   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
 │   │   └── observability/         # request_log.py, cost.py
 │   └── tests/                     # unit/, integration/, conftest.py (fixtures), support.py (helpers), fixtures/
 ├── eval/
@@ -140,6 +140,9 @@ or with `ALLOW_DIRECT_API=true`.
 | `DB_POOL_MIN_SIZE`, `DB_POOL_MAX_SIZE`, `DB_POOL_TIMEOUT_S` | `1`, `5`, `5` | runtime connection pool (DB.md §2) |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `COHERE_API_KEY` | — | providers |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIM` | `gemini-embedding-001` / `768` | must match active index version |
+| `EMBEDDING_BATCH_SIZE`, `EMBEDDING_RPM`, `EMBEDDING_TPM` | `100` (max 100), `100`, `30000` | batching and pacing, defaults = free tier (§5.6) |
+| `EMBEDDING_MAX_INPUT_TOKENS` | `2048` | longer texts fail before any call; must be ≤ `EMBEDDING_TPM` |
+| `EMBEDDING_MAX_RETRIES`, `EMBEDDING_TIMEOUT_S` | `5`, `30.0` | per batch, on 429 / 5xx / timeout |
 | `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list (eval: `gemini`) |
 | `GEMINI_MODEL`, `GROQ_MODEL`, `JUDGE_MODEL` | pinned IDs, verified at implementation time | no floating aliases |
 | `GEMINI_THINKING_BUDGET` | `0` (or minimal) | thinking adds latency and billed output tokens |
@@ -225,9 +228,11 @@ Contract for `chunk_document(doc: ParsedDocument, cfg: ChunkingConfig) -> list[C
 ### 5.6 Hash, embed, cache
 - `content_hash = sha256(breadcrumb_text + "\n\n" + content)`. The embedded text is exactly that string (heading context measurably helps retrieval).
 - Embedding call: `task_type=RETRIEVAL_DOCUMENT` for chunks and `RETRIEVAL_QUERY` for questions, `output_dimensionality=768`.
-- **L2-normalize** vectors ourselves. Truncated (Matryoshka) Gemini embeddings are not unit-length.
-- Batch up to the provider's per-request maximum. Exponential backoff with jitter on 429/5xx. Respect RPM.
-- Cache: SQLite `.cache/embeddings.sqlite`, key = `(model, dim, task_type, content_hash)`, value = float32 blob. A re-run with no content changes makes **zero** embedding calls.
+- **L2-normalize** vectors ourselves. Truncated (Matryoshka) Gemini embeddings are not unit-length (the recorded fixture has norms ≈ 0.58).
+- Free-tier limits for `gemini-embedding-001` (AI Studio, checked 2026-09-26): 100 RPM, 30K TPM, 1K RPD (reset at midnight Pacific); 2,048 input tokens per text. The API rejects more than 100 texts per batch call. This cap comes from the API's error message, not the docs. Whether one batch counts as one request toward RPD is not documented. TPM is the binding limit for a full ingest (~230K tokens ≈ 10 minutes).
+- **No truncation.** The Gemini API has no `auto_truncate` (the SDK allows it only on Vertex), so a text over `EMBEDDING_MAX_INPUT_TOKENS` fails **before any call** (ingest names the chunk's `section_id`). Counts are tiktoken estimates, and Gemini's tokenizer differs. The largest block on the pinned tag is ~1.4K tokens, which leaves ~30% margin.
+- Batches hold ≤ `EMBEDDING_BATCH_SIZE` texts and ≤ `EMBEDDING_TPM` estimated tokens. Each call is paced against a rolling 60 s window of requests and estimated tokens, and rejected calls count toward that window too. 429/5xx/timeouts are retried up to `EMBEDDING_MAX_RETRIES` times. The wait is the server's delay (`RetryInfo.retryDelay`, else `Retry-After`) or exponential backoff with equal jitter. A **daily-quota** 429 (`QuotaFailure` with a `…PerDay…` quota ID) is raised at once, since waiting hours inside a CLI run helps nobody. Other 4xx raise `ProviderRequestRejected` without a retry.
+- Cache: SQLite `.cache/embeddings.sqlite` (`infra/kvcache.py`), key = `model|dim|task_type|sha256(text)` (for chunks, that sha256 is `content_hash`), value = little-endian float32 blob. A re-run with no content changes makes **zero** embedding calls. Misses are embedded in slices, and each slice is stored before the next is sent, so a run stopped by the daily quota resumes where it stopped. Fresh vectors also go through the float32 round trip, so a first run and a cached re-run return bit-identical vectors.
 
 ### 5.7 Store, verify, activate
 - Insert `index_versions(status='building')`, then documents and chunks with `COPY` or batched `executemany`, all in one transaction.
@@ -319,7 +324,7 @@ class LLMProvider(Protocol):
     ) -> GenerationResult[T]: ...
 ```
 
-- Adapters translate the Pydantic model to the provider's structured-output format (Gemini `response_schema` / JSON schema; Groq `response_format` with `json_schema` on a model that supports it). They return **validated** objects or raise typed errors: `ProviderRateLimited(retry_after_s, is_quota)`, `ProviderUnavailable`, `ProviderTimeout`, `ProviderBadOutput(raw, validation_error)`.
+- Adapters translate the Pydantic model to the provider's structured-output format (Gemini `response_schema` / JSON schema; Groq `response_format` with `json_schema` on a model that supports it). They return **validated** objects or raise typed errors: `ProviderRateLimited(retry_after_s, is_quota)`, `ProviderUnavailable`, `ProviderTimeout`, `ProviderBadOutput(raw, validation_error)`, `ProviderRequestRejected(status_code)` (a 4xx other than 429, e.g. a bad request or key: retrying the same call won't help). They live in `infra/provider_errors.py`, which the embedding adapter uses too.
 - **Provider schema support differs.** Keep `LLMAnswer` simple: no unions, no recursive refs, enums as string literals. Constraints a provider can't express (regex, lengths) are enforced by Pydantic after the call. A unit test per adapter checks that the schema converts.
 - `FakeLLMProvider` returns scripted results/errors in order. It is used by all tests.
 

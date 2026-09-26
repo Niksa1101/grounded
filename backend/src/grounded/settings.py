@@ -57,6 +57,13 @@ class Settings(BaseSettings):
 
     embedding_model: str | None = None
     embedding_dim: int = Field(default=768, gt=0)
+    # Defaults = gemini-embedding-001 free tier (AI Studio, 2026-09-26) and API caps (Tech.md §5.6).
+    embedding_batch_size: int = Field(default=100, gt=0, le=100)  # the API rejects > 100 per call
+    embedding_rpm: int = Field(default=100, gt=0)
+    embedding_tpm: int = Field(default=30_000, gt=0)
+    embedding_max_input_tokens: int = Field(default=2048, gt=0)
+    embedding_max_retries: int = Field(default=5, ge=0)
+    embedding_timeout_s: float = Field(default=30.0, gt=0)
 
     generator_providers: Annotated[list[str], NoDecode] = ["gemini", "groq"]
     gemini_model: str | None = None
@@ -106,6 +113,9 @@ class Settings(BaseSettings):
             raise ValueError("DB_POOL_MIN_SIZE must be <= DB_POOL_MAX_SIZE")
         if not self.generator_providers:
             raise ValueError("GENERATOR_PROVIDERS must name at least one provider")
+        if self.embedding_max_input_tokens > self.embedding_tpm:
+            # A single text over the per-minute budget could never be sent.
+            raise ValueError("EMBEDDING_MAX_INPUT_TOKENS must be <= EMBEDDING_TPM")
         if self.app_env == "prod":
             self._check_prod()
         return self
