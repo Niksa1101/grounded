@@ -136,7 +136,7 @@ CREATE TABLE index_versions (
     git_sha          char(40)    NOT NULL,
     embedding_model  text        NOT NULL,                 -- e.g. 'gemini-embedding-001'
     embedding_dim    integer     NOT NULL CHECK (embedding_dim > 0),
-    chunking_config  jsonb       NOT NULL,                 -- {"strategy":"headers","max_tokens":450,"overlap":50,...}
+    chunking_config  jsonb       NOT NULL,                 -- {"strategy":"headers","max_tokens":450,...,"excluded_pages":[...],"parser_version":1}
     config_hash      text        NOT NULL,                 -- sha256(git_sha|model|dim|chunking_config)
     status           text        NOT NULL DEFAULT 'building'
                      CHECK (status IN ('building', 'ready', 'failed', 'retired')),
@@ -355,10 +355,11 @@ Token totals are added after the call with a plain `UPDATE`. `rerank_calls` uses
 - The cache is disabled in eval mode.
 
 ### 7.3 Index activation (ingest, owner role)
-Performed in one transaction:
+Ingest marks a version `ready` (with `ready_at`) in the same transaction that stores and verifies it
+(Tech.md §5.7). Activation then only flips `is_active`, in one transaction, and only for a `ready` version:
 ```sql
-UPDATE index_versions SET is_active = false WHERE is_active;
-UPDATE index_versions SET is_active = true, status = 'ready', ready_at = now() WHERE id = %s;
+UPDATE index_versions SET is_active = false WHERE is_active AND id <> %s;
+UPDATE index_versions SET is_active = true WHERE id = %s AND status = 'ready';  -- 0 rows => error, rolled back
 ```
 The runtime caches the active `index_version_id` and refreshes it every 5 minutes (or on restart).
 
