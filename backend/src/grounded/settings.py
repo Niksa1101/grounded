@@ -26,7 +26,7 @@ _LOCAL_TEST_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/ground
 
 # The repo-root .env (this file is backend/src/grounded/settings.py). Anchored to the source tree,
 # not the working directory, so no stray .env above the repo can leak in. In a deployed install the
-# path doesn't exist and is ignored: the HF Space and CI use real env vars.
+# path doesn't exist and is ignored: Vercel and CI use real env vars.
 _ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
 
 

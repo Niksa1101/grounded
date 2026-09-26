@@ -1,0 +1,3 @@
+# `FastAPI` class
+
+::: fastapi.FastAPI
