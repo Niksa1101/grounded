@@ -416,8 +416,7 @@ class CachedEmbedder:
         return self._inner.dim
 
     def cache_key(self, text: str, task_type: TaskType) -> str:
-        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-        return f"{self.model}|{self.dim}|{task_type}|{digest}"
+        return embedding_cache_key(self.model, self.dim, task_type, text)
 
     async def embed(self, texts: Sequence[str], task_type: TaskType) -> list[Vector]:
         keys = [self.cache_key(text, task_type) for text in texts]
@@ -434,6 +433,13 @@ class CachedEmbedder:
         self.misses += len(missing)
         self.hits += len(texts) - len(missing)
         return [_unpack(blobs[key], self.dim) for key in keys]
+
+
+def embedding_cache_key(model: str, dim: int, task_type: TaskType, text: str) -> str:
+    """The cache key of one text. Module-level so ingest can count what is cached (a dry run, the
+    quota message) without an embedder, and so no API key is needed for that."""
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return f"{model}|{dim}|{task_type}|{digest}"
 
 
 def _pack(vector: Vector) -> bytes:

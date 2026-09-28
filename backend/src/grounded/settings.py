@@ -27,7 +27,8 @@ _LOCAL_TEST_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/ground
 # The repo-root .env (this file is backend/src/grounded/settings.py). Anchored to the source tree,
 # not the working directory, so no stray .env above the repo can leak in. In a deployed install the
 # path doesn't exist and is ignored: Vercel and CI use real env vars.
-_ENV_FILE = Path(__file__).resolve().parents[3] / ".env"
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILE = _REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):
@@ -102,6 +103,8 @@ class Settings(BaseSettings):
     request_deadline_s: float = Field(default=25.0, gt=0)
 
     # --- Paths and corpus ----------------------------------------------------------------------
+    # A relative path is taken from the repo root, like .env: commands run from backend/ and CI
+    # runs from the root, and both must find the same clone and SQLite caches.
     cache_dir: Path = Path(".cache")
     fastapi_ref: str | None = None
 
@@ -112,6 +115,11 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @field_validator("cache_dir", mode="after")
+    @classmethod
+    def _anchor_cache_dir(cls, value: Path) -> Path:
+        return value if value.is_absolute() else _REPO_ROOT / value
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:

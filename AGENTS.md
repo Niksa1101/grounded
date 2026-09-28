@@ -127,7 +127,7 @@ Ask the Author before:
 
 ## 10. Commands
 
-Backend commands run from `backend/`; `ingest` and `eval` arrive in Phases 1–2, promptfoo in Phase 4 (keep this list current):
+Backend commands run from `backend/`; `eval` arrives in Phases 1–2, promptfoo in Phase 4 (keep this list current):
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d db
@@ -154,7 +154,15 @@ uv run grounded serve --reload --port 8000
 ```
 
 ```bash
+uv run grounded ingest --ref <fastapi-tag> --dry-run
+```
+
+```bash
 uv run grounded ingest --ref <fastapi-tag> --activate
+```
+
+```bash
+uv run grounded index list
 ```
 
 ```bash

@@ -46,6 +46,11 @@ logger = logging.getLogger(__name__)
 
 _MD: Final = MarkdownIt("commonmark").enable("table")
 
+# Bump whenever the same page parses to different blocks: include resolution, what gets dropped,
+# how blocks are cut. It is part of every index version's config hash (ingest/pipeline.py), so an
+# index built by an older parser is never mistaken for the current one. Pure refactors keep it.
+PARSER_VERSION: Final = 1
+
 # attr_list id on a heading: "Create a task function { #create-a-task-function }".
 _ANCHOR_RE = re.compile(r"\s*\{\s*#(?P<id>[^\s}]+)[^}]*\}\s*$")
 # Jinja raw markers the docs' macros plugin strips before rendering.

@@ -160,7 +160,7 @@ or with `ALLOW_DIRECT_API=true`.
 | `IP_HASH_SECRET` | random 32+ bytes | HMAC for IPs |
 | `ALLOW_DIRECT_API` | `false` (true only in dev) | bypass proxy secret locally |
 | `REQUEST_DEADLINE_S` | `25` | must be < proxy timeout |
-| `CACHE_DIR` | `.cache` | SQLite caches, cloned corpus |
+| `CACHE_DIR` | `.cache` | SQLite caches, cloned corpus; a relative path is taken from the repo root (like `.env`), so `backend/` commands and CI share one `.cache/` |
 | `FASTAPI_REF` | `0.141.1` | pinned corpus tag (commit `95f8322e`) |
 
 Retrieval settings are grouped into a frozen `RetrievalConfig` whose canonical JSON is hashed
@@ -168,11 +168,15 @@ Retrieval settings are grouped into a frozen `RetrievalConfig` whose canonical J
 
 ## 5. Ingestion pipeline (offline)
 
-`uv run grounded ingest --ref <tag> [--database-url …] [--activate]`
+`uv run grounded ingest [--ref <tag>] [--database-url …] [--activate] [--dry-run]` (`--ref` defaults to `FASTAPI_REF`, the database to `DATABASE_URL_DIRECT`)
 
 ```
-fetch corpus → discover pages → resolve includes → parse headings → chunk [A] → hash → embed (cached) → store → verify → activate
+fetch corpus → discover pages → resolve includes → parse headings → chunk [A] → config hash → (reuse) → embed (cached) → store + verify → activate
 ```
+
+- `--dry-run` parses and chunks, prints the page/chunk/token stats and the number of texts that would be sent for embedding (cache misses). No API call, no database.
+- `grounded index list` shows every index version (id, ref, SHA, config hash, status, active, counts, token p50/p95/max).
+- Code: `ingest/pipeline.py` (`prepare_corpus`, `index_spec`, `ingest`, `activate_index_version`), wired by `cli.py`.
 
 ### 5.1 Fetch
 - `--ref` must be a **tag** (branches move). `git ls-remote` resolves it first; a missing tag fails before anything is cloned.
@@ -245,9 +249,14 @@ live in `ingest/types.py`. `ChunkingConfig.canonical_json()` is stored as `index
 - Cache: SQLite `.cache/embeddings.sqlite` (`infra/kvcache.py`), key = `model|dim|task_type|sha256(text)` (for chunks, that sha256 is `content_hash`), value = little-endian float32 blob. A re-run with no content changes makes **zero** embedding calls. Misses are embedded in slices, and each slice is stored before the next is sent, so a run stopped by the daily quota resumes where it stopped. Fresh vectors also go through the float32 round trip, so a first run and a cached re-run return bit-identical vectors.
 
 ### 5.7 Store, verify, activate
-- Insert `index_versions(status='building')`, then documents and chunks with `COPY` or batched `executemany`, all in one transaction.
-- Verify: chunk count > 0, no NULL embeddings, dims match, every golden-set `section_id` label resolves to ≥ 1 chunk (warn if not). Record `token_stats`.
-- `--activate` switches the active version atomically (DB.md §7.3). `grounded index prune` retires/deletes old versions.
+- **Index identity.** `index_versions.chunking_config` = the `ChunkingConfig` fields plus `excluded_pages` (the sorted §5.2 patterns) and `parser_version` (`ingest/markdown.py:PARSER_VERSION`, bumped by hand whenever the same page parses to different blocks). `config_hash = sha256(git_sha | embedding_model | embedding_dim | canonical JSON of chunking_config)`. So a new tag, model, dimension, chunk setting, exclusion or parser change is always a new index version. The chunker has no version of its own yet: a chunker logic change must also change `ChunkingConfig` (e.g. `strategy`) or `PARSER_VERSION`.
+- **Reuse.** If a `ready` version with the same `config_hash` exists, nothing is built: the command reports it (and `--activate` activates it). No duplicate rows.
+- **Before any embedding call:** the `chunks.embedding` column dimension must equal `EMBEDDING_DIM`, and every text must fit `EMBEDDING_MAX_INPUT_TOKENS` (the error lists the offending `section_id`s).
+- **Embed before touching the database.** Vectors go through the SQLite cache in slices of `EMBEDDING_BATCH_SIZE`, each stored before the next is sent. A daily-quota 429 stops the run with the number of texts still missing and a non-zero exit; the database is untouched, and the same command the next day sends only the rest. Other provider errors (after the embedder's retries) also leave the database untouched.
+- **One transaction:** insert `index_versions(status='building')`, documents (`executemany … RETURNING`), chunks (batched `executemany`, vectors bound as pgvector `Vector`), verify, then `status='ready'` with `ready_at`, `document_count`, `chunk_count` and `token_stats` (`min`, nearest-rank `p50`/`p95`, `max`, `total`, `over_max` = chunks past `max_tokens`).
+- Verify reads back what was written: document and chunk counts equal what was prepared, chunk count > 0, no NULL embeddings, every vector has `EMBEDDING_DIM` dimensions. Golden-set labels are checked separately by `golden validate --against-index` (the golden set is versioned on its own).
+- **Failure while storing or verifying** rolls the transaction back and leaves one `index_versions` row with `status='failed'` and the error in `notes` (no documents or chunks).
+- `--activate` switches the active version atomically (DB.md §7.3). `grounded index prune` (later) retires/deletes old versions.
 
 ## 6. Query pipeline (online)
 
