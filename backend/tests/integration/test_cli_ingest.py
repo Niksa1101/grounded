@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -120,3 +121,27 @@ def test_index_list_when_empty() -> None:
     result = invoke("index", "list")
     assert result.exit_code == 0, result.output
     assert result.output.strip() == "No index versions."
+
+
+@pytest.mark.usefixtures("cli_env")
+def test_golden_validate_against_the_active_index(tmp_path: Path) -> None:
+    bg = "docs/en/docs/tutorial/background-tasks.md"
+    item = {
+        "id": "q001",
+        "question": "How do I run a function after returning a response?",
+        "type": "how_to",
+        "answerable": True,
+        "reference_answer": "Use BackgroundTasks.",
+        "relevant_sections": [{"section": f"{bg}#using-backgroundtasks", "grade": 2}],
+    }
+    path = tmp_path / "golden.jsonl"
+    path.write_text(json.dumps(item) + "\n", encoding="utf-8")
+
+    no_index = invoke("golden", "validate", str(path), "--against-index")
+    assert no_index.exit_code == 1
+    assert "no active index version" in no_index.output
+
+    assert invoke("ingest", "--activate").exit_code == 0
+    result = invoke("golden", "validate", str(path), "--against-index")
+    assert result.exit_code == 0, result.output
+    assert "All labels resolve in the corpus and the index." in result.output

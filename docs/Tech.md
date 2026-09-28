@@ -108,7 +108,7 @@ The point is to show the mechanics.
 │   │   │   ├── citations.py       # validation, mapping, marker rewrite
 │   │   │   ├── confidence.py      # heuristic [A]
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
-│   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), retrieval_runner.py, gate.py [A], report.py, judge.py
+│   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), golden.py, retrieval_runner.py, gate.py [A], report.py, judge.py
 │   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
 │   │   └── observability/         # request_log.py, cost.py
 │   └── tests/                     # unit/, integration/, conftest.py (fixtures), support.py (helpers), fixtures/
@@ -554,17 +554,22 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
     {"section": "docs/en/docs/tutorial/background-tasks.md#using-backgroundtasks", "grade": 2},
     {"section": "docs/en/docs/tutorial/background-tasks.md#create-a-task-function", "grade": 1}
   ],
+  "source_section": "docs/en/docs/tutorial/background-tasks.md#using-backgroundtasks",
   "notes": "multi-step; code expected"
 }
 ```
-- `type ∈ {factual, how_to, code, multi_section, unanswerable}`. Unanswerable items have `relevant_sections: []` and a reference answer describing why.
+- Validated by `schemas/eval.py:GoldenItem` (Pydantic, `extra="forbid"`): `id` = `q` + 3 digits, question 3–500 chars (the `AskRequest` limits), labels `docs/en/docs/<page>.md[#<anchor>]`, grade 1 or 2, no label twice. `source_section` is provenance only (the sampled section the question was drafted from, or `null`).
+- `type ∈ {factual, how_to, code, multi_section, unanswerable}`. `answerable` is false exactly for `unanswerable` items, which have `relevant_sections: []` and a reference answer describing why. An answerable item needs ≥ 1 grade-2 label, a `multi_section` item ≥ 2.
 - Grades: **2** = contains the answer, **1** = useful context.
 - **Section matching rule:** a retrieved chunk matches label `path#anchor` iff same `source_path` and `anchor ∈ chunk.anchor_path` (so an H2 label also matches its H3 sub-chunks). A label without an anchor matches the whole page.
-- **No nested labels:** within one item, no label may be an ancestor of another (a page and a section on it, an H2 and one of its H3s). One chunk could then match two labels at the same rank and push nDCG above 1. The validator rejects them; the metrics raise if a chunk matches two labels.
-- A label on a small section that the chunker merged into a *previous* sibling never matches: the merged chunk carries the first section's `anchor_path` (§5.5). `golden validate --against-index` reports such labels; label the first section or the parent instead.
+- **No nested labels:** within one item, no label may be an ancestor of another (a page and a section on it, an H2 and one of its H3s). One chunk could then match two labels at the same rank and push nDCG above 1. The schema rejects a page + section pair; `golden validate` reports any two labels that match the same chunk; the metrics raise if a chunk matches two labels.
+- A label on a small section that the chunker merged into a *previous* sibling never matches: the merged chunk carries the first section's `anchor_path` (§5.5). `golden validate` reports such labels; label the first section or the parent instead.
 - Changes to the golden set create a new version file (`v2`) and require new baselines. Items are never edited in place after baselines exist.
-- `eval/golden/README.md` holds the labeling guide.
-- `grounded golden draft --n 50` asks an LLM to propose candidate questions from random sections. The Author curates.
+- `eval/golden/README.md` holds the labeling guide and the provenance of each version.
+- Drafting (decision 2026-09-25): the Agent drafts ~50 candidates in a session from seeded random sections, with no LLM API call, into `eval/golden/candidates.vN.jsonl` (committed as provenance); the Author selects and edits ~30 into `golden_set.vN.jsonl`. Helpers in `evals/golden.py`, all offline over the chunked pinned corpus:
+  - `grounded golden sample --n 50 --seed <S>`: distinct H2/H3 `section_id`s (page intros excluded) drawn with a seeded RNG from the sorted list.
+  - `grounded golden sections <page>`: a page's sections as the chunker produced them (the labels that can match), with sizes.
+  - `grounded golden validate [file] [--against-index]`: schema, unique IDs, type mix vs the PRD §12 target (reported, not enforced), then label resolution against the corpus chunks with `metrics.section_matches`: every label must match a chunk and no two labels of an item may match the same chunk. `--against-index` repeats it on the active index. Any problem → exit 1.
 
 ### 15.2 Retrieval eval (Python) [A: metrics]
 `uv run grounded eval retrieval --config hybrid [--config dense ...] --out eval/results/…json`

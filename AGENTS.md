@@ -166,6 +166,14 @@ uv run grounded index list
 ```
 
 ```bash
+uv run grounded golden sections <page>.md
+```
+
+```bash
+uv run grounded golden validate ../eval/golden/golden_set.v1.jsonl --against-index
+```
+
+```bash
 uv run grounded eval retrieval --config hybrid
 ```
 
