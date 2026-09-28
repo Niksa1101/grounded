@@ -153,7 +153,7 @@ cd frontend && npm run lint && npm run typecheck && npm run build
 ```
 
 ```bash
-uv run grounded eval retrieval --config dense --config fts --config hybrid
+uv run grounded eval retrieval --config dense
 ```
 
 ```bash
