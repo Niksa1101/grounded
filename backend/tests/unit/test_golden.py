@@ -198,6 +198,20 @@ def test_committed_candidates_are_valid() -> None:
     assert all(count > 0 for count in type_counts(items).values())
 
 
+def test_golden_set_v1_is_the_approved_selection_of_candidates() -> None:
+    golden = load_golden_set(GOLDEN_DIR / "golden_set.v1.jsonl")
+    candidates = {item.id: item for item in load_golden_set(GOLDEN_DIR / "candidates.v1.jsonl")}
+    assert len(golden) == 30
+    assert all(item == candidates[item.id] for item in golden)
+    assert type_counts(golden) == {
+        "factual": 8,
+        "how_to": 8,
+        "code": 5,
+        "multi_section": 4,
+        "unanswerable": 5,
+    }
+
+
 def test_normalize_page() -> None:
     assert normalize_page("tutorial/x.md") == "docs/en/docs/tutorial/x.md"
     assert normalize_page("/tutorial/x.md") == "docs/en/docs/tutorial/x.md"

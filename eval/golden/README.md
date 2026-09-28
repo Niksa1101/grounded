@@ -4,7 +4,7 @@ The questions every retrieval and generation eval runs on (Tech.md §15.1).
 
 | File | What it is |
 |---|---|
-| `golden_set.v1.jsonl` | the curated set: ~30 items (≈25 answerable, ≈5 unanswerable) |
+| `golden_set.v1.jsonl` | the curated set: 30 items (25 answerable, 5 unanswerable) |
 | `candidates.v1.jsonl` | the drafts the set was curated from, kept as provenance |
 
 Once a baseline references a version, its items are never edited in place: changes go into a new file
@@ -76,4 +76,8 @@ match the same chunk). `--against-index` repeats the resolution on the active in
 `candidates.v1.jsonl` (52 items) was drafted by the Agent on 2026-09-26 from FastAPI `0.141.1`, with no
 LLM API calls: 50 sections drawn with `grounded golden sample --n 50 --seed 20260926` (items with a
 `source_section`), plus a few written for type coverage and 8 unanswerable items (`source_section: null`,
-the reason in `notes`). The Author selects and edits 30 of them into `golden_set.v1.jsonl`.
+the reason in `notes`).
+
+`golden_set.v1.jsonl` (30 items): on 2026-09-28 the Author approved a selection of 30 candidates with no
+edits. The mix is 8 factual, 8 how_to, 5 code, 4 multi_section and 5 unanswerable (4 near misses and 1
+off-topic question). Items keep their candidate IDs, so each one traces back to its draft.
