@@ -1,13 +1,16 @@
 """``grounded`` command-line entry point (Typer).
 
-Later phases add the eval and ask commands.
+Later phases add the ask command and more eval suites.
 """
 
 from __future__ import annotations
 
+import asyncio
 import sys
+from collections.abc import Coroutine
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import psycopg
 import typer
@@ -26,13 +29,25 @@ from grounded.evals.golden import (
     sample_sections,
     type_counts,
 )
+from grounded.evals.retrieval_runner import (
+    RETRIEVAL_BASELINE,
+    RetrievalEvalError,
+    RetrievalMode,
+    golden_set_version,
+    metric_names,
+    repo_state,
+    results_path,
+    run_retrieval_eval,
+    update_baseline,
+    write_run,
+)
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
 from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
 from grounded.infra.migrations import migrate as run_migrations
 from grounded.infra.provider_errors import ProviderError
 from grounded.ingest.corpus import CorpusError, fetch_corpus
-from grounded.ingest.embed import GeminiEmbedder
+from grounded.ingest.embed import CachedEmbedder, GeminiEmbedder
 from grounded.ingest.includes import IncludeError
 from grounded.ingest.markdown import ParseError
 from grounded.ingest.pipeline import (
@@ -48,6 +63,7 @@ from grounded.ingest.pipeline import (
 from grounded.ingest.pipeline import ingest as run_ingest
 from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
+from grounded.retrieval.index import NoActiveIndexError
 from grounded.settings import Settings, get_settings
 
 app = typer.Typer(no_args_is_help=True, help="Grounded command-line tools.")
@@ -55,6 +71,8 @@ index_app = typer.Typer(no_args_is_help=True, help="Inspect index versions.")
 app.add_typer(index_app, name="index")
 golden_app = typer.Typer(no_args_is_help=True, help="Draft, label and validate the golden set.")
 app.add_typer(golden_app, name="golden")
+eval_app = typer.Typer(no_args_is_help=True, help="Run evals against the active index.")
+app.add_typer(eval_app, name="eval")
 
 _EMBEDDINGS_CACHE = "embeddings.sqlite"
 
@@ -363,3 +381,123 @@ def golden_validate(
     if problems:
         raise _fail("Label problems:\n" + "\n".join(f"  {p}" for p in problems))
     typer.echo("All labels resolve" + (" in the corpus and the index." if against_index else "."))
+
+
+def _run_async[T](coro: Coroutine[Any, Any, T]) -> T:
+    # psycopg async can't run on the Proactor loop that asyncio.run picks on Windows.
+    loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
+    return asyncio.run(coro, loop_factory=loop_factory)
+
+
+@eval_app.command("retrieval")
+def eval_retrieval(
+    config: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--config",
+            help="Retrieval mode to score (repeatable). Phase 1: dense.",
+            show_default=False,
+        ),
+    ] = None,
+    golden: Annotated[
+        Path, typer.Option(help="Golden-set file, named golden_set.v<N>.jsonl.")
+    ] = GOLDEN_DIR / "golden_set.v1.jsonl",
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            help="Results file. Default: eval/results/<UTC timestamp>-retrieval.json.",
+            show_default=False,
+        ),
+    ] = None,
+    write_baseline: Annotated[
+        bool,
+        typer.Option(help=f"Also copy this run's rows into {RETRIEVAL_BASELINE.name}."),
+    ] = False,
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            help="Database with the active index. Default: DATABASE_URL.", show_default=False
+        ),
+    ] = None,
+) -> None:
+    """Score retrieval on the golden set's answerable questions: Recall@k, MRR, nDCG@k."""
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    modes = _retrieval_modes(config or ["dense"])
+    if not settings.embedding_model:
+        raise _fail("EMBEDDING_MODEL must be set to the model that built the index.")
+    try:
+        version = golden_set_version(golden)
+        items = load_golden_set(golden)
+    except (RetrievalEvalError, GoldenSetError, OSError) as exc:
+        raise _fail(f"Invalid golden set: {exc}") from exc
+
+    now = datetime.now(UTC)
+    conninfo = database_url or settings.database_url.get_secret_value()
+    typer.echo(f"Target {_describe_target(conninfo)}; golden set {version} ({len(items)} items)")
+    count_tokens = make_token_counter(settings.tokenizer_encoding)
+    with KVCache(settings.cache_dir / _EMBEDDINGS_CACHE) as cache:
+        try:
+            gemini = GeminiEmbedder.from_settings(settings, count_tokens)
+        except ValueError as exc:
+            raise _fail(str(exc)) from exc
+        # Query vectors are cached like chunk vectors (Tech.md §11), so a re-run is free.
+        embedder = CachedEmbedder(gemini, cache, write_every=settings.embedding_batch_size)
+        try:
+            run = _run_async(
+                run_retrieval_eval(
+                    conninfo,
+                    items,
+                    modes=modes,
+                    embedder=embedder,
+                    k_dense=settings.k_dense,
+                    golden_set_version=version,
+                    now=now,
+                    repo=repo_state(),
+                )
+            )
+        except (RetrievalEvalError, NoActiveIndexError) as exc:
+            raise _fail(f"Eval failed: {exc}") from exc
+        except ProviderError as exc:
+            raise _fail(f"Query embedding failed ({type(exc).__name__}): {exc}") from exc
+        except psycopg.Error as exc:
+            raise _fail(f"Database error: {exc}") from exc
+
+    typer.echo(
+        f"Index {run.info.fastapi_ref}@{run.info.index_config_hash[:8]}; "
+        f"{embedder.misses} questions embedded, {embedder.hits} from cache"
+    )
+    names = metric_names()
+    typer.echo(f"{'config':<8} {'n':>3} {'k':>3}  " + "  ".join(f"{m:>9}" for m in names))
+    for result in run.configs.values():
+        values = "  ".join(f"{result.metrics[m]:>9.3f}" for m in names)
+        typer.echo(f"{result.config:<8} {result.n:>3} {result.k:>3}  {values}")
+    skipped = next(iter(run.configs.values())).skipped_unanswerable
+    typer.echo(f"Skipped {skipped} unanswerable questions (not scored).")
+
+    path = out or results_path(now)
+    write_run(path, run)
+    typer.echo(f"Results: {path}")
+    if write_baseline:
+        if run.info.git_dirty:
+            typer.echo(
+                "Warning: uncommitted changes; the baseline's git_sha isn't the code that ran."
+            )
+        update_baseline(RETRIEVAL_BASELINE, run)
+        typer.echo(f"Baseline updated: {RETRIEVAL_BASELINE} ({', '.join(run.configs)})")
+
+
+_RETRIEVAL_MODES: tuple[RetrievalMode, ...] = ("dense",)
+
+
+def _retrieval_modes(names: list[str]) -> list[RetrievalMode]:
+    modes: list[RetrievalMode] = []
+    for name in names:
+        for mode in _RETRIEVAL_MODES:
+            if mode == name:
+                modes.append(mode)
+                break
+        else:
+            available = ", ".join(_RETRIEVAL_MODES)
+            raise _fail(f"Unknown retrieval config {name!r}; available: {available}.")
+    return modes

@@ -97,9 +97,9 @@ The point is to show the mechanics.
 │   │   ├── settings.py            # pydantic-settings
 │   │   ├── cli.py                 # Typer: migrate, ingest, index, eval, ask, golden
 │   │   ├── api/                   # routes_ask.py, routes_metrics.py, routes_health.py, deps.py, errors.py, security.py
-│   │   ├── schemas/               # llm.py (LLMAnswer), api.py (AskRequest/AskResponse), eval.py (GoldenItem)
+│   │   ├── schemas/               # llm.py (LLMAnswer), api.py (AskRequest/AskResponse), eval.py (GoldenItem, retrieval eval results/baseline)
 │   │   ├── ingest/                # types.py, corpus.py, markdown.py, includes.py, tokens.py, chunker.py [A], embed.py, pipeline.py
-│   │   ├── retrieval/             # dense.py, lexical.py [A], hybrid.py [A], rerank.py, config.py, types.py
+│   │   ├── retrieval/             # index.py (active version), dense.py, lexical.py [A], hybrid.py [A], rerank.py, config.py, types.py
 │   │   ├── generation/
 │   │   │   ├── providers/         # base.py (Protocol), gemini.py, groq.py, fake.py
 │   │   │   ├── router.py          # fallback + circuit breaker [A]
@@ -295,10 +295,11 @@ Every stage is wrapped in a `timing.stage("name")` context manager that fills th
 
 ## 7. Retrieval
 
-- **Dense:** exact cosine scan, top `K_DENSE` (DB.md §6.1).
+- **Dense:** exact cosine scan, top `K_DENSE` (DB.md §6.1): `retrieval/dense.py:dense_search(conn, query_vector, index_version_id=, k=)`, async, the vector bound as a pgvector `Vector`, `ORDER BY distance, id`.
+- **Active version:** `retrieval/index.py:active_index_version(conn)` → `IndexVersion` (id, ref, SHA, embedding model/dim, config hash); none active → `NoActiveIndexError`.
 - **Lexical [A]:** OR-semantics tsquery over weighted `tsv`, top `K_FTS` (DB.md §6.2).
 - **Hybrid [A]:** RRF, `score = Σ 1/(RRF_K + rank)`, top `K_FUSED` unique chunks, deterministic tie-break (DB.md §6.3).
-- Output type: `list[RetrievedChunk]` with `chunk_id, section_id, anchor_path, breadcrumb_text, url, content, token_count, content_hash, dense_rank, fts_rank, rrf_score, rerank_score | None`.
+- Output type: `list[RetrievedChunk]` (frozen dataclass, `retrieval/types.py`) with `chunk_id, section_id, anchor_path, breadcrumb_text, url, content, token_count, content_hash` and the signals `dense_rank, dense_distance, fts_rank, rrf_score, rerank_score` (each `None` unless the mode produced it).
 - Retrieval modes (for evals and ablations): `dense`, `fts`, `hybrid`, `hybrid_rerank`. The `no_rag` mode skips retrieval entirely.
 - Context selection: the first `K_CONTEXT` chunks after (optional) rerank. If two selected chunks are adjacent parts of one split section, keep both (they are sent in document order within the source block).
 
@@ -572,13 +573,17 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
   - `grounded golden validate [file] [--against-index]`: schema, unique IDs, type mix vs the PRD §12 target (reported, not enforced), then label resolution against the corpus chunks with `metrics.section_matches`: every label must match a chunk and no two labels of an item may match the same chunk. `--against-index` repeats it on the active index. Any problem → exit 1.
 
 ### 15.2 Retrieval eval (Python) [A: metrics]
-`uv run grounded eval retrieval --config hybrid [--config dense ...] --out eval/results/…json`
+`uv run grounded eval retrieval [--config dense ...] [--golden <golden_set.vN.jsonl>] [--out <file>] [--write-baseline]` (code: `evals/retrieval_runner.py`; Phase 1 has `dense`, Phase 2 adds `fts` and `hybrid`)
+- Runs against the **active** index of `DATABASE_URL`. The embedding model/dim in settings must equal the index's, or the run fails (vectors of another model are not comparable). Questions are embedded in one `RETRIEVAL_QUERY` batch through the SQLite embedding cache, so a re-run makes no API calls.
+- The golden-set file must be named `golden_set.v<N>.jsonl`; the version is recorded with the results.
 - Per answerable question: run retrieval mode → ranked chunks → rank of each label = 1-based position of the first **chunk** that matches it (each label counted once; every chunk takes a position, including further parts of an already ranked section, since those also fill the `K_CONTEXT` slots) → metrics. Contract and spec: `evals/metrics.py`, `tests/unit/test_metrics.py`.
 - **Recall@k** = |grade-2 labels ranked ≤ k| / |grade-2 labels|. Grade-1 labels don't count.
 - **MRR** = 1 / rank of the best-ranked grade-2 label over the whole retrieved list (`K_DENSE` or `K_FUSED`); 0 if none.
 - **nDCG@k** with gain `2^grade − 1` and discount `log2(rank + 1)` over labels ranked ≤ k; ideal DCG = all labels (both grades) sorted by grade, over the first `min(k, |labels|)` positions.
 - `k` beyond the retrieved list: missing positions are not relevant. A question without a grade-2 label, a grade other than 1 or 2, or `k < 1` is an error (unanswerable items are skipped, not scored 0).
-- Report means with `n`, and per-question rows for diffing.
+- Report means with `n`, and per-question rows for diffing. Metrics are reported at k = 5 and 10 (`recall@5`, `recall@10`, `mrr`, `ndcg@5`, `ndcg@10`); those cutoffs are part of the metric definitions, not a retrieval setting.
+- **Results file** (default `eval/results/<UTC timestamp>-retrieval.json`, gitignored), validated by `schemas/eval.py:RetrievalRun`: `info` (date, repo git SHA + dirty flag, golden-set version, index version id and config hash, FastAPI ref/SHA, embedding model/dim) and per config `k`, `n`, `skipped_unanswerable`, mean `metrics` and per-question rows (`metrics`, `ranks` per label with `null` = not retrieved, `retrieved` section IDs in rank order).
+- `--write-baseline` copies this run's configs into `eval/baselines/retrieval.json` (other configs' rows are kept) and warns if the tree had uncommitted changes. Baseline numbers are never typed by hand.
 - Deterministic given caches. No LLM calls (only query embeddings, cached).
 
 ### 15.3 Generation eval (promptfoo)
@@ -629,6 +634,7 @@ Fallback off · temperature 0 · answer cache off · rate limit and budget off �
 
 ### 15.7 Baselines and history
 - `eval/baselines/retrieval.json`, `eval/baselines/generation.json`: per config → metrics, `n`, thresholds, golden set version, prompt version, model IDs, index config hash, git SHA, date.
+- `retrieval.json` today (`schemas/eval.py:RetrievalBaselineEntry`): per config `metrics`, `n`, `k`, `golden_set_version`, `index_config_hash`, `fastapi_ref`/`fastapi_sha`, `embedding_model`/`embedding_dim`, `git_sha`, `date`. Thresholds are added with the Phase 2 gate.
 - Updated only by an explicit PR titled `eval: update baseline (<reason>)`, with the before/after table in the description.
 - Runs on `main` also insert into production `eval_runs` (owner connection via CI secret) for the dashboard.
 
