@@ -421,3 +421,6 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - Vercel Hobby is non-commercial only: no ads or paid features on the demo.
 - Exact model IDs (Gemini Flash, Groq model, judge model, Cohere rerank model, embedding model) are pinned in config at implementation time after checking current availability and free-tier limits. They are never assumed from memory.
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
+- Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
+  (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
+  null and not null. Tracked in ticket 9.06.
