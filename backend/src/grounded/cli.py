@@ -31,8 +31,10 @@ from grounded.evals.golden import (
 )
 from grounded.evals.retrieval_runner import (
     RETRIEVAL_BASELINE,
+    BaselineMismatchError,
     RetrievalEvalError,
     RetrievalMode,
+    golden_set_digest,
     golden_set_version,
     metric_names,
     repo_state,
@@ -436,6 +438,7 @@ def eval_retrieval(
     modes = _retrieval_modes(config or ["dense"])
     try:
         version = golden_set_version(golden)
+        digest = golden_set_digest(golden)
         items = load_golden_set(golden)
     except (RetrievalEvalError, GoldenSetError, OSError) as exc:
         raise _fail(f"Invalid golden set: {exc}") from exc
@@ -462,6 +465,7 @@ def eval_retrieval(
                     embedder=embedder,
                     k_dense=settings.k_dense,
                     golden_set_version=version,
+                    golden_set_sha256=digest,
                     now=now,
                     repo=repo_state(),
                 )
@@ -502,7 +506,10 @@ def eval_retrieval(
             typer.echo(
                 "Warning: uncommitted changes; the baseline's git_sha isn't the code that ran."
             )
-        update_baseline(RETRIEVAL_BASELINE, run)
+        try:
+            update_baseline(RETRIEVAL_BASELINE, run)
+        except BaselineMismatchError as exc:
+            raise _fail(f"Baseline not updated: {exc}") from exc
         typer.echo(f"Baseline updated: {RETRIEVAL_BASELINE} ({', '.join(run.configs)})")
 
 
