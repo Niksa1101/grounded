@@ -137,7 +137,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.05](phase-2/R.05-index-integrity-migration.md) | Migration `0002`: index integrity | Build | G | done | [#17](https://github.com/Niksa1101/grounded/pull/17) |
 | [R.06](phase-2/R.06-ci-hardening.md) | CI hardening: pinned actions, one tokenizer source | Build | G | done | [#18](https://github.com/Niksa1101/grounded/pull/18) |
 | [R.07](phase-2/R.07-chunker-keep-with-next.md) | Chunker: keep a heading with the block after it | Build | G (delegated) | done | [#19](https://github.com/Niksa1101/grounded/pull/19) |
-| [R.08](phase-2/R.08-golden-label-check.md) | Manual check of golden labels, explain-back | Author | A (+G worksheet) | todo | |
+| [R.08](phase-2/R.08-golden-label-check.md) | Manual check of golden labels, explain-back | Author | A (+G worksheet) | in-progress | |
 | [2.01](phase-2/2.01-retrieval-config.md) | `RetrievalConfig` and its hash | Build | G | done | [#20](https://github.com/Niksa1101/grounded/pull/20) |
 | [B.01](phase-2/B.01-baseline-refresh.md) | Baseline refresh: index v2, golden-set hash, config hash | Baseline | G runs, A approves | todo | |
 | [2.02](phase-2/2.02-lexical-spec.md) | Lexical FTS search — spec | Spec | G | done | [#21](https://github.com/Niksa1101/grounded/pull/21) |

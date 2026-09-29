@@ -81,3 +81,14 @@ the reason in `notes`).
 `golden_set.v1.jsonl` (30 items): on 2026-09-28 the Author approved a selection of 30 candidates with no
 edits. The mix is 8 factual, 8 how_to, 5 code, 4 multi_section and 5 unanswerable (4 near misses and 1
 off-topic question). Items keep their candidate IDs, so each one traces back to its draft.
+
+Manual label check (ticket R.08), 2026-09-29: the Author read 10 of the 25 answerable items against the text of
+the chunks their labels point at and found no errors: every grade-2 chunk contains the answer, every grade-1
+chunk only gives context, no section is missing, and no question is a lexical paraphrase of its section. The
+sample was drawn with seed 20260929 by a one-off script over `grounded.evals.golden` (not committed):
+- all 4 `multi_section` items: q036, q039, q042, q043;
+- 3 items with a grade-1 label: q016, q018, q020;
+- 3 other answerable items: q008, q028, q029.
+
+The other 15 answerable items were checked by tooling only (schema, label resolution, `validate
+--against-index`). The 5 unanswerable items have no labels.
