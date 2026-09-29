@@ -29,7 +29,7 @@ points at. Afterwards the Agent asks interview-style questions in the explain-ba
 DCG is computed. No repo changes.
 
 **Acceptance criteria**
-- [ ] The 10 items are checked, and either the provenance note or v2 is committed.
-- [ ] The explain-back session took place.
+- [x] The 10 items are checked, and either the provenance note or v2 is committed.
+- [x] The explain-back session took place.
 
 **Eval impact:** depends on the findings (v2 means new baselines through B.01).
