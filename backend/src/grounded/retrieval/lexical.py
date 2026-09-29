@@ -65,8 +65,9 @@ async def lexical_search(
     """The (up to) ``k`` chunks of ``index_version_id`` that best match ``question``, best first.
 
     A chunk matches when it contains *any* content word of the question (OR semantics). The question
-    is data, never query syntax: any text is safe, and a question with nothing to search for (empty,
-    only stop words or punctuation) returns ``[]``, like one that no chunk matches.
+    is data, never query syntax: any text is safe (a NUL byte counts as a space). A question with
+    nothing to search for (empty, only stop words or punctuation) returns ``[]``, like one that no
+    chunk matches.
 
     Order is ``ts_rank_cd`` descending, ties by chunk id ascending. ``fts_rank`` is 1-based and
     dense; ``fts_score`` is the ``ts_rank_cd`` value, only comparable within this one query. The
@@ -74,7 +75,13 @@ async def lexical_search(
     """
     if k < 1:
         raise ValueError(f"k must be >= 1, got {k}")
-    params = {"question": question, "index_version_id": index_version_id, "k": k}
+    # Postgres text cannot hold NUL and psycopg raises on it; a JSON body can carry one. It splits
+    # words like whitespace does.
+    params = {
+        "question": question.replace("\x00", " "),
+        "index_version_id": index_version_id,
+        "k": k,
+    }
     cur = await conn.execute(_LEXICAL, params)
     rows: list[tuple[Any, ...]] = await cur.fetchall()
     return [
