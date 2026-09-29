@@ -13,6 +13,8 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from grounded.retrieval.config import RetrievalConfig
+
 GoldenType = Literal["factual", "how_to", "code", "multi_section", "unanswerable"]
 
 # "docs/en/docs/<page>.md" or "docs/en/docs/<page>.md#<anchor>" (the page alone = the whole page).
@@ -96,11 +98,25 @@ class RetrievalConfigResult(BaseModel):
     model_config = _FROZEN
 
     config: str  # retrieval mode: "dense" (Phase 2 adds "fts", "hybrid")
+    # The settings that produced the rows, and their hash: two results are only comparable when
+    # this says they ran the same retrieval.
+    retrieval_config: RetrievalConfig
+    retrieval_config_hash: str
     k: int = Field(ge=1)  # chunks retrieved per question (K_DENSE for dense)
     n: int = Field(ge=1)  # scored (answerable) questions
     skipped_unanswerable: int = Field(ge=0)
     metrics: dict[str, float]  # mean over the n questions
     questions: list[RetrievalQuestionResult]
+
+    @model_validator(mode="after")
+    def _check_config(self) -> Self:
+        # A results file is read back by the gate: a hash that doesn't match its config (an edited
+        # file) or a config for another mode must not pass as this result's identity.
+        if self.retrieval_config_hash != self.retrieval_config.config_hash:
+            raise ValueError("retrieval_config_hash does not match retrieval_config")
+        if self.retrieval_config.mode != self.config:
+            raise ValueError("retrieval_config.mode does not match config")
+        return self
 
 
 class RetrievalRunInfo(BaseModel):
@@ -136,9 +152,10 @@ class RetrievalBaselineEntry(BaseModel):
 
     No thresholds yet: they arrive with the Phase 2 gate (plan decision #14).
 
-    ``golden_set_sha256`` and ``git_dirty`` are optional only so a row written before they existed
-    can still be read: ``None`` means "written before this field". ``update_baseline`` treats such
-    a row as a different setup, and the gate (2.09) makes both fields required.
+    ``golden_set_sha256``, ``git_dirty`` and ``retrieval_config_hash`` are optional only so a row
+    written before they existed can still be read: ``None`` means "written before this field".
+    ``update_baseline`` treats a row without the golden-set hash as a different setup, and the gate
+    (2.09) makes all three required.
     """
 
     model_config = _FROZEN
@@ -149,6 +166,7 @@ class RetrievalBaselineEntry(BaseModel):
     golden_set_version: str
     golden_set_sha256: str | None = None
     index_config_hash: str
+    retrieval_config_hash: str | None = None
     fastapi_ref: str
     fastapi_sha: str
     embedding_model: str

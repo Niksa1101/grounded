@@ -19,7 +19,7 @@ import subprocess
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Final, Literal
+from typing import Any, Final
 
 import psycopg
 from pgvector.psycopg import register_vector_async  # pyright: ignore[reportMissingTypeStubs]
@@ -28,6 +28,7 @@ from pydantic import TypeAdapter
 from grounded.evals.golden import GOLDEN_DIR
 from grounded.evals.metrics import ChunkRef, label_ranks, mrr, ndcg_at_k, recall_at_k
 from grounded.ingest.embed import Embedder, Vector
+from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.dense import dense_search
 from grounded.retrieval.index import active_index_version
 from grounded.schemas.eval import (
@@ -46,8 +47,6 @@ RETRIEVAL_BASELINE: Final = EVAL_DIR / "baselines" / "retrieval.json"
 # The cutoffs the metrics are reported at. They are part of the metric definitions (PRD §8 targets
 # Recall@5 and nDCG@5; @10 shows what a bigger context would add), not a retrieval setting.
 METRIC_CUTOFFS: Final = (5, 10)
-
-RetrievalMode = Literal["dense"]  # Phase 2 adds "fts" and "hybrid"
 
 # One question → its ranked chunks. Gets the question text and its query vector; a mode uses
 # whichever it needs (dense the vector, FTS the text, hybrid both).
@@ -89,15 +88,16 @@ def score_question(item: GoldenItem, retrieved: Sequence[ChunkRef]) -> Retrieval
 async def evaluate(
     items: Sequence[GoldenItem],
     *,
-    config: str,
+    config: RetrievalConfig,
     k: int,
     embedder: Embedder,
     search: Search,
 ) -> RetrievalConfigResult:
     """Score every answerable item with ``search`` and average the metrics over them.
 
-    All questions are embedded in one call (one batch, and one cache lookup), then retrieved one
-    by one in golden-set order.
+    ``config`` is the retrieval setup ``search`` runs; the result records it with its hash. All
+    questions are embedded in one call (one batch, and one cache lookup), then retrieved one by
+    one in golden-set order.
     """
     scored = [item for item in items if item.answerable]
     if not scored:
@@ -108,7 +108,9 @@ async def evaluate(
         for item, vector in zip(scored, vectors, strict=True)
     ]
     return RetrievalConfigResult(
-        config=config,
+        config=config.mode,
+        retrieval_config=config,
+        retrieval_config_hash=config.config_hash,
         k=k,
         n=len(questions),
         skipped_unanswerable=len(items) - len(scored),
@@ -129,15 +131,14 @@ async def run_retrieval_eval(
     conninfo: str,
     items: Sequence[GoldenItem],
     *,
-    modes: Sequence[RetrievalMode],
+    configs: Sequence[RetrievalConfig],
     embedder: Embedder,
-    k_dense: int,
     golden_set_version: str,
     golden_set_sha256: str,
     now: datetime,
     repo: tuple[str | None, bool | None] = (None, None),
 ) -> RetrievalRun:
-    """Run each mode against the active index of ``conninfo``.
+    """Run each config's mode against the active index of ``conninfo``.
 
     The embedder must be the one that built the index: vectors of another model (or dimension)
     would be compared with the index's, which is meaningless, so that is an error, not a warning.
@@ -153,15 +154,23 @@ async def run_retrieval_eval(
                 f"{embedder.model} ({embedder.dim} dims)"
             )
 
-        async def dense(question: str, vector: Vector) -> Sequence[ChunkRef]:
-            return await dense_search(conn, vector, index_version_id=index.id, k=k_dense)
+        def build_search(config: RetrievalConfig) -> tuple[Search, int]:
+            """The search for ``config.mode`` and how many chunks it retrieves."""
+            if config.mode != "dense":  # Phase 2 adds fts and hybrid
+                raise RetrievalEvalError(f"retrieval mode {config.mode!r} is not implemented yet")
 
-        searches: dict[RetrievalMode, tuple[Search, int]] = {"dense": (dense, k_dense)}
-        configs: dict[str, RetrievalConfigResult] = {}
-        for mode in dict.fromkeys(modes):  # each mode once, in the order given
-            search, k = searches[mode]
-            configs[mode] = await evaluate(
-                items, config=mode, k=k, embedder=embedder, search=search
+            async def dense(question: str, vector: Vector) -> Sequence[ChunkRef]:
+                return await dense_search(conn, vector, index_version_id=index.id, k=config.k_dense)
+
+            return dense, config.k_dense
+
+        results: dict[str, RetrievalConfigResult] = {}
+        for config in configs:
+            if config.mode in results:  # each mode once, in the order given
+                continue
+            search, k = build_search(config)
+            results[config.mode] = await evaluate(
+                items, config=config, k=k, embedder=embedder, search=search
             )
 
     git_sha, git_dirty = repo
@@ -178,7 +187,7 @@ async def run_retrieval_eval(
         embedding_model=index.embedding_model,
         embedding_dim=index.embedding_dim,
     )
-    return RetrievalRun(info=info, configs=configs)
+    return RetrievalRun(info=info, configs=results)
 
 
 # --- Files ----------------------------------------------------------------------------------------
@@ -234,6 +243,7 @@ def update_baseline(path: Path, run: RetrievalRun) -> dict[str, RetrievalBaselin
             golden_set_version=run.info.golden_set_version,
             golden_set_sha256=run.info.golden_set_sha256,
             index_config_hash=run.info.index_config_hash,
+            retrieval_config_hash=result.retrieval_config_hash,
             fastapi_ref=run.info.fastapi_ref,
             fastapi_sha=run.info.fastapi_sha,
             embedding_model=run.info.embedding_model,

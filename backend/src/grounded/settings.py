@@ -21,6 +21,7 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 AppEnv = Literal["dev", "test", "prod", "eval"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
+RerankProvider = Literal["none", "cohere"]
 
 # Matches infra/docker-compose.yml (DB.md §2). Convenient for local dev; prod must set its own.
 _LOCAL_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/grounded"
@@ -78,7 +79,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_max_output_tokens: int = Field(default=800, gt=0)
 
-    rerank_provider: Literal["none", "cohere"] = "none"
+    rerank_provider: RerankProvider = "none"
     rerank_model: str | None = None
     rerank_daily_cap: int = Field(default=30, ge=0)
 
@@ -88,7 +89,7 @@ class Settings(BaseSettings):
     chunk_min_tokens: int = Field(default=40, gt=0)
     tokenizer_encoding: str = "o200k_base"  # tiktoken; approximate counts for sizing only
 
-    # --- Retrieval (grouped into a hashed RetrievalConfig in Phase 2) --------------------------
+    # --- Retrieval (grouped into a hashed RetrievalConfig, retrieval/config.py) ----------------
     k_dense: int = Field(default=20, gt=0)
     k_fts: int = Field(default=20, gt=0)
     k_fused: int = Field(default=40, gt=0)

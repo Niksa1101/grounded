@@ -18,6 +18,7 @@ from grounded.infra.kvcache import KVCache
 from grounded.ingest.embed import FakeEmbedder, GeminiEmbedder, TokenCounter
 from grounded.ingest.pipeline import index_spec, ingest, prepare_corpus
 from grounded.ingest.types import ChunkingConfig, CorpusCheckout
+from grounded.retrieval.config import RetrievalConfig
 from grounded.settings import Settings
 from tests.support import make_settings
 
@@ -121,9 +122,8 @@ def invoke(*args: str) -> Any:
     return runner.invoke(app, ["eval", "retrieval", *args])
 
 
-@pytest.mark.usefixtures("settings")
 def test_eval_writes_results_and_reuses_cached_query_vectors(
-    db: str, tmp_path: Path, baseline: Path
+    db: str, tmp_path: Path, baseline: Path, settings: Settings
 ) -> None:
     build_index(db, tmp_path)
     golden, out = golden_file(tmp_path), tmp_path / "results" / "run.json"
@@ -141,6 +141,9 @@ def test_eval_writes_results_and_reuses_cached_query_vectors(
     assert list(run.configs) == ["dense"]
     dense = run.configs["dense"]
     assert (dense.n, dense.k, dense.skipped_unanswerable) == (1, 4, 1)
+    expected = RetrievalConfig.from_settings(settings, "dense")
+    assert dense.retrieval_config == expected
+    assert dense.retrieval_config_hash == expected.config_hash
     [question] = dense.questions
     assert question.id == "q001"
     assert len(question.retrieved) == 4
@@ -167,6 +170,7 @@ def test_eval_writes_results_and_reuses_cached_query_vectors(
     assert rows["dense"]["index_config_hash"] == info.index_config_hash
     assert rows["dense"]["golden_set_sha256"] == info.golden_set_sha256
     assert rows["dense"]["git_dirty"] == info.git_dirty
+    assert rows["dense"]["retrieval_config_hash"] == expected.config_hash
 
 
 @pytest.mark.usefixtures("settings")
