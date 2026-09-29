@@ -176,8 +176,8 @@ class GeminiEmbedder:
 
     @classmethod
     def from_settings(cls, settings: Settings, count_tokens: TokenCounter) -> GeminiEmbedder:
-        if settings.gemini_api_key is None or not settings.embedding_model:
-            raise ValueError("GEMINI_API_KEY and EMBEDDING_MODEL must be set to embed")
+        if settings.gemini_api_key is None:
+            raise ValueError("GEMINI_API_KEY must be set to embed")
         client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
         return cls(
             client,

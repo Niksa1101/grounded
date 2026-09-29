@@ -18,6 +18,23 @@ def test_defaults_match_tech_md() -> None:
     assert s.allow_direct_api is False
 
 
+def test_pinned_corpus_and_embedding_defaults_match_tech_md(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for name in ("EMBEDDING_MODEL", "FASTAPI_REF"):
+        monkeypatch.delenv(name, raising=False)
+    s = make_settings()
+    assert (s.embedding_model, s.embedding_dim) == ("gemini-embedding-001", 768)
+    assert s.fastapi_ref == "0.141.1"
+
+
+@pytest.mark.parametrize("name", ["embedding_model", "fastapi_ref"])
+def test_blank_embedding_model_and_corpus_tag_are_rejected(name: str) -> None:
+    # An unfilled variable is an empty string, not "unset": it must not silently pick another index.
+    with pytest.raises(ValidationError):
+        make_settings(**{name: ""})
+
+
 def test_embedding_defaults_match_the_free_tier() -> None:
     s = make_settings()
     assert (s.embedding_batch_size, s.embedding_rpm, s.embedding_tpm) == (100, 100, 30_000)

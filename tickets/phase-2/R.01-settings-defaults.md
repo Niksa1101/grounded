@@ -24,10 +24,10 @@ either.
   like the other rows).
 
 **Acceptance criteria**
-- [ ] Defaults match Tech §4, and an empty `EMBEDDING_MODEL` / `FASTAPI_REF` fails validation.
-- [ ] `test_ingest_needs_a_ref` and `test_ingest_needs_an_embedding_model` are replaced by the two tests above.
-- [ ] `grounded ingest --dry-run` works without `--ref`.
-- [ ] `grounded index list` shows the same config hash for the active version (values equal the Author's `.env`).
+- [x] Defaults match Tech §4, and an empty `EMBEDDING_MODEL` / `FASTAPI_REF` fails validation.
+- [x] `test_ingest_needs_a_ref` and `test_ingest_needs_an_embedding_model` are replaced by the two tests above.
+- [x] `grounded ingest --dry-run` works without `--ref`.
+- [x] `grounded index list` shows the same config hash for the active version (values equal the Author's `.env`).
 
 **Verify:** standard checks, then `uv run grounded ingest --dry-run` and `uv run grounded index list`.
 

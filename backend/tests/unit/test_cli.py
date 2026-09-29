@@ -100,18 +100,28 @@ def test_ingest_dry_run_counts_texts_to_embed_without_api_or_db(
     assert re.search(r"Dry run: \d+ texts to embed", result.output)
 
 
-def test_ingest_needs_a_ref(monkeypatch: pytest.MonkeyPatch) -> None:
-    use_settings(monkeypatch, embedding_model="m", fastapi_ref=None)
-    result = runner.invoke(app, ["ingest"])
-    assert result.exit_code == 1
-    assert "pass --ref or set FASTAPI_REF" in result.output
+@pytest.mark.usefixtures("mini_corpus")
+def test_ingest_without_ref_uses_the_configured_tag(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    use_settings(monkeypatch, cache_dir=tmp_path, fastapi_ref="9.9.9")
+    result = runner.invoke(app, ["ingest", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "Corpus 9.9.9 @ aaaaaaaa:" in result.output
 
 
-def test_ingest_needs_an_embedding_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    use_settings(monkeypatch, embedding_model=None, fastapi_ref="0.0.1")
-    result = runner.invoke(app, ["ingest"])
-    assert result.exit_code == 1
-    assert "EMBEDDING_MODEL must be set" in result.output
+@pytest.mark.usefixtures("mini_corpus")
+def test_ingest_dry_run_needs_no_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The defaults (Tech.md §4) mean a fresh checkout without a .env can run it.
+    monkeypatch.delenv("FASTAPI_REF", raising=False)
+    monkeypatch.delenv("EMBEDDING_MODEL", raising=False)
+    use_settings(monkeypatch, cache_dir=tmp_path)
+    result = runner.invoke(app, ["ingest", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "Corpus 0.141.1 @ aaaaaaaa:" in result.output
+    assert "gemini-embedding-001, 768 dims" in result.output
 
 
 @pytest.mark.usefixtures("mini_corpus")
@@ -121,7 +131,7 @@ def test_ingest_without_api_key_fails_cleanly(
     use_settings(monkeypatch, cache_dir=tmp_path, embedding_model="m", gemini_api_key=None)
     result = runner.invoke(app, ["ingest", "--ref", "0.0.1"])
     assert result.exit_code == 1
-    assert "GEMINI_API_KEY and EMBEDDING_MODEL must be set" in result.output
+    assert "GEMINI_API_KEY must be set" in result.output
 
 
 @pytest.mark.usefixtures("mini_corpus")

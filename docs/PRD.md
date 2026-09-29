@@ -419,7 +419,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - Neon project is in AWS US East 2 (Ohio). The backend function region is set closest to it in Phase 5 (Vercel's default is `iad1`, US East).
 - Serverless backend (D24): in-process state is per function instance. The in-memory rate limiter (D31) and the circuit breaker (Phase 7) must be revisited: likely a Postgres-backed counter for rate limiting, and an accepted per-instance breaker. Decide in Phase 5 / Phase 7.
 - Vercel Hobby is non-commercial only: no ads or paid features on the demo.
-- Exact model IDs (Gemini Flash, Groq model, judge model, Cohere rerank model, embedding model) are pinned in config at implementation time after checking current availability and free-tier limits. They are never assumed from memory.
+- Exact model IDs (Gemini Flash, Groq model, judge model, Cohere rerank model) are pinned in config at implementation time after checking current availability and free-tier limits. They are never assumed from memory. The embedding model is the exception: it was verified on 2026-09-26 (Phase 1) and is a default in `Settings`, since it is tied to the index.
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
   (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
