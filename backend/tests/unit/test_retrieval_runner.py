@@ -15,8 +15,10 @@ import pytest
 
 from grounded.evals.metrics import ChunkRef
 from grounded.evals.retrieval_runner import (
+    BaselineMismatchError,
     RetrievalEvalError,
     evaluate,
+    golden_set_digest,
     golden_set_version,
     metric_names,
     read_run,
@@ -188,18 +190,24 @@ def test_results_path_is_a_utc_timestamp() -> None:
     assert results_path(NOW).parent.name == "results"
 
 
-def make_run(*configs: tuple[str, float], sha: str = "c" * 40) -> RetrievalRun:
+def make_run(
+    *configs: tuple[str, float], sha: str = "c" * 40, **info_overrides: Any
+) -> RetrievalRun:
     info = RetrievalRunInfo(
-        date=NOW,
-        git_sha=sha,
-        git_dirty=False,
-        golden_set_version="v1",
-        index_version_id=3,
-        index_config_hash="f" * 64,
-        fastapi_ref="0.141.1",
-        fastapi_sha="9" * 40,
-        embedding_model="gemini-embedding-001",
-        embedding_dim=768,
+        **{
+            "date": NOW,
+            "git_sha": sha,
+            "git_dirty": False,
+            "golden_set_version": "v1",
+            "golden_set_sha256": "a" * 64,
+            "index_version_id": 3,
+            "index_config_hash": "f" * 64,
+            "fastapi_ref": "0.141.1",
+            "fastapi_sha": "9" * 40,
+            "embedding_model": "gemini-embedding-001",
+            "embedding_dim": 768,
+        }
+        | info_overrides
     )
     results = {
         name: RetrievalConfigResult(
@@ -232,6 +240,8 @@ def test_update_baseline_creates_replaces_and_keeps_rows(tmp_path: Path) -> None
     assert first["dense"]["n"] == 25
     assert first["dense"]["index_config_hash"] == "f" * 64
     assert first["dense"]["git_sha"] == "c" * 40
+    assert first["dense"]["golden_set_sha256"] == "a" * 64
+    assert first["dense"]["git_dirty"] is False
 
     # A later run of another config adds its row and leaves dense alone ...
     update_baseline(path, make_run(("fts", 0.25), sha="d" * 40))
@@ -285,3 +295,99 @@ def test_repo_state_ignores_untracked_files_but_not_edits(tmp_path: Path) -> Non
     # ... but an edit to a tracked file does.
     tracked.write_text("two\n", encoding="utf-8")
     assert repo_state(tmp_path) == (sha, True)
+
+
+# --- Baseline integrity: rows from different setups are never mixed -----------------------------
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("golden_set_version", "v2"),
+        ("golden_set_sha256", "b" * 64),
+        ("index_config_hash", "e" * 64),
+    ],
+)
+def test_update_baseline_refuses_a_run_from_another_setup(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    path = tmp_path / "retrieval.json"
+    update_baseline(path, make_run(("dense", 0.5)))
+    before = path.read_bytes()
+
+    with pytest.raises(BaselineMismatchError) as excinfo:
+        update_baseline(path, make_run(("fts", 0.25), **{field: value}))
+
+    message = str(excinfo.value)
+    assert f"row 'dense' differs in {field}" in message
+    # The fix is named: one run of all configs, in a stable order.
+    assert "--config dense --config fts --write-baseline" in message
+    assert path.read_bytes() == before  # byte-identical: nothing was written
+
+
+def test_update_baseline_names_every_differing_field_and_the_model(tmp_path: Path) -> None:
+    path = tmp_path / "retrieval.json"
+    update_baseline(path, make_run(("dense", 0.5)))
+    other = make_run(
+        ("fts", 0.25),
+        golden_set_version="v2",
+        golden_set_sha256="b" * 64,
+        index_config_hash="e" * 64,
+        embedding_model="other-model",
+    )
+    with pytest.raises(BaselineMismatchError) as excinfo:
+        update_baseline(path, other)
+    message = str(excinfo.value)
+    for field in ("golden_set_version", "golden_set_sha256", "index_config_hash"):
+        assert field in message
+    assert "embedding_model: row gemini-embedding-001, run other-model" in message
+
+
+def test_update_baseline_refuses_a_legacy_row_without_the_new_fields(tmp_path: Path) -> None:
+    # A row written before golden_set_sha256/git_dirty existed can be read, but it can't be shown
+    # to come from the same golden-set bytes, so it counts as a mismatch.
+    path = tmp_path / "retrieval.json"
+    update_baseline(path, make_run(("dense", 0.5)))
+    rows = json.loads(path.read_bytes())
+    del rows["dense"]["golden_set_sha256"], rows["dense"]["git_dirty"]
+    path.write_text(json.dumps(rows), encoding="utf-8")
+    before = path.read_bytes()
+
+    with pytest.raises(BaselineMismatchError, match="golden_set_sha256: row unset"):
+        update_baseline(path, make_run(("fts", 0.25)))
+    assert path.read_bytes() == before
+
+    # Re-running the legacy row's own config replaces it, so a joint run is the way out.
+    rows_after = update_baseline(path, make_run(("dense", 0.6)))
+    assert rows_after["dense"].golden_set_sha256 == "a" * 64
+
+
+def test_update_baseline_accepts_a_joint_run_of_every_config(tmp_path: Path) -> None:
+    path = tmp_path / "retrieval.json"
+    update_baseline(path, make_run(("dense", 0.5), ("fts", 0.25)))
+    joint = make_run(
+        ("dense", 0.6),
+        ("fts", 0.3),
+        golden_set_version="v2",
+        golden_set_sha256="b" * 64,
+        index_config_hash="e" * 64,
+    )
+    rows = update_baseline(path, joint)  # nothing is kept, so nothing can disagree
+    assert {row.golden_set_sha256 for row in rows.values()} == {"b" * 64}
+    assert {row.index_config_hash for row in rows.values()} == {"e" * 64}
+
+
+def test_update_baseline_copies_the_dirty_flag(tmp_path: Path) -> None:
+    rows = update_baseline(tmp_path / "retrieval.json", make_run(("dense", 0.5), git_dirty=True))
+    assert rows["dense"].git_dirty is True
+
+
+def test_golden_set_digest_ignores_line_endings_but_not_content(tmp_path: Path) -> None:
+    lf, crlf, edited = tmp_path / "lf.jsonl", tmp_path / "crlf.jsonl", tmp_path / "edited.jsonl"
+    lf.write_bytes(b'{"id": "q001"}\n{"id": "q002"}\n')
+    crlf.write_bytes(b'{"id": "q001"}\r\n{"id": "q002"}\r\n')
+    edited.write_bytes(b'{"id": "q001"}\n{"id": "q003"}\n')
+
+    assert golden_set_digest(lf) == golden_set_digest(crlf)
+    assert golden_set_digest(lf) != golden_set_digest(edited)
+    assert len(golden_set_digest(lf)) == 64

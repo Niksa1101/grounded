@@ -10,3 +10,5 @@ The eval harness that gates quality-affecting PRs (see [docs/Tech.md](../docs/Te
 | `results/` | run outputs, **gitignored** | — |
 
 Metric numbers in the README, PRs and baselines come only from committed eval output. Never edit them by hand.
+
+`grounded eval retrieval --write-baseline` refuses to put rows from different setups (golden-set version or bytes, index config) into one baseline file. To add or refresh a config after such a change, run every config together, e.g. `--config dense --config fts --write-baseline`.

@@ -112,6 +112,7 @@ class RetrievalRunInfo(BaseModel):
     git_sha: str | None  # repo HEAD; None outside a git checkout
     git_dirty: bool | None  # uncommitted changes when the run started
     golden_set_version: str  # "v1"
+    golden_set_sha256: str  # of the file's bytes (LF-normalized), so an edit in place is visible
     index_version_id: int  # only meaningful in the database the run used
     index_config_hash: str  # identifies the index across databases (local, CI)
     fastapi_ref: str
@@ -134,6 +135,10 @@ class RetrievalBaselineEntry(BaseModel):
     """One config's row in ``eval/baselines/retrieval.json``, copied from a run, never typed.
 
     No thresholds yet: they arrive with the Phase 2 gate (plan decision #14).
+
+    ``golden_set_sha256`` and ``git_dirty`` are optional only so a row written before they existed
+    can still be read: ``None`` means "written before this field". ``update_baseline`` treats such
+    a row as a different setup, and the gate (2.09) makes both fields required.
     """
 
     model_config = _FROZEN
@@ -142,10 +147,12 @@ class RetrievalBaselineEntry(BaseModel):
     n: int = Field(ge=1)
     k: int = Field(ge=1)
     golden_set_version: str
+    golden_set_sha256: str | None = None
     index_config_hash: str
     fastapi_ref: str
     fastapi_sha: str
     embedding_model: str
     embedding_dim: int
     git_sha: str | None
+    git_dirty: bool | None = None
     date: datetime

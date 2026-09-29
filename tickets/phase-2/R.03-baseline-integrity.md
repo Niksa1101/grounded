@@ -25,11 +25,11 @@
 - **This PR does not touch `eval/baselines/retrieval.json`** (tests use `tmp_path`). B.01 regenerates it.
 
 **Acceptance criteria**
-- [ ] Each identity field is refused on its own, and the file is byte-identical afterwards.
-- [ ] A legacy `None` row is refused; a joint run of every config passes.
-- [ ] The digest ignores CRLF/LF and changes with content; the new fields are copied into the baseline.
-- [ ] CLI: exit 1 with the message, results file written.
-- [ ] `eval retrieval --config dense` gives the same metrics as the committed `dense` row.
+- [x] Each identity field is refused on its own, and the file is byte-identical afterwards.
+- [x] A legacy `None` row is refused; a joint run of every config passes.
+- [x] The digest ignores CRLF/LF and changes with content; the new fields are copied into the baseline.
+- [x] CLI: exit 1 with the message, results file written.
+- [x] `eval retrieval --config dense` gives the same metrics as the committed `dense` row.
 
 **Verify:** standard checks, then `uv run grounded eval retrieval --config dense` (no `--write-baseline`).
 

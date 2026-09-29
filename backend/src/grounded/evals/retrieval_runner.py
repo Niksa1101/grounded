@@ -11,6 +11,7 @@ A baseline row is only ever copied from a run (AGENTS.md §7), never typed.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -58,6 +59,10 @@ _VERSIONED_NAME: Final = re.compile(r"^golden_set\.(v\d+)\.jsonl$")
 
 class RetrievalEvalError(Exception):
     """The eval can't run as asked (wrong index, bad golden-set file name, ...)."""
+
+
+class BaselineMismatchError(Exception):
+    """The baseline file has rows from a different setup than this run; nothing was written."""
 
 
 def metric_names() -> list[str]:
@@ -128,6 +133,7 @@ async def run_retrieval_eval(
     embedder: Embedder,
     k_dense: int,
     golden_set_version: str,
+    golden_set_sha256: str,
     now: datetime,
     repo: tuple[str | None, bool | None] = (None, None),
 ) -> RetrievalRun:
@@ -164,6 +170,7 @@ async def run_retrieval_eval(
         git_sha=git_sha,
         git_dirty=git_dirty,
         golden_set_version=golden_set_version,
+        golden_set_sha256=golden_set_sha256,
         index_version_id=index.id,
         index_config_hash=index.config_hash,
         fastapi_ref=index.git_ref,
@@ -188,6 +195,12 @@ def golden_set_version(path: Path) -> str:
     return match.group(1)
 
 
+def golden_set_digest(path: Path) -> str:
+    """sha256 of the golden-set file with CRLF read as LF, like the migration checksum: a Windows
+    checkout must not look like an edited file, while any content change still does."""
+    return hashlib.sha256(path.read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
 def results_path(now: datetime) -> Path:
     """``eval/results/<UTC timestamp>-retrieval.json``."""
     return RESULTS_DIR / f"{now.strftime('%Y%m%dT%H%M%SZ')}-retrieval.json"
@@ -203,24 +216,74 @@ def read_run(path: Path) -> RetrievalRun:
 
 def update_baseline(path: Path, run: RetrievalRun) -> dict[str, RetrievalBaselineEntry]:
     """Replace the rows of the configs in ``run`` in the baseline file (created if missing) and
-    keep the other rows, so ablation configs can be added one run at a time."""
+    keep the other rows, so ablation configs can be added one run at a time.
+
+    A kept row must come from the same setup as the run (golden-set version and bytes, index
+    config): otherwise the file would compare configs scored on different data, and the gate would
+    read that as a difference between the configs. A mismatch raises ``BaselineMismatchError`` and
+    leaves the file untouched; the fix is one run of all configs together.
+    """
     rows = _BASELINE_FILE.validate_json(path.read_bytes()) if path.exists() else {}
+    kept = {name: row for name, row in rows.items() if name not in run.configs}
+    _check_same_setup(kept, run, joint=[*dict.fromkeys([*kept, *run.configs])])
     for name, result in run.configs.items():
         rows[name] = RetrievalBaselineEntry(
             metrics=result.metrics,
             n=result.n,
             k=result.k,
             golden_set_version=run.info.golden_set_version,
+            golden_set_sha256=run.info.golden_set_sha256,
             index_config_hash=run.info.index_config_hash,
             fastapi_ref=run.info.fastapi_ref,
             fastapi_sha=run.info.fastapi_sha,
             embedding_model=run.info.embedding_model,
             embedding_dim=run.info.embedding_dim,
             git_sha=run.info.git_sha,
+            git_dirty=run.info.git_dirty,
             date=run.info.date,
         )
     _write_json(path, _BASELINE_FILE.dump_python(rows, mode="json"))
     return rows
+
+
+def _check_same_setup(
+    kept: Mapping[str, RetrievalBaselineEntry], run: RetrievalRun, *, joint: Sequence[str]
+) -> None:
+    """Raise if any kept row differs from ``run`` in golden-set version/bytes or index config.
+
+    The index config hash already covers the FastAPI SHA, the embedding model and dimension and
+    the chunking config, so those aren't compared one by one; the model is only named in the
+    message when it differs, to make the mismatch readable.
+    """
+    info = run.info
+    problems: list[str] = []
+    for name, row in kept.items():
+        differences: list[str] = []
+        for field, row_value, run_value in (
+            ("golden_set_version", row.golden_set_version, info.golden_set_version),
+            ("golden_set_sha256", row.golden_set_sha256, info.golden_set_sha256),
+            ("index_config_hash", row.index_config_hash, info.index_config_hash),
+        ):
+            if row_value != run_value:
+                differences.append(f"{field}: row {_short(row_value)}, run {_short(run_value)}")
+        if differences and row.embedding_model != info.embedding_model:
+            differences.append(
+                f"embedding_model: row {row.embedding_model}, run {info.embedding_model}"
+            )
+        if differences:
+            problems.append(f"row {name!r} differs in " + "; ".join(differences))
+    if problems:
+        command = " ".join(f"--config {name}" for name in joint)
+        raise BaselineMismatchError(
+            "; ".join(problems) + f". Rows scored on different data must not share a file: run "
+            f"`grounded eval retrieval {command} --write-baseline` to rewrite them together. "
+            "The baseline file was not changed."
+        )
+
+
+def _short(value: str | None) -> str:
+    """A hash as 8 characters; ``None`` = a row written before the field existed."""
+    return "unset" if value is None else value[:8] if len(value) > 12 else value
 
 
 def _write_json(path: Path, data: Mapping[str, Any]) -> None:

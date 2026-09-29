@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 import grounded.cli
 from grounded.cli import app
-from grounded.evals.retrieval_runner import read_run
+from grounded.evals.retrieval_runner import golden_set_digest, read_run
 from grounded.infra.kvcache import KVCache
 from grounded.ingest.embed import FakeEmbedder, GeminiEmbedder, TokenCounter
 from grounded.ingest.pipeline import index_spec, ingest, prepare_corpus
@@ -152,6 +152,7 @@ def test_eval_writes_results_and_reuses_cached_query_vectors(
     )
     assert (info.embedding_model, info.embedding_dim) == (MODEL, 768)
     assert info.git_sha is not None
+    assert info.golden_set_sha256 == golden_set_digest(golden)
 
     again = invoke("--golden", str(golden), "--out", str(out), "--write-baseline")
     assert again.exit_code == 0, again.output
@@ -164,6 +165,8 @@ def test_eval_writes_results_and_reuses_cached_query_vectors(
     assert rows["dense"]["metrics"] == dense.metrics
     assert rows["dense"]["n"] == 1
     assert rows["dense"]["index_config_hash"] == info.index_config_hash
+    assert rows["dense"]["golden_set_sha256"] == info.golden_set_sha256
+    assert rows["dense"]["git_dirty"] == info.git_dirty
 
 
 @pytest.mark.usefixtures("settings")
@@ -231,3 +234,28 @@ def test_eval_on_a_cold_cache_without_a_key_fails_cleanly(
     assert result.exit_code == 1
     assert "GEMINI_API_KEY must be set to embed: 1 questions are not cached." in result.output
     assert isinstance(result.exception, SystemExit)
+
+
+@pytest.mark.usefixtures("settings")
+def test_write_baseline_refuses_to_mix_setups_but_still_writes_the_results(
+    db: str, tmp_path: Path, baseline: Path
+) -> None:
+    build_index(db, tmp_path)
+    golden, out = golden_file(tmp_path), tmp_path / "results" / "run.json"
+    assert invoke("--golden", str(golden), "--out", str(out), "--write-baseline").exit_code == 0
+
+    # A row of another config that was scored on different golden-set bytes.
+    rows = json.loads(baseline.read_bytes())
+    rows["fts"] = rows["dense"] | {"golden_set_sha256": "b" * 64}
+    baseline.write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8")
+    before = baseline.read_bytes()
+    out.unlink()
+
+    # dense is re-run alone: the fts row is kept, and it disagrees with this run.
+    result = invoke("--golden", str(golden), "--out", str(out), "--write-baseline")
+    assert result.exit_code == 1
+    assert "Baseline not updated: row 'fts' differs in golden_set_sha256" in result.output
+    assert "--config fts --config dense --write-baseline" in result.output
+    assert isinstance(result.exception, SystemExit)
+    assert out.exists()  # the run itself is kept
+    assert baseline.read_bytes() == before
