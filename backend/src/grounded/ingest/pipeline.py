@@ -43,7 +43,7 @@ from psycopg.types.json import Jsonb
 
 from grounded.infra.kvcache import KVCache
 from grounded.infra.provider_errors import ProviderRateLimited
-from grounded.ingest.chunker import chunk_document
+from grounded.ingest.chunker import CHUNKER_VERSION, chunk_document
 from grounded.ingest.corpus import EXCLUDED_PAGES, discover_pages
 from grounded.ingest.embed import CachedEmbedder, Embedder, TaskType, count_uncached_texts
 from grounded.ingest.markdown import PARSER_VERSION, parse_page
@@ -150,6 +150,7 @@ def index_chunking_config(cfg: ChunkingConfig) -> dict[str, Any]:
         **asdict(cfg),
         "excluded_pages": sorted(EXCLUDED_PAGES),
         "parser_version": PARSER_VERSION,
+        "chunker_version": CHUNKER_VERSION,
     }
 
 

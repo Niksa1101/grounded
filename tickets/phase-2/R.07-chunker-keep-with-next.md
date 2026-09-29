@@ -29,12 +29,12 @@ heading moves to the next part together with that block. No overlap is added bef
 - The module docstring records the delegation ("keep-with-next delegated by the Author, 2026-09-29").
 
 **Acceptance criteria**
-- [ ] Tests (word counter, 1 word = 1 token): an H4 followed by a block that doesn't fit moves to the next part; a chain
+- [x] Tests (word counter, 1 word = 1 token): an H4 followed by a block that doesn't fit moves to the next part; a chain
       intro → empty H2 → H3 whose first block doesn't fit moves together; no overlap before a heading; a moved heading
       plus an oversized atomic block stay together above max.
-- [ ] All existing tests pass (an expectation of overlap before an H4, if any, is changed with an explanation).
-- [ ] `test_ingest_pipeline.py`: `chunker_version` is in the config and changes the hash.
-- [ ] Real corpus, locally, **with the Author's confirmation** (it spends their embedding key for a few calls):
+- [x] All existing tests pass (an expectation of overlap before an H4, if any, is changed with an explanation).
+- [x] `test_ingest_pipeline.py`: `chunker_version` is in the config and changes the hash.
+- [x] Real corpus, locally, **with the Author's confirmation** (it spends their embedding key for a few calls):
       (1) an out-of-repo script finds 0 chunks whose last non-empty line is a heading (before: ≥ 1);
       (2) `ingest --dry-run` reports N texts to embed (N = changed chunks, expected small; the cache is content
       addressed); (3) `ingest --activate` builds v2, `golden validate --against-index` passes, and

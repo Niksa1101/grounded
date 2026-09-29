@@ -12,6 +12,7 @@ import pytest
 
 import grounded.ingest.pipeline as pipeline
 from grounded.infra.kvcache import KVCache
+from grounded.ingest.chunker import CHUNKER_VERSION
 from grounded.ingest.corpus import EXCLUDED_PAGES
 from grounded.ingest.embed import embedding_cache_key
 from grounded.ingest.markdown import PARSER_VERSION
@@ -87,12 +88,13 @@ def test_token_stats_needs_counts() -> None:
 # --- index identity --------------------------------------------------------------------------
 
 
-def test_chunking_config_records_exclusions_and_parser_version() -> None:
+def test_chunking_config_records_exclusions_and_parser_and_chunker_versions() -> None:
     stored = index_chunking_config(CFG)
     assert stored == {
         **dataclasses.asdict(CFG),
         "excluded_pages": sorted(EXCLUDED_PAGES),
         "parser_version": PARSER_VERSION,
+        "chunker_version": CHUNKER_VERSION,
     }
     json.dumps(stored)  # goes into a jsonb column
 
@@ -127,6 +129,7 @@ def test_config_hash_ignores_the_ref_name_but_not_the_sha() -> None:
         "dim",
         "chunking",
         "parser_version",
+        "chunker_version",
         "excluded_pages",
     ],
 )
@@ -143,6 +146,8 @@ def test_config_hash_changes_with_anything_that_changes_the_index(
         cfg = dataclasses.replace(CFG, max_tokens=61)
     elif change == "parser_version":
         monkeypatch.setattr(pipeline, "PARSER_VERSION", PARSER_VERSION + 1)
+    elif change == "chunker_version":
+        monkeypatch.setattr(pipeline, "CHUNKER_VERSION", CHUNKER_VERSION + 1)
     else:
         monkeypatch.setattr(pipeline, "EXCLUDED_PAGES", {**EXCLUDED_PAGES, "new.md": "why"})
     assert index_spec(CHECKOUT, cfg, embedding_model=model, embedding_dim=dim).config_hash != base

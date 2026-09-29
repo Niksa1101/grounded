@@ -11,6 +11,7 @@ with ``# Title`` + a 6-word intro paragraph (an 8-token intro chunk, ordinal 0).
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -488,6 +489,63 @@ def test_long_list_splits_between_top_level_items() -> None:
     assert second.content.split() == words(*items[3:])
     for item in items:  # items stay whole
         assert sum(item in c.content for c in (first, second)) == 1
+
+
+def test_a_heading_moves_to_the_next_part_with_the_block_after_it() -> None:
+    a, b = sents("a", 3, 3, 3), sents("b", 12)
+    # Section = 2 + 9 + 2 + 12 = 25. Part 1 could end with the H4 (2 + 9 + 2 = 13), but B (12)
+    # doesn't fit after it (25 > 20). The H4 leaves with B instead of ending the part.
+    first, second = body(doc(h(2, "Alpha"), para(*a), h(4, "Deep"), para(*b)))
+    assert first.content.split() == words("## Alpha", *a)
+    assert second.content.split() == words("#### Deep", *b)
+    assert (first.token_count, second.token_count) == (11, 14)
+
+
+def test_a_chain_of_carried_headings_moves_together_with_the_block() -> None:
+    # A small intro (4 tokens with the title), an empty H2 and an H3: rule 2 carries the intro and
+    # the H2 into the H3, so the section holds [# Title, x, ## Alpha, ### One, Q] = 4 + 2 + 2 + 14
+    # = 22 tokens > 20. The H2 and H3 lines sit in the middle of the section, right before Q,
+    # which doesn't fit after them (8 + 14 = 22). They leave with Q instead of ending part 1.
+    q = sents("q", 14)
+    first, second = run(doc(para("x1 x2."), h(2, "Alpha"), h(3, "One"), para(*q), intro=False))
+    assert [c.anchor_path for c in (first, second)] == [("alpha", "one")] * 2
+    assert first.content.split() == words("# Title", "x1 x2.")
+    assert second.content.split() == words("## Alpha", "### One", *q)
+    assert (first.token_count, second.token_count) == (4, 18)
+
+
+def test_no_overlap_is_put_before_a_heading() -> None:
+    a, b = sents("a", 5, 6, 6), sents("b", 10)
+    # Part 1 = 2 + 17 = 19; the H4 (2) doesn't fit, so it opens part 2. Without the rule the
+    # part would start with a's last sentence (6 <= overlap_tokens) copied in front of the heading.
+    first, second = body(doc(h(2, "Alpha"), para(*a), h(4, "Deep"), para(*b)))
+    assert first.content.split() == words("## Alpha", *a)
+    assert second.content.split() == words("#### Deep", *b)
+    assert a[2] not in second.content
+
+
+def test_a_moved_heading_and_an_oversized_atomic_block_stay_together_over_max() -> None:
+    block = code("k", 30)  # 32 tokens
+    first, second = body(doc(h(2, "Alpha"), para("x1 x2 x3."), h(4, "Deep"), block))
+    assert first.content.split() == words("## Alpha", "x1 x2 x3.")
+    assert second.content.split() == words("#### Deep", block.markdown)
+    assert second.token_count == 34  # the one allowed exception: heading + atomic block
+
+
+def test_a_moved_heading_is_followed_by_the_pieces_of_a_block_that_can_break_up() -> None:
+    s = sents("s", 8, 8, 8)
+    # Part 1 = 2 + 3 = 5, + H4 = 7; the paragraph (24) fits nowhere whole. The H4 moves to a part
+    # of its own start, and the paragraph is broken up after it: 2 + 8 + 8 = 18 (+ 8 > 20).
+    first, second, third = body(doc(h(2, "Alpha"), para("x1 x2 x3."), h(4, "Deep"), para(*s)))
+    assert first.content.split() == words("## Alpha", "x1 x2 x3.")
+    assert second.content.split() == words("#### Deep", s[0], s[1])
+    assert third.content.split() == words(s[2])
+
+
+def test_no_chunk_ends_with_a_heading() -> None:
+    for chunk in run(MIXED):
+        last_line = chunk.content.rstrip().rsplit("\n", 1)[-1]
+        assert not re.match(r"#{1,6} ", last_line), chunk.content
 
 
 # --- 5. Output invariants ---------------------------------------------------------------------

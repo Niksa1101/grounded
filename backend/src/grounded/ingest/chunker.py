@@ -1,5 +1,6 @@
 """Header-aware chunker (Tech.md §5.5). **Author-owned module** (AGENTS.md §3), written by the
-Agent at the Author's explicit request (2026-09-26).
+Agent at the Author's explicit request (2026-09-26); keep-with-next (rule 4, ``CHUNKER_VERSION``
+2) delegated by the Author, 2026-09-29.
 
 Spec tests: ``tests/unit/test_chunker.py``.
 
@@ -30,6 +31,11 @@ from grounded.ingest.types import (
 )
 
 _BLOCK_SEP = "\n\n"
+
+# Bump whenever the same page chunks to different text: it is part of every index version's config
+# hash (ingest/pipeline.py), so an index built by an older chunker is never taken for the current
+# one. 1 = the original rules; 2 = a heading is never the last line of a part (keep-with-next).
+CHUNKER_VERSION = 2
 
 
 def chunk_document(
@@ -81,10 +87,17 @@ def chunk_document(
     **4. Long sections** (content > ``max_tokens``) are split into parts that share the section's
     metadata (only ``ordinal`` differs). Blocks are packed greedily in document order:
 
-    - The heading line is only in the first part and is never a part on its own: it stays with
-      the first block after it. If that block doesn't fit next to the heading it is broken up (see
-      below), so its first pieces go with the heading; an atomic first block stays with the
-      heading even if the two together exceed ``max_tokens``.
+    - The section's heading line is only in the first part and is never a part on its own: it
+      stays with the first block after it. If that block doesn't fit next to the heading it is
+      broken up (see below), so its first pieces go with the heading; an atomic first block stays
+      with the heading even if the two together exceed ``max_tokens``.
+    - **A heading never ends a part** (keep-with-next). A heading is any heading line inside the
+      section: an H4-H6 line, or the H2/H3 line of a thin parent that rule 2 carried into it. If
+      the block after a heading doesn't fit into the current part, the heading (and any headings
+      right before it) moves to the next part together with that block. The heading then follows
+      the rule above: the block is broken up, or, if atomic, stays whole with it even over
+      ``max_tokens``. No overlap is put before a heading: a part that starts with a heading has
+      none, otherwise a moved heading would leave a part made only of copied sentences.
     - Any later block that doesn't fit into the current part starts the next part, if it fits
       there (after the overlap). Otherwise it is broken up and its pieces are packed, starting in
       the current part: a paragraph (``TextBlock.kind == "paragraph"``) into sentences, a list into
@@ -299,13 +312,8 @@ class _Packer:
         self._current: list[_Piece] = []
 
     def pack(self, blocks: tuple[Block, ...]) -> list[str]:
-        # The heading lines at the top: the section's own, plus those of empty parents (rule 2).
-        head = 0
-        while head < len(blocks) and _is_section_heading(blocks[head]):
-            head += 1
-        self._current = [_Piece(b.markdown, i, "heading") for i, b in enumerate(blocks[:head])]
-        for index in range(head, len(blocks)):
-            whole, pieces = _pieces(blocks[index], index)
+        for index, block in enumerate(blocks):
+            whole, pieces = _pieces(block, index)
             self._place(whole, pieces)
         self._parts.append(self._current)
         return [_render(part) for part in self._parts]
@@ -315,11 +323,19 @@ class _Packer:
         if self._fits([*self._current, piece]):
             self._current.append(piece)
         elif all(p.kind == "heading" for p in self._current):
-            # The heading never stands alone: break the first block up, or keep it whole over max.
+            # A heading never stands alone: break the block up, or keep it whole over max.
             if pieces:
                 self._place_all(pieces)
             else:
                 self._current.append(piece)
+        elif tail := self._trailing_headings():
+            # The part ends in headings whose block doesn't fit here: they leave with it (keep
+            # with next). What is left of the part is not empty: it isn't only headings.
+            del self._current[-len(tail) :]
+            self._start(tail)
+            self._place(piece, pieces)
+        elif piece.kind == "heading":
+            self._start([piece])  # a heading opens a part; no overlap in front of it
         elif self._fits([*(overlap := self._overlap()), piece]):
             self._start([*overlap, piece])
         elif pieces:
@@ -330,6 +346,13 @@ class _Packer:
     def _place_all(self, pieces: tuple[_Piece, ...]) -> None:
         for piece in pieces:
             self._place(piece)
+
+    def _trailing_headings(self) -> list[_Piece]:
+        """The run of heading pieces at the end of the current part (empty if it ends otherwise)."""
+        end = len(self._current)
+        while end and self._current[end - 1].kind == "heading":
+            end -= 1
+        return self._current[end:]
 
     def _start(self, pieces: list[_Piece]) -> None:
         self._parts.append(self._current)
@@ -356,12 +379,10 @@ class _Packer:
         return [_Piece(s, last.source, "sentence", (s,)) for s in taken]
 
 
-def _is_section_heading(block: Block) -> bool:
-    return isinstance(block, HeadingBlock) and block.level <= 3
-
-
 def _pieces(block: Block, index: int) -> tuple[_Piece, tuple[_Piece, ...]]:
     """The block as one piece, and the smaller pieces it breaks into (none if atomic)."""
+    if isinstance(block, HeadingBlock):
+        return _Piece(block.markdown, index, "heading"), ()
     if isinstance(block, TextBlock) and block.kind == "paragraph":
         sentences = _split_sentences(block.markdown)
         whole = _Piece(block.markdown, index, "block", sentences)
