@@ -1,13 +1,9 @@
-"""Spec for the lexical query (DB.md §6.2), written before the Author implements it (ticket 2.03).
+"""Spec for the lexical query (DB.md §6.2), written before it was implemented (tickets 2.02, 2.03).
 
 The corpus is hand-made (``tests/retrieval_corpus.py``): each group of chunks shares a rare word, so
 the expected matches and the expected order are known without running any query. Nothing here
 recomputes a rank; the tests pin the observable contract: which chunks come back, in which order,
 with which fields, and that the question is never interpreted as query syntax.
-
-Every test is a strict ``xfail`` until 2.03. ``raises=NotImplementedError`` makes the marker mean
-"fails only because the stub raises", so a broken fixture or test shows up as a real failure now.
-When implementing, delete the ``SPEC`` line from ``pytestmark``.
 """
 
 from __future__ import annotations
@@ -32,10 +28,7 @@ from tests.retrieval_corpus import (
 )
 from tests.support import insert_chunk, insert_document, insert_index_version
 
-SPEC = pytest.mark.xfail(
-    strict=True, raises=NotImplementedError, reason="Author implements in 2.03"
-)
-pytestmark = [pytest.mark.integration, SPEC]
+pytestmark = [pytest.mark.integration]
 
 QUOKKA_KEYS = ["or_one", "or_two", "or_three"]
 
