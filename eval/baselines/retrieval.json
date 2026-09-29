@@ -10,12 +10,15 @@
     "n": 25,
     "k": 20,
     "golden_set_version": "v1",
-    "index_config_hash": "2f14daea3b0be218e991c41f4394111f70e9974ea37deac59b2a7611198b3efe",
+    "golden_set_sha256": "8f0848177a5cb5a8ef649ee211ab9afb7f9bc07c73d37b37cbf3ef554e1abcb2",
+    "index_config_hash": "4949e8a3207c4294f1f39a763eba8c286fc4fc79499420b841321a66c4cf7e5a",
+    "retrieval_config_hash": "4fbe7f1b8b627244b0f7ebcb74879abff8eb9d09a40b7b3440d6b542ae9b9628",
     "fastapi_ref": "0.141.1",
     "fastapi_sha": "95f8322ee1dcda7ceace7b1c4f6c9915b36d748f",
     "embedding_model": "gemini-embedding-001",
     "embedding_dim": 768,
-    "git_sha": "7f7e414debcfff4cc23a01ca989f68c8652b8f5b",
-    "date": "2026-09-29T08:22:09.407242Z"
+    "git_sha": "f24b79d195b1a3d18ba3b4a6f40813424f8ab8f5",
+    "git_dirty": false,
+    "date": "2026-09-29T21:36:35.204113Z"
   }
 }
