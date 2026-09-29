@@ -34,7 +34,7 @@ heading moves to the next part together with that block. No overlap is added bef
       plus an oversized atomic block stay together above max.
 - [x] All existing tests pass (an expectation of overlap before an H4, if any, is changed with an explanation).
 - [x] `test_ingest_pipeline.py`: `chunker_version` is in the config and changes the hash.
-- [ ] Real corpus, locally, **with the Author's confirmation** (it spends their embedding key for a few calls):
+- [x] Real corpus, locally, **with the Author's confirmation** (it spends their embedding key for a few calls):
       (1) an out-of-repo script finds 0 chunks whose last non-empty line is a heading (before: ≥ 1);
       (2) `ingest --dry-run` reports N texts to embed (N = changed chunks, expected small; the cache is content
       addressed); (3) `ingest --activate` builds v2, `golden validate --against-index` passes, and
