@@ -20,9 +20,9 @@
   ingest of an already built version and an eval with a warm cache need no key.
 
 **Acceptance criteria**
-- [ ] A temporary git repo test: an untracked file leaves the tree clean, a modified tracked file makes it dirty.
-- [ ] `LazyEmbedder` builds nothing until called, and passes the error through.
-- [ ] Integration: `ingest` of an existing version without a key says "already built"; a repeated eval with every
+- [x] A temporary git repo test: an untracked file leaves the tree clean, a modified tracked file makes it dirty.
+- [x] `LazyEmbedder` builds nothing until called, and passes the error through.
+- [x] Integration: `ingest` of an existing version without a key says "already built"; a repeated eval with every
       vector cached passes without a key; a cold cache without a key ends in a clean error.
 
 **Verify:** standard checks.

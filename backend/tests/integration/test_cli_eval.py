@@ -15,7 +15,7 @@ import grounded.cli
 from grounded.cli import app
 from grounded.evals.retrieval_runner import read_run
 from grounded.infra.kvcache import KVCache
-from grounded.ingest.embed import FakeEmbedder, TokenCounter
+from grounded.ingest.embed import FakeEmbedder, GeminiEmbedder, TokenCounter
 from grounded.ingest.pipeline import index_spec, ingest, prepare_corpus
 from grounded.ingest.types import ChunkingConfig, CorpusCheckout
 from grounded.settings import Settings
@@ -199,3 +199,35 @@ def test_eval_rejects_bad_arguments(tmp_path: Path, args: list[str], message: st
     result = invoke(*(arg.replace("{tmp}", str(tmp_path)) for arg in args))
     assert result.exit_code == 1
     assert message in result.output
+
+
+def without_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """From here on the real ``GeminiEmbedder`` has no key, so using it fails the command."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(grounded.cli, "GeminiEmbedder", GeminiEmbedder)
+
+
+@pytest.mark.usefixtures("settings")
+def test_eval_with_every_query_vector_cached_needs_no_key(
+    db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build_index(db, tmp_path)
+    args = ("--golden", str(golden_file(tmp_path)), "--out", str(tmp_path / "r.json"))
+    assert invoke(*args).exit_code == 0
+
+    without_a_key(monkeypatch)
+    again = invoke(*args)
+    assert again.exit_code == 0, again.output
+    assert "0 questions embedded, 1 from cache" in again.stdout
+
+
+@pytest.mark.usefixtures("settings")
+def test_eval_on_a_cold_cache_without_a_key_fails_cleanly(
+    db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build_index(db, tmp_path)
+    without_a_key(monkeypatch)
+    result = invoke("--golden", str(golden_file(tmp_path)), "--out", str(tmp_path / "r.json"))
+    assert result.exit_code == 1
+    assert "GEMINI_API_KEY must be set to embed: 1 questions are not cached." in result.output
+    assert isinstance(result.exception, SystemExit)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import subprocess
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -257,3 +258,30 @@ def test_repo_state_in_and_outside_a_checkout(tmp_path: Path) -> None:
     assert len(sha) == 40
     assert isinstance(dirty, bool)
     assert repo_state(tmp_path) == (None, None)
+
+
+def _git(root: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+
+
+def test_repo_state_ignores_untracked_files_but_not_edits(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.email", "test@example.com")
+    _git(tmp_path, "config", "user.name", "Test")
+    _git(tmp_path, "config", "commit.gpgsign", "false")
+    tracked = tmp_path / "tracked.txt"
+    tracked.write_text("one\n", encoding="utf-8")
+    _git(tmp_path, "add", "tracked.txt")
+    _git(tmp_path, "commit", "-q", "-m", "init")
+
+    sha, dirty = repo_state(tmp_path)
+    assert sha is not None
+    assert dirty is False
+
+    # A scratch file or a new ticket directory doesn't change the code under test ...
+    (tmp_path / "scratch.py").write_text("print()\n", encoding="utf-8")
+    assert repo_state(tmp_path) == (sha, False)
+
+    # ... but an edit to a tracked file does.
+    tracked.write_text("two\n", encoding="utf-8")
+    assert repo_state(tmp_path) == (sha, True)

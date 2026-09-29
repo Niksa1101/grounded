@@ -44,7 +44,7 @@ from grounded.infra.kvcache import KVCache
 from grounded.infra.provider_errors import ProviderRateLimited
 from grounded.ingest.chunker import chunk_document
 from grounded.ingest.corpus import EXCLUDED_PAGES, discover_pages
-from grounded.ingest.embed import CachedEmbedder, Embedder, TaskType, embedding_cache_key
+from grounded.ingest.embed import CachedEmbedder, Embedder, TaskType, count_uncached_texts
 from grounded.ingest.markdown import PARSER_VERSION, parse_page
 from grounded.ingest.tokens import TokenCounter
 from grounded.ingest.types import Chunk, ChunkingConfig, CorpusCheckout, ParsedDocument
@@ -176,13 +176,8 @@ def index_spec(
 
 def count_uncached(cache: KVCache, spec: IndexSpec, chunks: Sequence[Chunk]) -> int:
     """Distinct chunk texts with no cached vector: what an ingest would send to the provider."""
-    keys = list(
-        dict.fromkeys(
-            embedding_cache_key(spec.embedding_model, spec.embedding_dim, _TASK, c.embedding_text)
-            for c in chunks
-        )
-    )
-    return len(keys) - len(cache.get_many(keys))
+    texts = [chunk.embedding_text for chunk in chunks]
+    return count_uncached_texts(cache, spec.embedding_model, spec.embedding_dim, _TASK, texts)
 
 
 def check_input_lengths(chunks: Sequence[Chunk], count_tokens: TokenCounter, limit: int) -> None:
