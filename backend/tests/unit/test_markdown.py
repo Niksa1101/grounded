@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 
 import pytest
@@ -270,3 +271,27 @@ def test_long_ordinary_code_line_is_not_binary_data() -> None:
     # Identifiers and dotted paths break the run with "_", "." or spaces long before 400 chars.
     line = "result = " + " + ".join(f"some_module.value_{i}" for i in range(60))
     assert len(_code(f"# T\n\n```python\n{line}\n```\n")) == 1
+
+
+def test_unclosed_container_marker_warns_and_leaves_the_blocks_flat(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="grounded.ingest.markdown"):
+        doc = _parse("# T\n\n/// tip | Pro tip\n\nFirst.\n\nAfter.\n")
+
+    [record] = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert record.getMessage() == "container marker never closed"
+    assert getattr(record, "page") == PAGE.source_path  # noqa: B009
+    assert getattr(record, "markers") == ["/// tip | Pro tip"]  # noqa: B009
+    # No merge happens: the blocks are what they were before the warning existed.
+    assert doc.blocks[1:] == (
+        TextBlock(markdown="/// tip | Pro tip", kind="paragraph"),
+        TextBlock(markdown="First.", kind="paragraph"),
+        TextBlock(markdown="After.", kind="paragraph"),
+    )
+
+
+def test_closed_containers_do_not_warn(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level(logging.WARNING, logger="grounded.ingest.markdown"):
+        _parse("# T\n\n/// tip\n\nBody.\n\n///\n")
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

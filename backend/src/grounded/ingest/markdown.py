@@ -168,7 +168,7 @@ def _blocks(text: str, source_path: str) -> list[Block]:
 
     if dropped:
         logger.debug("html blocks dropped", extra={"page": source_path, "count": dropped})
-    pending = _merge_prose_containers(pending, lines)
+    pending = _merge_prose_containers(pending, lines, source_path)
     heading_blocks = _heading_blocks(headings)
     return [heading_blocks[item] if isinstance(item, int) else item for item, _, _ in pending]
 
@@ -197,13 +197,16 @@ def _drop_noise_code(blocks: list[Block], source_path: str) -> list[Block]:
 
 
 def _merge_prose_containers(
-    pending: list[tuple[Block | int, int, int]], lines: list[str]
+    pending: list[tuple[Block | int, int, int]], lines: list[str], source_path: str
 ) -> list[tuple[Block | int, int, int]]:
     """Turn each ``/// type`` … ``///`` container holding only text into one text block.
 
     Otherwise the chunker sees the "/// tip" marker, the body and the closing "///" as separate
     paragraphs and may cut a tip away from its marker. A container with code or a heading inside
     stays flat, so the code block keeps its own (atomic) block.
+
+    A marker that is never closed leaves its blocks flat and logs a warning: it changes nothing in
+    the output (so ``PARSER_VERSION`` stays), but a page with a stray marker is worth a look.
     """
     groups: list[tuple[int, int]] = []  # (open index, close index) into `pending`
     stack: list[tuple[str, int]] = []
@@ -218,6 +221,12 @@ def _merge_prose_containers(
             inner = pending[open_index : index + 1]
             if all(isinstance(block, TextBlock) for block, _, _ in inner):
                 groups.append((open_index, index))
+
+    if stack:
+        markers = [_slice(lines, pending[i][1], pending[i][1] + 1) for _, i in stack]
+        logger.warning(
+            "container marker never closed", extra={"page": source_path, "markers": markers}
+        )
 
     merged: list[tuple[Block | int, int, int]] = []
     index = 0

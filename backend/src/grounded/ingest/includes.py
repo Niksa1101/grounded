@@ -15,7 +15,9 @@ preprocessors do):
 
 Paths are relative to ``docs/en`` (where mkdocs runs), e.g. ``../../docs_src/x.py``. A path that
 doesn't exist or leaves the repository is an ``IncludeError``: ingest fails instead of indexing a
-page with a hole where the example should be.
+page with a hole where the example should be. So is a page line that *looks* like a directive but
+matches neither form (an indented ``{* *}``, a trailing space, a malformed ``{! !}``): left alone,
+it would be indexed as literal text, the same hole without the error.
 """
 
 from __future__ import annotations
@@ -34,6 +36,9 @@ INCLUDE_BASE_DIR: Final = "docs/en"
 _VARIANT_RE = re.compile(r"^\{\*\s*(?P<path>\S+)\s*(?P<config>.*)\*\}$")
 _CONFIG_RE = re.compile(r"(?P<name>\w+)\[(?P<value>[^\]]+)\]")
 _LEGACY_RE = re.compile(r"^(?P<indent>\s*)\{!>?\s*(?P<path>[^!]+?)\s*!\}\s*$")
+# A line that starts like either directive (``{* `` or ``{!``; ``{**kwargs}`` is just Python).
+# Checked only after both real forms failed to match.
+_DIRECTIVE_LIKE_RE = re.compile(r"^\s*(?:\{\*\s|\{!)")
 # Rendering-only highlight option on a fence opening line (legacy blocks carry it).
 _HL_LINES_RE = re.compile(r'^(?P<head>\s{0,3}(?:`{3,}|~{3,})[^`]*?)\s+hl_lines="[^"]*"')
 
@@ -62,6 +67,12 @@ def resolve_includes(text: str, root: Path, *, source_path: str) -> str:
             logger.debug("legacy include resolved", extra={"at": where, "path": match["path"]})
             # Keep the directive's indentation, or a fence inside a list item would break.
             out.extend(f"{match['indent']}{code}" if code else code for code in lines)
+        elif _DIRECTIVE_LIKE_RE.match(line):
+            # Only page lines get here: included code is never scanned for directives.
+            raise IncludeError(
+                f"{where}: looks like an include directive but matches neither supported form: "
+                f"{line.strip()!r}"
+            )
         else:
             out.append(_HL_LINES_RE.sub(r"\g<head>", line))
     return "\n".join(out)

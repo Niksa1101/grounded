@@ -28,10 +28,10 @@ different chunks.
   `0001` is stale and DB.md wins.
 
 **Acceptance criteria**
-- [ ] `test_includes.py`: three shapes of a fake directive fail with `file:line`.
-- [ ] `test_markdown.py`: an unclosed marker logs a warning (`caplog`), blocks are unchanged.
-- [ ] `test_embed.py`: over the limit raises without any `sleep`; under it waits the server's delay.
-- [ ] `grounded ingest --dry-run` on 0.141.1: 125 pages, 1,045 chunks, **"0 texts to embed"**, no include errors, no
+- [x] `test_includes.py`: three shapes of a fake directive fail with `file:line`.
+- [x] `test_markdown.py`: an unclosed marker logs a warning (`caplog`), blocks are unchanged.
+- [x] `test_embed.py`: over the limit raises without any `sleep`; under it waits the server's delay.
+- [x] `grounded ingest --dry-run` on 0.141.1: 125 pages, 1,045 chunks, **"0 texts to embed"**, no include errors, no
       marker warnings (proves the chunks are byte-identical).
 
 **Verify:** standard checks, then the dry run above.

@@ -159,6 +159,7 @@ class GeminiEmbedder:
         tpm: int,
         max_input_tokens: int,
         max_retries: int,
+        max_retry_wait_s: float,
         timeout_s: float,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
@@ -175,6 +176,7 @@ class GeminiEmbedder:
         self._tpm = tpm
         self._max_input_tokens = max_input_tokens
         self._max_retries = max_retries
+        self._max_retry_wait_s = max_retry_wait_s
         self._timeout_s = timeout_s
         self._sleep = sleep
         self._rng = rng or random.Random()
@@ -196,6 +198,7 @@ class GeminiEmbedder:
             tpm=settings.embedding_tpm,
             max_input_tokens=settings.embedding_max_input_tokens,
             max_retries=settings.embedding_max_retries,
+            max_retry_wait_s=settings.embedding_max_retry_wait_s,
             timeout_s=settings.embedding_timeout_s,
         )
 
@@ -244,6 +247,17 @@ class GeminiEmbedder:
                 if isinstance(exc, ProviderRateLimited) and exc.is_quota:
                     raise
                 server_delay = exc.retry_after_s if isinstance(exc, ProviderRateLimited) else None
+                if server_delay is not None and server_delay > self._max_retry_wait_s:
+                    # Not "wait less": retrying before the server's deadline would break
+                    # Retry-After (AGENTS.md §6.15), and rejected calls still count toward the
+                    # quota. A wait this long is not an RPM/TPM window, so stop and say so.
+                    raise ProviderRateLimited(
+                        f"the server asks for a {server_delay:g}s wait, over the "
+                        f"{self._max_retry_wait_s:g}s EMBEDDING_MAX_RETRY_WAIT_S; "
+                        f"not retrying: {exc}",
+                        retry_after_s=server_delay,
+                        is_quota=False,
+                    ) from exc
                 delay = server_delay or self._backoff_s(attempt)
                 error = exc
             attempt += 1

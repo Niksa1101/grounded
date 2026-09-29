@@ -66,6 +66,8 @@ class Settings(BaseSettings):
     embedding_tpm: int = Field(default=30_000, gt=0)
     embedding_max_input_tokens: int = Field(default=2048, gt=0)
     embedding_max_retries: int = Field(default=5, ge=0)
+    # The longest server-given Retry-After that is waited out; a longer one stops the run.
+    embedding_max_retry_wait_s: float = Field(default=60.0, gt=0)
     embedding_timeout_s: float = Field(default=30.0, gt=0)
 
     generator_providers: Annotated[list[str], NoDecode] = ["gemini", "groq"]

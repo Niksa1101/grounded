@@ -132,6 +132,7 @@ def _embedder(
         "tpm": 30_000,
         "max_input_tokens": 2048,
         "max_retries": 5,
+        "max_retry_wait_s": 60.0,
         "timeout_s": 30.0,
         "sleep": time.sleep,
         "clock": time.clock,
@@ -297,6 +298,33 @@ async def test_rate_limit_waits_the_server_delay_then_succeeds() -> None:
     assert vectors == [l2_normalize(_raw_values("a"))]
     assert time.sleeps == [7.0]
     assert embedder.api_calls == 2
+
+
+async def test_a_server_wait_at_the_cap_is_still_honored() -> None:
+    time = _FakeTime()
+    models = _FakeModels([_rate_limited(retry_delay="60s", quota_id=_PER_MINUTE)])
+    await _embedder(models, time).embed(["a"], "RETRIEVAL_DOCUMENT")
+    assert time.sleeps == [60.0]  # never shortened: retrying early would ignore Retry-After
+
+
+async def test_a_server_wait_over_the_cap_stops_at_once_without_sleeping() -> None:
+    time = _FakeTime()
+    models = _FakeModels([_rate_limited(retry_delay="61s", quota_id=_PER_MINUTE)])
+
+    with pytest.raises(ProviderRateLimited, match="EMBEDDING_MAX_RETRY_WAIT_S") as excinfo:
+        await _embedder(models, time).embed(["a"], "RETRIEVAL_DOCUMENT")
+
+    assert excinfo.value.retry_after_s == 61.0
+    assert excinfo.value.is_quota is False  # a long wait, not a daily quota
+    assert len(models.calls) == 1  # no second attempt that would burn quota
+    assert time.sleeps == []
+
+
+async def test_the_cap_is_configurable() -> None:
+    time = _FakeTime()
+    models = _FakeModels([_rate_limited(retry_delay="7s")])
+    with pytest.raises(ProviderRateLimited, match="over the 5s"):
+        await _embedder(models, time, max_retry_wait_s=5.0).embed(["a"], "RETRIEVAL_DOCUMENT")
 
 
 async def test_rate_limit_falls_back_to_the_retry_after_header() -> None:
