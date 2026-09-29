@@ -35,6 +35,7 @@ from datetime import datetime
 from typing import Any
 
 import psycopg
+import psycopg.errors
 from pgvector import Vector
 from pgvector.psycopg import register_vector
 from psycopg.rows import class_row
@@ -58,6 +59,17 @@ _MAX_LISTED_SECTIONS = 10
 
 class IngestError(Exception):
     """Ingest stopped; the message says why and what (if anything) is left in the database."""
+
+
+class ConfigAlreadyBuiltError(IngestError):
+    """Another ingest marked a version with the same config hash ready first (the unique index
+    from migration 0002). Nothing of this run is kept, and it leaves no ``failed`` row: it is
+    a lost race, not a failure worth recording."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__(
+            f"another ingest already built index {label} with this config; re-run to reuse it"
+        )
 
 
 class EmbeddingQuotaExhaustedError(IngestError):
@@ -279,6 +291,8 @@ def ingest(
     with _connect(conninfo) as conn:
         try:
             version_id = _store(conn, corpus, spec, vectors, stats)
+        except ConfigAlreadyBuiltError:
+            raise
         except Exception as exc:
             failed_id = _record_failure(conn, spec, exc)
             where = (
@@ -373,6 +387,8 @@ FROM chunks
 WHERE index_version_id = %(id)s
 """
 
+_READY_UNIQUE_INDEX = "index_versions_one_ready_per_config"  # migration 0002
+
 _MARK_READY = """
 UPDATE index_versions
 SET status = 'ready', ready_at = now(),
@@ -458,7 +474,12 @@ def _store(
         cur.executemany(_INSERT_CHUNK, rows)
 
         verified = _verify(conn, version_id, spec, len(corpus.documents), chunk_count)
-        conn.execute(_MARK_READY, {**verified, "token_stats": Jsonb(stats), "id": version_id})
+        try:
+            conn.execute(_MARK_READY, {**verified, "token_stats": Jsonb(stats), "id": version_id})
+        except psycopg.errors.UniqueViolation as exc:
+            if exc.diag.constraint_name != _READY_UNIQUE_INDEX:
+                raise
+            raise ConfigAlreadyBuiltError(spec.label) from exc
     logger.info(
         "index version stored",
         extra={

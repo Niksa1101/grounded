@@ -10,10 +10,12 @@ from typing import Any, LiteralString
 import psycopg
 import pytest
 
+import grounded.ingest.pipeline as pipeline
 from grounded.infra.kvcache import KVCache
 from grounded.infra.provider_errors import ProviderRateLimited, ProviderUnavailable
 from grounded.ingest.embed import FakeEmbedder, TaskType, Vector, fake_vector
 from grounded.ingest.pipeline import (
+    ConfigAlreadyBuiltError,
     EmbeddingQuotaExhaustedError,
     IngestError,
     IngestReport,
@@ -328,6 +330,27 @@ def test_store_failure_leaves_only_a_failed_record(
     assert "CheckViolation" in row.notes
     assert fetch(db, "SELECT count(*) FROM documents") == [(0,)]
     assert fetch(db, "SELECT count(*) FROM chunks") == [(0,)]
+
+
+def test_losing_the_race_for_a_config_is_a_clear_error_without_a_failed_row(
+    db: str, corpus: PreparedCorpus, cache: KVCache, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    embedder = FakeEmbedder(dim=DIM)
+    first = run(db, corpus, embedder, cache)
+    # A concurrent ingest passed the "already built?" check before `first` marked its version
+    # ready; the unique index (migration 0002) is what stops the second one.
+    monkeypatch.setattr(pipeline, "_find_ready_version", lambda conn, config_hash: None)
+
+    with pytest.raises(ConfigAlreadyBuiltError, match="re-run to reuse it") as excinfo:
+        run(db, corpus, embedder, cache, activate=True)
+    assert isinstance(excinfo.value, IngestError)
+    assert isinstance(excinfo.value.__cause__, psycopg.errors.UniqueViolation)
+
+    # Nothing of the losing run remains, not even a "failed" row: it would only be noise.
+    [row] = list_index_versions(db)
+    assert (row.id, row.status) == (first.index_version_id, "ready")
+    assert fetch(db, "SELECT count(*) FROM documents") == [(len(corpus.documents),)]
+    assert fetch(db, "SELECT count(*) FROM chunks") == [(len(corpus.chunks),)]
 
 
 def test_dimension_mismatch_fails_before_embedding(
