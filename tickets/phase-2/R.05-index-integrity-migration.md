@@ -28,11 +28,11 @@ ALTER TABLE chunks DROP CONSTRAINT chunks_document_id_fkey;  -- superseded by th
 - Applied migrations are never edited. Neon is not touched (Phase 5).
 
 **Acceptance criteria**
-- [ ] A second `ready` row with the same hash is rejected.
-- [ ] A chunk pointing at a document of another version is rejected.
-- [ ] Storing the same spec twice gives the clear error.
-- [ ] The migration runs over a database that already holds v1 data.
-- [ ] Locally: `grounded migrate`, then `grounded index list` shows v1 unchanged.
+- [x] A second `ready` row with the same hash is rejected.
+- [x] A chunk pointing at a document of another version is rejected.
+- [x] Storing the same spec twice gives the clear error.
+- [x] The migration runs over a database that already holds v1 data.
+- [x] Locally: `grounded migrate`, then `grounded index list` shows v1 unchanged.
 
 **Verify:** standard checks, `uv run grounded migrate`, `uv run grounded index list`.
 

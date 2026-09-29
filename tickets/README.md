@@ -134,7 +134,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.02](phase-2/R.02-eval-tooling-fixes.md) | Eval tooling fixes: dirty-tree check, lazy embedder | Build | G | done | |
 | [R.03](phase-2/R.03-baseline-integrity.md) | Baseline integrity: golden-set hash, refuse mixing | Build | G | done | |
 | [R.04](phase-2/R.04-ingest-guards.md) | Ingest guards and documentation drift | Build | G | done | |
-| [R.05](phase-2/R.05-index-integrity-migration.md) | Migration `0002`: index integrity | Build | G | todo | |
+| [R.05](phase-2/R.05-index-integrity-migration.md) | Migration `0002`: index integrity | Build | G | done | |
 | [R.06](phase-2/R.06-ci-hardening.md) | CI hardening: pinned actions, one tokenizer source | Build | G | todo | |
 | [R.07](phase-2/R.07-chunker-keep-with-next.md) | Chunker: keep a heading with the block after it | Build | G (delegated) | todo | |
 | [R.08](phase-2/R.08-golden-label-check.md) | Manual check of golden labels, explain-back | Author | A (+G worksheet) | todo | |

@@ -111,7 +111,7 @@ Not in the database, on purpose:
 - **Embedding cache, rerank cache, eval LLM-response cache.** These are SQLite files under `.cache/` used by ingest/eval locally and restored in CI via `actions/cache`. This keeps CI independent of production and avoids re-embedding the corpus on every run.
 - **Rate-limit counters.** In memory, since there is a single backend instance (see Tech.md §12).
 
-## 4. Schema (migration `0001_init.sql`)
+## 4. Schema (migrations `0001_init.sql`, `0002_index_integrity.sql`)
 
 ```sql
 -- 0001_init.sql
@@ -280,6 +280,22 @@ CREATE TABLE eval_runs (
 CREATE INDEX eval_runs_latest_idx ON eval_runs (suite, config_name, created_at DESC);
 ```
 
+**`0002_index_integrity.sql`** (Phase 2 review follow-up, approved 2026-09-29) adds two guarantees on top of the schema above:
+
+```sql
+-- At most one ready version per config (two concurrent ingests of the same config).
+CREATE UNIQUE INDEX index_versions_one_ready_per_config
+    ON index_versions (config_hash) WHERE status = 'ready';
+-- A chunk's document belongs to the chunk's index version.
+ALTER TABLE documents ADD CONSTRAINT documents_id_version_key UNIQUE (id, index_version_id);
+ALTER TABLE chunks ADD CONSTRAINT chunks_document_same_version_fkey
+    FOREIGN KEY (document_id, index_version_id)
+    REFERENCES documents (id, index_version_id) ON DELETE CASCADE;
+ALTER TABLE chunks DROP CONSTRAINT chunks_document_id_fkey;  -- superseded by the composite FK
+```
+
+The old single-column `chunks.document_id` FK is dropped because the composite one implies it. No data is lost. The `chunks` and `documents` DDL above is the `0001` shape; after `0002` a chunk is tied to a document *of its own version*, and a `retired` version no longer blocks rebuilding its config (only `ready` rows are unique).
+
 Design notes:
 - **`chunking_config` keys.** The comment in the applied `0001_init.sql` (`"overlap":50`) is stale and can't be edited (an applied migration never changes). The stored keys are those of `ChunkingConfig` (`strategy`, `max_tokens`, `overlap_tokens`, `min_tokens`, `tokenizer`) plus `excluded_pages` and `parser_version`. This document wins.
 - **Why `vector(768)` is fixed.** pgvector column types carry the dimension. A different dimension means a new migration and a full re-index. This is intentional: it makes a model change a visible decision.
@@ -357,7 +373,7 @@ Token totals are added after the call with a plain `UPDATE`. `rerank_calls` uses
 
 ### 7.3 Index activation (ingest, owner role)
 Ingest marks a version `ready` (with `ready_at`) in the same transaction that stores and verifies it
-(Tech.md §5.7). Activation then only flips `is_active`, in one transaction, and only for a `ready` version:
+(Tech.md §5.7). The unique index `index_versions_one_ready_per_config` (`0002`) means two concurrent ingests of one config can't both finish: the second one fails at this step, and ingest reports it as "another ingest already built this config; re-run to reuse it", without a `failed` row. Activation then only flips `is_active`, in one transaction, and only for a `ready` version:
 ```sql
 UPDATE index_versions SET is_active = false WHERE is_active AND id <> %s;
 UPDATE index_versions SET is_active = true WHERE id = %s AND status = 'ready';  -- 0 rows => error, rolled back
