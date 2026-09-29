@@ -1,0 +1,21 @@
+{
+  "dense": {
+    "metrics": {
+      "recall@5": 0.76,
+      "recall@10": 0.92,
+      "mrr": 0.7139047619047619,
+      "ndcg@5": 0.6984234114638207,
+      "ndcg@10": 0.7518611084672964
+    },
+    "n": 25,
+    "k": 20,
+    "golden_set_version": "v1",
+    "index_config_hash": "2f14daea3b0be218e991c41f4394111f70e9974ea37deac59b2a7611198b3efe",
+    "fastapi_ref": "0.141.1",
+    "fastapi_sha": "95f8322ee1dcda7ceace7b1c4f6c9915b36d748f",
+    "embedding_model": "gemini-embedding-001",
+    "embedding_dim": 768,
+    "git_sha": "7f7e414debcfff4cc23a01ca989f68c8652b8f5b",
+    "date": "2026-09-29T08:22:09.407242Z"
+  }
+}
