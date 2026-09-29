@@ -342,7 +342,7 @@ The query specs below are **contracts**. The Author implements the lexical and h
 - **Pitfall to handle:** `plainto_tsquery` / `websearch_to_tsquery` use AND semantics. A natural-language question with 8 content words almost never matches a single chunk. Build an **OR** query from the question's lexemes instead. Approach: stem with `to_tsvector('english', q)`, extract lexemes with `tsvector_to_array`, quote each one, join with `|`, and build the query with `to_tsquery('simple', …)`. The `simple` config avoids stemming the already-stemmed lexemes twice.
 - Empty query (only stopwords) → return no rows, not an error.
 - Rank with `ts_rank_cd(tsv, query)` descending.
-- Output rows: `chunk_id, rank, score`.
+- Output rows: `chunk_id, rank, score`. `score` is the `ts_rank_cd` value and is kept as `RetrievedChunk.fts_score` (decided 2026-09-29), next to `fts_rank`. Ties in `score` break by chunk id ascending.
 
 ### 6.3 Hybrid with RRF (Phase 2, Author)
 - One SQL statement with CTEs: `dense` (ranked), `lexical` (ranked), `fused` = full outer join on `chunk_id`.
