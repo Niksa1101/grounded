@@ -127,3 +127,31 @@ def test_bad_line_ranges_fail(ranges: str) -> None:
 def test_unknown_option_fails() -> None:
     with pytest.raises(IncludeError, match="unknown include option"):
         _resolve("{* ../../docs_src/background_tasks/tutorial001_py310.py zz[1] *}")
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        pytest.param("  {* ../../docs_src/background_tasks/tutorial001_py310.py *}", id="indented"),
+        pytest.param("{* ../../docs_src/background_tasks/tutorial001_py310.py *} ", id="trailing"),
+        pytest.param("{! ../../docs_src/templates/item.html", id="unclosed-legacy"),
+    ],
+)
+def test_a_line_that_looks_like_a_directive_but_isnt_one_fails(line: str) -> None:
+    # Left alone it would be indexed as literal text: a hole where the example should be.
+    with pytest.raises(IncludeError, match=r"page\.md:3: looks like an include directive") as info:
+        _resolve(f"a\n\n{line}")
+    assert line.strip() in str(info.value)
+
+
+def test_only_the_page_is_checked_not_the_included_code(tmp_path: Path) -> None:
+    (tmp_path / "docs" / "en").mkdir(parents=True)
+    (tmp_path / "docs_src").mkdir()
+    (tmp_path / "docs_src" / "doc.py").write_text("{* not a directive *}\n{!nor this\n", "utf-8")
+    out = resolve_includes("{* ../../docs_src/doc.py *}", tmp_path, source_path="p.md")
+    assert out.split("\n") == ["```python", "{* not a directive *}", "{!nor this", "```"]
+
+
+def test_python_set_and_dict_unpacking_at_line_start_is_not_a_directive() -> None:
+    text = "```python\n{**old_dict, 'k': 1}\n{*a, *b}\n```"
+    assert _resolve(text) == text

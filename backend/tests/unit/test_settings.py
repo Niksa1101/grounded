@@ -39,7 +39,13 @@ def test_embedding_defaults_match_the_free_tier() -> None:
     s = make_settings()
     assert (s.embedding_batch_size, s.embedding_rpm, s.embedding_tpm) == (100, 100, 30_000)
     assert (s.embedding_max_input_tokens, s.embedding_max_retries) == (2048, 5)
+    assert s.embedding_max_retry_wait_s == 60.0
     assert s.embedding_timeout_s == 30.0
+
+
+def test_embedding_max_retry_wait_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        make_settings(embedding_max_retry_wait_s=0)
 
 
 def test_embedding_batch_size_is_capped_at_the_api_maximum() -> None:

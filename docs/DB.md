@@ -281,6 +281,7 @@ CREATE INDEX eval_runs_latest_idx ON eval_runs (suite, config_name, created_at D
 ```
 
 Design notes:
+- **`chunking_config` keys.** The comment in the applied `0001_init.sql` (`"overlap":50`) is stale and can't be edited (an applied migration never changes). The stored keys are those of `ChunkingConfig` (`strategy`, `max_tokens`, `overlap_tokens`, `min_tokens`, `tokenizer`) plus `excluded_pages` and `parser_version`. This document wins.
 - **Why `vector(768)` is fixed.** pgvector column types carry the dimension. A different dimension means a new migration and a full re-index. This is intentional: it makes a model change a visible decision.
 - **Why `breadcrumb_text` is denormalized.** Generated columns need immutable expressions. Joining an array inside the generated `tsv` expression is avoided, and the same string is reused in the prompt and in the embedded text.
 - **Why FTS weights.** Headings (weight A) matter more than body text (B). `ts_rank_cd` respects weights.
