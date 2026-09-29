@@ -2,7 +2,7 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phase 0 (Foundations) done; Phase 1 (ingestion, golden set, dense baseline) next.** Everything below describes the target system. Sections marked
+> 🚧 **Status: Phases 0–1 done (foundations; ingestion, golden set, dense baseline); Phase 2 (hybrid retrieval) next.** Everything below describes the target system. Sections marked
 > _TBD_ are filled in only from committed eval results and real measurements, never by hand.
 
 | | |
@@ -53,21 +53,21 @@ Details: [docs/Tech.md](docs/Tech.md).
 
 ## Evaluation
 
-Golden set: ~30 hand-curated questions (≈25 answerable, ≈5 deliberately unanswerable) with section-level graded
+Golden set: 30 hand-curated questions (25 answerable, 5 deliberately unanswerable) with section-level graded
 relevance labels. Retrieval metrics are deterministic. Generation metrics use an LLM judge on a *different* provider
 than the generator, and the judge's agreement with human labels is published.
 
 | Config | Recall@5 | MRR | nDCG@5 | Faithfulness | Correctness | Refusal acc. | p95 latency | $ / 1k questions* |
 |---|---|---|---|---|---|---|---|---|
 | no_rag (LLM only) | — | — | — | — | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| dense | _TBD_ | _TBD_ | _TBD_ | | | | | |
+| dense | 0.76 | 0.71 | 0.70 | | | | | |
 | fts | _TBD_ | _TBD_ | _TBD_ | | | | | |
 | hybrid (RRF) | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 | hybrid + rerank | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 
 \* Shadow cost: real token counts × paid list prices (dated in `backend/pricing.toml`); the demo itself runs on free tiers.
 
-Judge–human agreement: _TBD_ · Golden set: `v1`, n = _TBD_ · Numbers come from `eval/baselines/*.json`.
+Judge–human agreement: _TBD_ · Golden set: `v1`, retrieval n = 25 (answerable questions; 1 question = 0.04) · Numbers come from `eval/baselines/*.json`, rounded to 2 decimals.
 
 ### CI quality gate
 - **Every PR:** lint, types, unit + integration tests, retrieval eval vs baseline.
@@ -165,7 +165,7 @@ npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | ✅ done |
-| 1 | Ingestion, golden set, dense baseline | ⬜ |
+| 1 | Ingestion, golden set, dense baseline | ✅ done |
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ⬜ |
 | 3 | `/v1/ask` with structured output, citations, confidence | ⬜ |
 | 4 | promptfoo generation eval + CI quality gate | ⬜ |
