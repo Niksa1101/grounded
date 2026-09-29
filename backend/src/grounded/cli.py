@@ -33,7 +33,6 @@ from grounded.evals.retrieval_runner import (
     RETRIEVAL_BASELINE,
     BaselineMismatchError,
     RetrievalEvalError,
-    RetrievalMode,
     golden_set_digest,
     golden_set_version,
     metric_names,
@@ -71,6 +70,7 @@ from grounded.ingest.pipeline import (
 from grounded.ingest.pipeline import ingest as run_ingest
 from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
+from grounded.retrieval.config import RetrievalConfig, RetrievalMode
 from grounded.retrieval.index import NoActiveIndexError
 from grounded.settings import Settings, get_settings
 
@@ -461,9 +461,8 @@ def eval_retrieval(
                 run_retrieval_eval(
                     conninfo,
                     items,
-                    modes=modes,
+                    configs=[RetrievalConfig.from_settings(settings, mode) for mode in modes],
                     embedder=embedder,
-                    k_dense=settings.k_dense,
                     golden_set_version=version,
                     golden_set_sha256=digest,
                     now=now,

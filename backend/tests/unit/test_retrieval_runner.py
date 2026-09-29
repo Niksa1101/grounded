@@ -29,6 +29,7 @@ from grounded.evals.retrieval_runner import (
     write_run,
 )
 from grounded.ingest.embed import FakeEmbedder, Vector
+from grounded.retrieval.config import RetrievalConfig, RetrievalMode
 from grounded.schemas.eval import (
     GoldenItem,
     RetrievalConfigResult,
@@ -52,6 +53,18 @@ def chunk(page: str, *anchors: str) -> Ref:
 
 
 NOISE = chunk("docs/en/docs/elsewhere.md", "noise")
+
+
+def retrieval_config(mode: RetrievalMode = "dense", **overrides: Any) -> RetrievalConfig:
+    fields: dict[str, Any] = {
+        "mode": mode,
+        "k_dense": 20,
+        "k_fts": 20,
+        "k_fused": 40,
+        "k_context": 5,
+        "rrf_k": 60,
+    }
+    return RetrievalConfig.model_validate(fields | overrides)
 
 
 def item(
@@ -139,9 +152,13 @@ async def test_evaluate_scores_answerable_questions_and_averages() -> None:
     )
     embedder = FakeEmbedder(dim=8)
 
-    result = await evaluate(items, config="dense", k=20, embedder=embedder, search=search)
+    config = retrieval_config()
+    result = await evaluate(items, config=config, k=20, embedder=embedder, search=search)
 
     assert (result.config, result.k, result.n, result.skipped_unanswerable) == ("dense", 20, 2, 1)
+    # The result says which retrieval produced it: the config itself and its hash.
+    assert result.retrieval_config == config
+    assert result.retrieval_config_hash == config.config_hash
     assert [q.id for q in result.questions] == ["q001", "q003"]
     ndcg = 3 / math.log2(8) / 3  # q003: rank 7, one grade-2 label
     assert result.metrics == pytest.approx(
@@ -165,7 +182,7 @@ async def test_evaluate_needs_an_answerable_question() -> None:
     with pytest.raises(RetrievalEvalError, match="no answerable"):
         await evaluate(
             [unanswerable("q001")],
-            config="dense",
+            config=retrieval_config(),
             k=20,
             embedder=FakeEmbedder(),
             search=ScriptedSearch({}),
@@ -191,7 +208,7 @@ def test_results_path_is_a_utc_timestamp() -> None:
 
 
 def make_run(
-    *configs: tuple[str, float], sha: str = "c" * 40, **info_overrides: Any
+    *configs: tuple[RetrievalMode, float], sha: str = "c" * 40, **info_overrides: Any
 ) -> RetrievalRun:
     info = RetrievalRunInfo(
         **{
@@ -212,6 +229,8 @@ def make_run(
     results = {
         name: RetrievalConfigResult(
             config=name,
+            retrieval_config=retrieval_config(name),
+            retrieval_config_hash=retrieval_config(name).config_hash,
             k=20,
             n=25,
             skipped_unanswerable=5,
@@ -223,12 +242,49 @@ def make_run(
     return RetrievalRun(info=info, configs=results)
 
 
+def result_fields(config: RetrievalConfig, **overrides: Any) -> dict[str, Any]:
+    fields: dict[str, Any] = {
+        "config": "dense",
+        "retrieval_config": config,
+        "retrieval_config_hash": config.config_hash,
+        "k": 20,
+        "n": 1,
+        "skipped_unanswerable": 0,
+        "metrics": {},
+        "questions": [],
+    }
+    return fields | overrides
+
+
+def test_result_rejects_a_hash_that_does_not_match_its_config() -> None:
+    edited = result_fields(
+        retrieval_config("dense"),
+        retrieval_config_hash=retrieval_config("dense", k_dense=10).config_hash,
+    )
+    with pytest.raises(ValueError, match="retrieval_config_hash does not match"):
+        RetrievalConfigResult.model_validate(edited)
+
+
+def test_result_rejects_a_config_for_another_mode() -> None:
+    with pytest.raises(ValueError, match="does not match config"):
+        RetrievalConfigResult.model_validate(result_fields(retrieval_config("hybrid")))
+
+
 def test_run_file_round_trip(tmp_path: Path) -> None:
     run = make_run(("dense", 0.5))
     path = tmp_path / "nested" / "run.json"
     write_run(path, run)
     assert read_run(path) == run
     assert b"\r\n" not in path.read_bytes()
+
+
+def test_baseline_rows_keep_their_own_config_hash(tmp_path: Path) -> None:
+    # Configs of different modes hash differently by design, so the hash is never part of the
+    # "same setup" check: a joint file holds one hash per row.
+    rows = update_baseline(tmp_path / "retrieval.json", make_run(("dense", 0.5), ("fts", 0.25)))
+    assert rows["dense"].retrieval_config_hash == retrieval_config("dense").config_hash
+    assert rows["fts"].retrieval_config_hash == retrieval_config("fts").config_hash
+    assert rows["dense"].retrieval_config_hash != rows["fts"].retrieval_config_hash
 
 
 def test_update_baseline_creates_replaces_and_keeps_rows(tmp_path: Path) -> None:
@@ -242,6 +298,7 @@ def test_update_baseline_creates_replaces_and_keeps_rows(tmp_path: Path) -> None
     assert first["dense"]["git_sha"] == "c" * 40
     assert first["dense"]["golden_set_sha256"] == "a" * 64
     assert first["dense"]["git_dirty"] is False
+    assert first["dense"]["retrieval_config_hash"] == retrieval_config("dense").config_hash
 
     # A later run of another config adds its row and leaves dense alone ...
     update_baseline(path, make_run(("fts", 0.25), sha="d" * 40))
@@ -350,6 +407,7 @@ def test_update_baseline_refuses_a_legacy_row_without_the_new_fields(tmp_path: P
     update_baseline(path, make_run(("dense", 0.5)))
     rows = json.loads(path.read_bytes())
     del rows["dense"]["golden_set_sha256"], rows["dense"]["git_dirty"]
+    del rows["dense"]["retrieval_config_hash"]
     path.write_text(json.dumps(rows), encoding="utf-8")
     before = path.read_bytes()
 
@@ -360,6 +418,7 @@ def test_update_baseline_refuses_a_legacy_row_without_the_new_fields(tmp_path: P
     # Re-running the legacy row's own config replaces it, so a joint run is the way out.
     rows_after = update_baseline(path, make_run(("dense", 0.6)))
     assert rows_after["dense"].golden_set_sha256 == "a" * 64
+    assert rows_after["dense"].retrieval_config_hash == retrieval_config("dense").config_hash
 
 
 def test_update_baseline_accepts_a_joint_run_of_every_config(tmp_path: Path) -> None:
