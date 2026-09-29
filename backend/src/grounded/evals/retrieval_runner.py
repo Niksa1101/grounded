@@ -230,10 +230,11 @@ def _write_json(path: Path, data: Mapping[str, Any]) -> None:
 
 
 def repo_state(root: Path = EVAL_DIR.parent) -> tuple[str | None, bool | None]:
-    """``(HEAD sha, has uncommitted changes)``, or ``(None, None)`` outside a git checkout."""
+    """``(HEAD sha, tracked files changed)``, or ``(None, None)`` outside a git checkout."""
     try:
         sha = _git(root, "rev-parse", "HEAD")
-        dirty = _git(root, "status", "--porcelain") != ""
+        # Untracked files (scratch scripts, notes) don't change the code under test.
+        dirty = _git(root, "status", "--porcelain", "--untracked-files=no") != ""
     except (OSError, subprocess.CalledProcessError):
         return None, None
     return sha, dirty

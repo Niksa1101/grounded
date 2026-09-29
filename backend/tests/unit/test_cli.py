@@ -125,16 +125,6 @@ def test_ingest_dry_run_needs_no_configuration(
 
 
 @pytest.mark.usefixtures("mini_corpus")
-def test_ingest_without_api_key_fails_cleanly(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    use_settings(monkeypatch, cache_dir=tmp_path, embedding_model="m", gemini_api_key=None)
-    result = runner.invoke(app, ["ingest", "--ref", "0.0.1"])
-    assert result.exit_code == 1
-    assert "GEMINI_API_KEY must be set" in result.output
-
-
-@pytest.mark.usefixtures("mini_corpus")
 def test_ingest_reports_unreachable_database_without_traceback(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

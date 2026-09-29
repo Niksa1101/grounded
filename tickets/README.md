@@ -131,7 +131,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | **R** | **Review follow-ups** (before 2.01; [details](phase-2/README.md#review-follow-ups)) | | | | |
 | [R.00](phase-2/README.md#review-follow-ups) | Tickets in the repo, review process guideline (#15) | Build | G | done | |
 | [R.01](phase-2/R.01-settings-defaults.md) | Defaults for the corpus tag and the embedding model | Build | G | done | |
-| [R.02](phase-2/R.02-eval-tooling-fixes.md) | Eval tooling fixes: dirty-tree check, lazy embedder | Build | G | todo | |
+| [R.02](phase-2/R.02-eval-tooling-fixes.md) | Eval tooling fixes: dirty-tree check, lazy embedder | Build | G | done | |
 | [R.03](phase-2/R.03-baseline-integrity.md) | Baseline integrity: golden-set hash, refuse mixing | Build | G | todo | |
 | [R.04](phase-2/R.04-ingest-guards.md) | Ingest guards and documentation drift | Build | G | todo | |
 | [R.05](phase-2/R.05-index-integrity-migration.md) | Migration `0002`: index integrity | Build | G | todo | |

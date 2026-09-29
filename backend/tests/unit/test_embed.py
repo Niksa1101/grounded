@@ -25,9 +25,12 @@ from grounded.infra.provider_errors import (
 )
 from grounded.ingest.embed import (
     CachedEmbedder,
+    Embedder,
+    EmbedderUnavailableError,
     EmbeddingInputTooLongError,
     FakeEmbedder,
     GeminiEmbedder,
+    LazyEmbedder,
     TaskType,
     Vector,
     fake_vector,
@@ -454,7 +457,7 @@ def test_limits_that_could_never_be_met_are_rejected(overrides: dict[str, Any]) 
 
 def test_from_settings_requires_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    with pytest.raises(ValueError, match="GEMINI_API_KEY must be set"):
+    with pytest.raises(EmbedderUnavailableError, match="GEMINI_API_KEY must be set"):
         GeminiEmbedder.from_settings(make_settings(), _words)
 
 
@@ -480,6 +483,71 @@ async def test_fake_embedder_is_deterministic_unit_length_and_records_calls() ->
     assert all(len(v) == 20 and _norm(v) == pytest.approx(1.0) for v in [*a, *query])
     assert first.calls == [(["x", "y"], "RETRIEVAL_DOCUMENT"), (["x"], "RETRIEVAL_QUERY")]
     assert fake_vector("x", "RETRIEVAL_DOCUMENT", 20) == a[0]
+
+
+# --- LazyEmbedder ---------------------------------------------------------------------------------
+
+
+async def test_lazy_embedder_builds_nothing_until_called() -> None:
+    built: list[FakeEmbedder] = []
+
+    def factory() -> Embedder:
+        built.append(FakeEmbedder(model="m", dim=8))
+        return built[0]
+
+    lazy = LazyEmbedder("m", 8, factory)
+    assert (lazy.model, lazy.dim, lazy.api_calls) == ("m", 8, 0)
+    assert built == []  # asking for the model and dimension doesn't need the provider
+
+    [vector] = await lazy.embed(["x"], "RETRIEVAL_QUERY")
+    await lazy.embed(["y"], "RETRIEVAL_QUERY")
+    assert len(built) == 1  # built once, reused
+    assert vector == fake_vector("x", "RETRIEVAL_QUERY", 8)
+    assert [texts for texts, _ in built[0].calls] == [["x"], ["y"]]
+
+
+async def test_lazy_embedder_reports_the_inner_api_calls() -> None:
+    class Counting(FakeEmbedder):
+        api_calls = 7
+
+    lazy = LazyEmbedder("fake-embedding", 8, lambda: Counting())
+    assert lazy.api_calls == 0
+    await lazy.embed(["x"], "RETRIEVAL_DOCUMENT")
+    assert lazy.api_calls == 7
+
+
+async def test_lazy_embedder_passes_the_factory_error_through_and_retries_later() -> None:
+    attempts = 0
+
+    def factory() -> Embedder:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise EmbedderUnavailableError("no key")
+        return FakeEmbedder(model="m", dim=8)
+
+    lazy = LazyEmbedder("m", 8, factory)
+    with pytest.raises(EmbedderUnavailableError, match="no key"):
+        await lazy.embed(["x"], "RETRIEVAL_QUERY")
+    assert len(await lazy.embed(["x"], "RETRIEVAL_QUERY")) == 1
+
+
+async def test_lazy_embedder_rejects_an_embedder_of_another_model() -> None:
+    lazy = LazyEmbedder("m", 8, lambda: FakeEmbedder(model="other", dim=8))
+    with pytest.raises(ValueError, match="model/dim"):
+        await lazy.embed(["x"], "RETRIEVAL_QUERY")
+
+
+async def test_a_fully_cached_run_never_builds_the_lazy_embedder(kv: KVCache) -> None:
+    warm = CachedEmbedder(FakeEmbedder(), kv, write_every=10)
+    await warm.embed(["a", "b"], "RETRIEVAL_QUERY")
+
+    def factory() -> Embedder:
+        raise AssertionError("everything is cached, no provider needed")
+
+    cached = CachedEmbedder(LazyEmbedder("fake-embedding", 8, factory), kv, write_every=10)
+    await cached.embed(["a", "b"], "RETRIEVAL_QUERY")
+    assert (cached.hits, cached.misses) == (2, 0)
 
 
 # --- CachedEmbedder -------------------------------------------------------------------------------

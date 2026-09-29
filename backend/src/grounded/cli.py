@@ -47,7 +47,13 @@ from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
 from grounded.infra.migrations import migrate as run_migrations
 from grounded.infra.provider_errors import ProviderError
 from grounded.ingest.corpus import CorpusError, fetch_corpus
-from grounded.ingest.embed import CachedEmbedder, GeminiEmbedder
+from grounded.ingest.embed import (
+    CachedEmbedder,
+    EmbedderUnavailableError,
+    GeminiEmbedder,
+    LazyEmbedder,
+    count_uncached_texts,
+)
 from grounded.ingest.includes import IncludeError
 from grounded.ingest.markdown import ParseError
 from grounded.ingest.pipeline import (
@@ -198,10 +204,13 @@ def ingest(
             return
         conninfo = database_url or settings.migration_database_url.get_secret_value()
         typer.echo(f"Target {_describe_target(conninfo)}")
-        try:
-            embedder = GeminiEmbedder.from_settings(settings, count_tokens)
-        except ValueError as exc:
-            raise _fail(str(exc)) from exc
+        # The key is only needed if a text must be sent: an already built version or a fully
+        # cached corpus goes through without one.
+        embedder = LazyEmbedder(
+            settings.embedding_model,
+            settings.embedding_dim,
+            lambda: GeminiEmbedder.from_settings(settings, count_tokens),
+        )
         try:
             report = run_ingest(
                 conninfo,
@@ -215,6 +224,11 @@ def ingest(
                 max_input_tokens=settings.embedding_max_input_tokens,
                 activate=activate,
             )
+        except EmbedderUnavailableError as exc:
+            raise _fail(
+                f"{exc}: {count_uncached(cache, spec, chunks)} texts are not cached. "
+                "Nothing was written to the database."
+            ) from exc
         except EmbeddingQuotaExhaustedError as exc:
             raise _fail(
                 f"Stopped: {exc}. Nothing was written to the database. Run the same command "
@@ -431,11 +445,13 @@ def eval_retrieval(
     typer.echo(f"Target {_describe_target(conninfo)}; golden set {version} ({len(items)} items)")
     count_tokens = make_token_counter(settings.tokenizer_encoding)
     with KVCache(settings.cache_dir / _EMBEDDINGS_CACHE) as cache:
-        try:
-            gemini = GeminiEmbedder.from_settings(settings, count_tokens)
-        except ValueError as exc:
-            raise _fail(str(exc)) from exc
-        # Query vectors are cached like chunk vectors (Tech.md §11), so a re-run is free.
+        gemini = LazyEmbedder(
+            settings.embedding_model,
+            settings.embedding_dim,
+            lambda: GeminiEmbedder.from_settings(settings, count_tokens),
+        )
+        # Query vectors are cached like chunk vectors (Tech.md §11), so a re-run is free, and
+        # with every vector cached no API key is needed.
         embedder = CachedEmbedder(gemini, cache, write_every=settings.embedding_batch_size)
         try:
             run = _run_async(
@@ -452,6 +468,15 @@ def eval_retrieval(
             )
         except (RetrievalEvalError, NoActiveIndexError) as exc:
             raise _fail(f"Eval failed: {exc}") from exc
+        except EmbedderUnavailableError as exc:
+            uncached = count_uncached_texts(
+                cache,
+                embedder.model,
+                embedder.dim,
+                "RETRIEVAL_QUERY",
+                [item.question for item in items if item.answerable],
+            )
+            raise _fail(f"{exc}: {uncached} questions are not cached.") from exc
         except ProviderError as exc:
             raise _fail(f"Query embedding failed ({type(exc).__name__}): {exc}") from exc
         except psycopg.Error as exc:

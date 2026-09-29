@@ -1,8 +1,10 @@
 """Text embeddings: the Gemini adapter, a deterministic fake and a persistent cache (Tech.md §5.6).
 
 ``GeminiEmbedder`` talks to the API and nothing else; ``CachedEmbedder`` wraps any embedder so a
-re-run with unchanged content makes zero API calls. Ingest uses ``CachedEmbedder(GeminiEmbedder)``,
-tests use ``FakeEmbedder`` (pytest never reaches the network).
+re-run with unchanged content makes zero API calls. ``LazyEmbedder`` builds the real embedder only
+when a text has to be sent, so a run that is fully cached (or reuses a built index) needs no API
+key. Ingest uses ``CachedEmbedder(LazyEmbedder(GeminiEmbedder))``, tests use ``FakeEmbedder``
+(pytest never reaches the network).
 
 Free-tier limits for ``gemini-embedding-001`` (AI Studio, checked 2026-09-26): 100 RPM, 30K TPM,
 1K RPD; RPD resets at midnight Pacific. Max 2,048 input tokens per text, at most 100 texts per
@@ -65,6 +67,11 @@ class Embedder(Protocol):
     async def embed(self, texts: Sequence[str], task_type: TaskType) -> list[Vector]:
         """One vector per text, in order, L2-normalized."""
         ...
+
+
+class EmbedderUnavailableError(Exception):
+    """The real embedder can't be built (no API key). Raised only when a text actually has to be
+    embedded, so callers can say how many texts were not cached."""
 
 
 class EmbeddingInputTooLongError(ValueError):
@@ -177,7 +184,7 @@ class GeminiEmbedder:
     @classmethod
     def from_settings(cls, settings: Settings, count_tokens: TokenCounter) -> GeminiEmbedder:
         if settings.gemini_api_key is None:
-            raise ValueError("GEMINI_API_KEY must be set to embed")
+            raise EmbedderUnavailableError("GEMINI_API_KEY must be set to embed")
         client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
         return cls(
             client,
@@ -346,6 +353,46 @@ def _is_daily_quota(details: list[dict[str, Any]]) -> bool:
     return False
 
 
+# --- Lazy -----------------------------------------------------------------------------------------
+
+
+class LazyEmbedder:
+    """An ``Embedder`` that builds the real one on the first ``embed()`` call.
+
+    ``model`` and ``dim`` are known up front (the pipeline and the eval check them against the
+    index before embedding anything), but the provider client, and so the API key, is only needed
+    when a text really has to be sent. ``factory`` raises ``EmbedderUnavailableError`` when it
+    can't build the embedder.
+    """
+
+    def __init__(self, model: str, dim: int, factory: Callable[[], Embedder]) -> None:
+        self._model = model
+        self._dim = dim
+        self._factory = factory
+        self._inner: Embedder | None = None
+
+    @property
+    def model(self) -> str:
+        return self._model
+
+    @property
+    def dim(self) -> int:
+        return self._dim
+
+    @property
+    def api_calls(self) -> int:
+        """API requests sent so far; 0 while the real embedder doesn't exist."""
+        return getattr(self._inner, "api_calls", 0)
+
+    async def embed(self, texts: Sequence[str], task_type: TaskType) -> list[Vector]:
+        if self._inner is None:
+            inner = self._factory()
+            if (inner.model, inner.dim) != (self._model, self._dim):
+                raise ValueError("the built embedder's model/dim differ from the lazy one's")
+            self._inner = inner
+        return await self._inner.embed(texts, task_type)
+
+
 # --- Fake -----------------------------------------------------------------------------------------
 
 
@@ -433,6 +480,14 @@ class CachedEmbedder:
         self.misses += len(missing)
         self.hits += len(texts) - len(missing)
         return [_unpack(blobs[key], self.dim) for key in keys]
+
+
+def count_uncached_texts(
+    cache: KVCache, model: str, dim: int, task_type: TaskType, texts: Sequence[str]
+) -> int:
+    """Distinct texts with no cached vector: what an embed run would send to the provider."""
+    keys = list(dict.fromkeys(embedding_cache_key(model, dim, task_type, t) for t in texts))
+    return len(keys) - len(cache.get_many(keys))
 
 
 def embedding_cache_key(model: str, dim: int, task_type: TaskType, text: str) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,13 @@ from typer.testing import CliRunner
 import grounded.cli
 from grounded.cli import app
 from grounded.infra.provider_errors import ProviderRateLimited
-from grounded.ingest.embed import FakeEmbedder, TaskType, TokenCounter, Vector
+from grounded.ingest.embed import (
+    FakeEmbedder,
+    GeminiEmbedder,
+    TaskType,
+    TokenCounter,
+    Vector,
+)
 from grounded.ingest.types import CorpusCheckout
 from grounded.settings import Settings
 from tests.support import make_settings
@@ -98,6 +105,37 @@ def test_ingest_builds_activates_and_then_reuses() -> None:
     [header, row] = listing.output.strip().splitlines()
     assert header.split()[:3] == ["id", "ref", "sha"]
     assert row.split()[:6] == ["1", "0.0.1", "aaaaaaaa", row.split()[3], "ready", "*"]
+
+
+@pytest.fixture
+def no_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The real ``GeminiEmbedder`` and no ``GEMINI_API_KEY``: it can only fail if it is used."""
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(grounded.cli, "GeminiEmbedder", GeminiEmbedder)
+
+
+@pytest.mark.usefixtures("cli_env")
+def test_ingest_of_an_already_built_version_needs_no_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert invoke("ingest", "--activate").exit_code == 0
+    # From here on the real embedder has no key: building it would fail the command.
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(grounded.cli, "GeminiEmbedder", GeminiEmbedder)
+    again = invoke("ingest", "--activate")
+    assert again.exit_code == 0, again.output
+    assert "Index version 1 with this config is already built." in again.output
+
+
+@pytest.mark.usefixtures("cli_env", "no_key")
+def test_ingest_on_a_cold_cache_without_a_key_fails_cleanly(db: str) -> None:
+    result = invoke("ingest")
+    assert result.exit_code == 1
+    assert "GEMINI_API_KEY must be set to embed: " in result.output
+    assert re.search(r"\d+ texts are not cached\. Nothing was written", result.output)
+    assert isinstance(result.exception, SystemExit)
+    with psycopg.connect(db) as conn:
+        assert conn.execute("SELECT count(*) FROM index_versions").fetchone() == (0,)
 
 
 @pytest.mark.usefixtures("cli_env")
