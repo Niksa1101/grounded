@@ -38,8 +38,9 @@ One JSON object per line, validated by `grounded.schemas.eval.GoldenItem`:
 - **No nested labels** in one item: not a page and a section on it, not an H2 and one of its H3s. Pick
   the one that fits (the H2 if the answer spans its subsections, else the H3s).
 - Label the sections as the chunker produced them: `grounded golden sections <page>` lists them. A small
-  section merged into its previous sibling has no chunk of its own, so a label on it matches nothing;
-  label the section it was merged into, or the parent.
+  section merged into its previous or next sibling has no chunk of its own (the merged chunk keeps the
+  first section's anchor), so a label on it matches nothing; label the section it was merged into, or
+  the parent.
 - Write questions the way a user would ask them, not by rephrasing the section title. Prefer questions
   with one clear answer in the docs; avoid ones whose answer depends on the FastAPI version beyond the
   pinned tag.
