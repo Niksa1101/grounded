@@ -196,6 +196,7 @@ If something was skipped or failed, say so plainly.
 
 - Never commit directly to `main`. Branch → PR → CI green → Author approves → squash merge.
 - Commits: Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`, `ci:`, `eval:`), imperative mood, English.
+- PRs are readable in one sitting: about 400 added lines of non-test code at most. A larger ticket is split into stacked PRs, each green on its own.
 - PR description template: **What / Why / How tested / Eval impact** (numbers or "none: no quality-affecting change") / **Docs updated**.
 - Docs are part of the change: if behavior, schema, config or commands change, update PRD/Tech/DB/README/AGENTS **in the same PR**.
 - Never commit secrets, `.env`, `.cache/`, `eval/results/`, or large generated files. `.env.example` stays complete and value-free.
