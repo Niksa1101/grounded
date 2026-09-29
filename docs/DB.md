@@ -136,7 +136,7 @@ CREATE TABLE index_versions (
     git_sha          char(40)    NOT NULL,
     embedding_model  text        NOT NULL,                 -- e.g. 'gemini-embedding-001'
     embedding_dim    integer     NOT NULL CHECK (embedding_dim > 0),
-    chunking_config  jsonb       NOT NULL,                 -- {"strategy":"headers","max_tokens":450,...,"excluded_pages":[...],"parser_version":1}
+    chunking_config  jsonb       NOT NULL,                 -- {"strategy":"headers","max_tokens":450,...,"excluded_pages":[...],"parser_version":1,"chunker_version":2}
     config_hash      text        NOT NULL,                 -- sha256(git_sha|model|dim|chunking_config)
     status           text        NOT NULL DEFAULT 'building'
                      CHECK (status IN ('building', 'ready', 'failed', 'retired')),
@@ -297,7 +297,7 @@ ALTER TABLE chunks DROP CONSTRAINT chunks_document_id_fkey;  -- superseded by th
 The old single-column `chunks.document_id` FK is dropped because the composite one implies it. No data is lost. The `chunks` and `documents` DDL above is the `0001` shape; after `0002` a chunk is tied to a document *of its own version*, and a `retired` version no longer blocks rebuilding its config (only `ready` rows are unique).
 
 Design notes:
-- **`chunking_config` keys.** The comment in the applied `0001_init.sql` (`"overlap":50`) is stale and can't be edited (an applied migration never changes). The stored keys are those of `ChunkingConfig` (`strategy`, `max_tokens`, `overlap_tokens`, `min_tokens`, `tokenizer`) plus `excluded_pages` and `parser_version`. This document wins.
+- **`chunking_config` keys.** The comment in the applied `0001_init.sql` (`"overlap":50`) is stale and can't be edited (an applied migration never changes). The stored keys are those of `ChunkingConfig` (`strategy`, `max_tokens`, `overlap_tokens`, `min_tokens`, `tokenizer`) plus `excluded_pages`, `parser_version` and (since Phase 2's keep-with-next fix) `chunker_version`. This document wins.
 - **Why `vector(768)` is fixed.** pgvector column types carry the dimension. A different dimension means a new migration and a full re-index. This is intentional: it makes a model change a visible decision.
 - **Why `breadcrumb_text` is denormalized.** Generated columns need immutable expressions. Joining an array inside the generated `tsv` expression is avoided, and the same string is reused in the prompt and in the embedded text.
 - **Why FTS weights.** Headings (weight A) matter more than body text (B). `ts_rank_cd` respects weights.
