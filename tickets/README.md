@@ -140,7 +140,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.08](phase-2/R.08-golden-label-check.md) | Manual check of golden labels, explain-back | Author | A (+G worksheet) | todo | |
 | [2.01](phase-2/2.01-retrieval-config.md) | `RetrievalConfig` and its hash | Build | G | done | [#20](https://github.com/Niksa1101/grounded/pull/20) |
 | [B.01](phase-2/B.01-baseline-refresh.md) | Baseline refresh: index v2, golden-set hash, config hash | Baseline | G runs, A approves | todo | |
-| [2.02](phase-2/2.02-lexical-spec.md) | Lexical FTS search — spec | Spec | G | in-progress (Author review pending) | |
+| [2.02](phase-2/2.02-lexical-spec.md) | Lexical FTS search — spec | Spec | G | done | [#21](https://github.com/Niksa1101/grounded/pull/21) |
 | [2.03](phase-2/2.03-lexical.md) | Lexical FTS search — implementation | Author | A | todo | |
 | [2.04](phase-2/2.04-eval-fts.md) | `fts` mode in the retrieval eval | Build | G | todo | |
 | [2.05](phase-2/2.05-hybrid-spec.md) | Hybrid RRF search — spec | Spec | G | todo | |
