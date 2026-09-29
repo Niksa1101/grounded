@@ -45,6 +45,7 @@ class RetrievedChunk:
     content_hash: str
     dense_rank: int | None = None  # 1-based
     dense_distance: float | None = None  # cosine distance, 0 = same direction
-    fts_rank: int | None = None
+    fts_rank: int | None = None  # 1-based
+    fts_score: float | None = None  # ts_rank_cd, higher = better; only comparable within one query
     rrf_score: float | None = None
     rerank_score: float | None = None

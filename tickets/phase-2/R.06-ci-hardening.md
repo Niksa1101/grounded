@@ -17,7 +17,8 @@
   source.
 
 **Acceptance criteria**
-- [ ] CI is green on the PR, and its log shows a cache key containing `o200k_base`.
+- [x] CI is green on the PR, and its log shows a cache key containing `o200k_base`
+      ([run 36625400084](https://github.com/Niksa1101/grounded/actions/runs/36625400084): `key: tiktoken-o200k_base-v1`).
 
 **Verify:** the CI run on the PR (link in the description).
 
