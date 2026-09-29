@@ -4,8 +4,10 @@ Every tunable (K values, limits, model IDs, secrets) is a field here, never a li
 never an ``os.environ`` read elsewhere (AGENTS.md §6.7). The variable list mirrors Tech.md §4, and
 ``.env.example`` must stay in sync with it.
 
-Model IDs have no defaults on purpose: they are pinned in ``.env`` after being verified against the
-provider docs in the phase that first uses them (AGENTS.md §6.8).
+The generator, judge and rerank model IDs have no defaults on purpose: they are pinned in ``.env``
+after being verified against the provider docs in the phase that first uses them (AGENTS.md §6.8).
+The embedding model is the exception: it was verified on 2026-09-26 and is tied to the index (a
+different value is a new index version), so it and the corpus tag have pinned defaults.
 """
 
 from __future__ import annotations
@@ -56,7 +58,7 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr | None = None
     cohere_api_key: SecretStr | None = None
 
-    embedding_model: str | None = None
+    embedding_model: str = Field(default="gemini-embedding-001", min_length=1)
     embedding_dim: int = Field(default=768, gt=0)
     # Defaults = gemini-embedding-001 free tier (AI Studio, 2026-09-26) and API caps (Tech.md §5.6).
     embedding_batch_size: int = Field(default=100, gt=0, le=100)  # the API rejects > 100 per call
@@ -106,7 +108,7 @@ class Settings(BaseSettings):
     # A relative path is taken from the repo root, like .env: commands run from backend/ and CI
     # runs from the root, and both must find the same clone and SQLite caches.
     cache_dir: Path = Path(".cache")
-    fastapi_ref: str | None = None
+    fastapi_ref: str = Field(default="0.141.1", min_length=1)
 
     @field_validator("generator_providers", mode="before")
     @classmethod

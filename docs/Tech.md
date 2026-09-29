@@ -139,7 +139,7 @@ or with `ALLOW_DIRECT_API=true`.
 | `TEST_DATABASE_URL` | `postgresql://grounded:grounded@localhost:5433/grounded_test` | pytest only; must be a local `*_test` DB |
 | `DB_POOL_MIN_SIZE`, `DB_POOL_MAX_SIZE`, `DB_POOL_TIMEOUT_S` | `1`, `5`, `5` | runtime connection pool (DB.md §2) |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `COHERE_API_KEY` | — | providers |
-| `EMBEDDING_MODEL` / `EMBEDDING_DIM` | `gemini-embedding-001` / `768` | must match active index version |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIM` | default `gemini-embedding-001` / `768` | pinned defaults (model verified 2026-09-26); must match the active index version, a different value is a new index version; blank is rejected |
 | `EMBEDDING_BATCH_SIZE`, `EMBEDDING_RPM`, `EMBEDDING_TPM` | `100` (max 100, ≤ RPM), `100`, `30000` | batching and pacing, defaults = free tier; RPM counts texts (§5.6) |
 | `EMBEDDING_MAX_INPUT_TOKENS` | `2048` | longer texts fail before any call; must be ≤ `EMBEDDING_TPM` |
 | `EMBEDDING_MAX_RETRIES`, `EMBEDDING_TIMEOUT_S` | `5`, `30.0` | per batch, on 429 / 5xx / timeout |
@@ -161,7 +161,7 @@ or with `ALLOW_DIRECT_API=true`.
 | `ALLOW_DIRECT_API` | `false` (true only in dev) | bypass proxy secret locally |
 | `REQUEST_DEADLINE_S` | `25` | must be < proxy timeout |
 | `CACHE_DIR` | `.cache` | SQLite caches, cloned corpus; a relative path is taken from the repo root (like `.env`), so `backend/` commands and CI share one `.cache/` |
-| `FASTAPI_REF` | `0.141.1` | pinned corpus tag (commit `95f8322e`) |
+| `FASTAPI_REF` | default `0.141.1` | pinned corpus tag (commit `95f8322e`); blank is rejected |
 
 Retrieval settings are grouped into a frozen `RetrievalConfig` whose canonical JSON is hashed
 (`retrieval_config_hash`). The hash is logged per request, used in cache keys and recorded per eval run.

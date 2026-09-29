@@ -452,20 +452,10 @@ def test_limits_that_could_never_be_met_are_rejected(overrides: dict[str, Any]) 
         _embedder(_FakeModels([]), **overrides)
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [
-        pytest.param({"embedding_model": "gemini-embedding-001"}, id="no-key"),
-        pytest.param({"gemini_api_key": "k"}, id="no-model"),
-    ],
-)
-def test_from_settings_requires_key_and_model(
-    overrides: dict[str, Any], monkeypatch: pytest.MonkeyPatch
-) -> None:
-    for name in ("GEMINI_API_KEY", "EMBEDDING_MODEL"):
-        monkeypatch.delenv(name, raising=False)
-    with pytest.raises(ValueError, match="GEMINI_API_KEY and EMBEDDING_MODEL"):
-        GeminiEmbedder.from_settings(make_settings(**overrides), _words)
+def test_from_settings_requires_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="GEMINI_API_KEY must be set"):
+        GeminiEmbedder.from_settings(make_settings(), _words)
 
 
 def test_from_settings_builds_without_network() -> None:

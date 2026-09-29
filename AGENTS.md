@@ -154,11 +154,11 @@ uv run grounded serve --reload --port 8000
 ```
 
 ```bash
-uv run grounded ingest --ref <fastapi-tag> --dry-run
+uv run grounded ingest --dry-run
 ```
 
 ```bash
-uv run grounded ingest --ref <fastapi-tag> --activate
+uv run grounded ingest --activate
 ```
 
 ```bash

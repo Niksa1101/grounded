@@ -175,8 +175,6 @@ def ingest(
     """Build an index version from a pinned FastAPI tag: parse, chunk, embed, store, verify."""
     settings = get_settings()
     configure_logging(settings.log_level)
-    if not settings.embedding_model:
-        raise _fail("EMBEDDING_MODEL must be set to the pinned embedding model ID.")
     corpus, count_tokens = _prepare_corpus(settings, ref)
     checkout, cfg = corpus.checkout, corpus.chunking
     spec = index_spec(
@@ -279,8 +277,6 @@ def index_list(
 def _prepare_corpus(settings: Settings, ref: str | None) -> tuple[PreparedCorpus, TokenCounter]:
     """Fetch (or reuse) the pinned checkout, then parse and chunk it with the configured chunker."""
     ref = ref or settings.fastapi_ref
-    if not ref:
-        raise _fail("No tag given: pass --ref or set FASTAPI_REF.")
     cfg = ChunkingConfig.from_settings(settings)
     count_tokens = make_token_counter(cfg.tokenizer)
     try:
@@ -424,8 +420,6 @@ def eval_retrieval(
     settings = get_settings()
     configure_logging(settings.log_level)
     modes = _retrieval_modes(config or ["dense"])
-    if not settings.embedding_model:
-        raise _fail("EMBEDDING_MODEL must be set to the model that built the index.")
     try:
         version = golden_set_version(golden)
         items = load_golden_set(golden)
