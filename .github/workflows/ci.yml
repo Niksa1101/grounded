@@ -1,4 +1,5 @@
 # Lint, type-check and test both apps on every PR and on main (Tech.md, CI section).
+# Third-party actions are pinned to a commit SHA (the tag is in the comment), not to a movable tag.
 # The retrieval-eval job joins in Phase 2.
 name: ci
 
@@ -46,8 +47,8 @@ jobs:
       # is fetched (or restored) here before the tests run.
       TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/tiktoken
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
@@ -59,13 +60,19 @@ jobs:
         run: uv run ruff format --check .
       - name: Pyright
         run: uv run pyright
+      # Settings is the only source of the encoding, so the cache key and the warm-up follow it.
+      - name: Read the tokenizer encoding
+        id: tok
+        run: |
+          encoding=$(uv run python -c 'from grounded.settings import get_settings; print(get_settings().tokenizer_encoding)')
+          echo "encoding=$encoding" >> "$GITHUB_OUTPUT"
       - name: Restore tiktoken cache
-        uses: actions/cache@v6.1.0
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.TIKTOKEN_CACHE_DIR }}
-          key: tiktoken-o200k_base-v1
+          key: tiktoken-${{ steps.tok.outputs.encoding }}-v1
       - name: Warm tiktoken cache
-        run: uv run python -c "import tiktoken; tiktoken.get_encoding('o200k_base')"
+        run: uv run python -c "import tiktoken; tiktoken.get_encoding('${{ steps.tok.outputs.encoding }}')"
       - name: Pytest
         run: uv run pytest
 
@@ -76,8 +83,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-node@v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
           cache: npm

@@ -239,7 +239,7 @@ live in `ingest/types.py`. `ChunkingConfig.canonical_json()` is stored as `index
 - Sentence ends: `.`/`!`/`?` (plus closing quotes, brackets, emphasis) before whitespace, except inside inline code and after `e.g.`, `i.e.`, `vs.`, `cf.`. Versions and URLs (`3.10`, `a.b.com`) don't split, since no whitespace follows the dot.
 - Pure and deterministic: same input + config + counter → identical output (tests depend on it).
 - On tag `0.141.1` with the defaults (450/50/40, `o200k_base`): 125 pages → 1,045 chunks, ~196K tokens, p50 152 / p95 423 / max 1,356 tokens. 13 chunks exceed 450, and each is a single atomic block (code, table, HTML).
-- `count_tokens` is injected: ingest uses tiktoken (`ingest/tokens.py`, `TOKENIZER_ENCODING`), the tests a "one word = one token" counter. Counts are approximate (model tokenizers differ). tiktoken downloads its encoding on first use; pytest blocks the network, so CI warms `TIKTOKEN_CACHE_DIR` (cached by `actions/cache`) in a step before the tests.
+- `count_tokens` is injected: ingest uses tiktoken (`ingest/tokens.py`, `TOKENIZER_ENCODING`), the tests a "one word = one token" counter. Counts are approximate (model tokenizers differ). tiktoken downloads its encoding on first use; pytest blocks the network, so CI warms `TIKTOKEN_CACHE_DIR` (cached by `actions/cache`) in a step before the tests. A step reads the encoding from `Settings` (`get_settings().tokenizer_encoding`) and the cache key is `tiktoken-<encoding>-v1`, so `Settings` stays the only source.
 
 ### 5.6 Hash, embed, cache
 - `content_hash = sha256(breadcrumb_text + "\n\n" + content)`. The embedded text is exactly that string (heading context measurably helps retrieval).
@@ -663,6 +663,7 @@ Rules: **no real network calls in pytest.** A socket-blocking fixture fails any 
 | `housekeeping.yml` | daily cron + `workflow_dispatch` | retention SQL (DB.md §9) with `DATABASE_URL_DIRECT` |
 
 Notes:
+- Every third-party action in a workflow is pinned to a **commit SHA** with the version in a comment (`uses: actions/checkout@<sha> # v7.0.1`), read with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (dereferencing annotated tags). A tag can move; a SHA can't. Bump them deliberately, not by a floating tag.
 - GitHub disables scheduled workflows after 60 days without repo activity. Documented in README limitations.
 - Secrets: `GEMINI_API_KEY`, `GROQ_API_KEY`, `COHERE_API_KEY`, `DATABASE_URL_DIRECT`. Backend deploys go through the Vercel Git integration, not a workflow. PR workflows only run for same-repo branches, so secrets are available.
 - `.cache` key: `hash(FASTAPI_REF, chunking config, EMBEDDING_MODEL, EMBEDDING_DIM)` with a restore-key fallback. GitHub evicts caches unused for 7 days, which means one full re-embed (~3k texts), acceptable.
