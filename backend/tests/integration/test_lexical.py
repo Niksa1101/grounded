@@ -262,6 +262,19 @@ async def test_special_characters_never_raise(
     assert await search(aconn, index, "wombat") != []
 
 
+@pytest.mark.parametrize("question", ["quokka\x00narwhal", "\x00quokka\x00 narwhal\x00"])
+async def test_nul_bytes_are_word_separators_not_errors(
+    index: Index, aconn: psycopg.AsyncConnection[Any], question: str
+) -> None:
+    """Postgres text cannot hold NUL, and a JSON body may carry ``\\u0000``: the driver would
+    raise. It must behave like whitespace instead, so "quokka\\x00narwhal" is two words."""
+    plain = await search(aconn, index, "quokka narwhal")
+    chunks = await search(aconn, index, question)
+    assert sorted(keys(index, plain)) == sorted(QUOKKA_KEYS)
+    assert [(c.chunk_id, c.fts_score) for c in chunks] == [(c.chunk_id, c.fts_score) for c in plain]
+    assert await search(aconn, index, "\x00") == []
+
+
 async def test_operators_in_the_question_are_words_not_syntax(
     index: Index, aconn: psycopg.AsyncConnection[Any]
 ) -> None:
