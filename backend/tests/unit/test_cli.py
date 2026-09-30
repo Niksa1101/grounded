@@ -13,11 +13,17 @@ import uvicorn
 from typer.testing import CliRunner
 
 import grounded.cli
-from grounded.cli import app
+from grounded.cli import _retrieval_modes, app
 from grounded.ingest.types import CorpusCheckout
 from tests.support import make_settings
 
 runner = CliRunner()
+
+
+def test_retrieval_eval_selects_fts_and_preserves_mode_order() -> None:
+    assert _retrieval_modes(["fts"]) == ["fts"]
+    assert _retrieval_modes(["dense", "fts"]) == ["dense", "fts"]
+
 
 # Nothing listens on port 1, so the connection is refused locally (no external network). The timeout
 # keeps Windows, where refused connects are retried slowly, from stalling the test.
