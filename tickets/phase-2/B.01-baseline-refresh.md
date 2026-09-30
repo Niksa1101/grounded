@@ -17,8 +17,8 @@ until every change that affects the baseline is merged, so the file is regenerat
 - Embedding calls: 0 (everything is cached after R.07).
 
 **Acceptance criteria**
-- [ ] `git diff eval/baselines/` contains only the expected fields and the metric changes from index v2.
-- [ ] The description has a before/after table with `n`.
+- [x] `git diff eval/baselines/` contains only the expected fields and the metric changes from index v2.
+- [x] The description has a before/after table with `n`.
 - [ ] The Author has approved explicitly before the merge.
 
 **Verify:** standard checks, and the command above.
