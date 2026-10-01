@@ -7,7 +7,7 @@
 |---|---|
 | Status | Phases 0–1 done; Phase 2 (Hybrid retrieval) next |
 | Owner / Author | probniprobic4@gmail.com |
-| Last updated | 2026-09-29 |
+| Last updated | 2026-10-01 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
 
 ---
@@ -411,6 +411,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 | D42 | Collaboration | Author writes core modules; Agent writes boilerplate and reviews |
 | D43 | Baselines | no_rag + dense + fts + hybrid + hybrid_rerank |
 | D44 | MVP | Phases 0–5 in ~2 weeks |
+| D45 | CI cache seeding (2026-10-01) | The CI `.cache/` is seeded by a `workflow_dispatch` "warm-cache" workflow on `main`, which embeds the misses and saves the cache even when the daily embedding quota stops it (run on two consecutive days; the same workflow is the re-seed runbook after a 7-day eviction). Only `main` and that workflow save a cache; PR jobs restore only. A cache miss that hits the quota (or has no `GEMINI_API_KEY`) fails the job as an **infra** error, never as a quality fail and never as a pass. Two caches: corpus by ref, embeddings content-addressed. The only CI secret for this is `GEMINI_API_KEY` |
 
 ## 12. Assumptions and open items
 
