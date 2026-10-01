@@ -146,7 +146,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [2.05](phase-2/2.05-hybrid-spec.md) | Hybrid RRF search — spec | Spec | G | done | [#27](https://github.com/Niksa1101/grounded/pull/27) |
 | [2.06](phase-2/2.06-hybrid-rrf.md) | Hybrid RRF search — implementation | Author | A | done | [#28](https://github.com/Niksa1101/grounded/pull/28) |
 | [2.07](phase-2/2.07-ablation.md) | `hybrid` mode, ablation run and baseline rows | Build + Baseline | G | done | [#29](https://github.com/Niksa1101/grounded/pull/29), [#31](https://github.com/Niksa1101/grounded/pull/31) |
-| [2.08](phase-2/2.08-decision-ci-cache.md) | Decision: seeding the CI corpus and embedding caches | Decision | D | in-progress | |
+| [2.08](phase-2/2.08-decision-ci-cache.md) | Decision: seeding the CI corpus and embedding caches | Decision | D | done | [#32](https://github.com/Niksa1101/grounded/pull/32) |
 | [2.09](phase-2/2.09-gate-spec.md) | Retrieval gate — spec | Spec | G | todo | |
 | [2.10](phase-2/2.10-gate.md) | Retrieval gate — implementation | Author | A | todo | |
 | [2.11](phase-2/2.11-ci-retrieval-eval.md) | CI `retrieval-eval` job | Build | G | todo | |
