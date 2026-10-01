@@ -1,0 +1,123 @@
+# Seeds and re-seeds the CI caches that retrieval-eval restores (PRD D45, Tech.md §17).
+#
+# A full ingest is ~1,045 chunk texts plus the golden questions, which is over one day of the
+# free embedding quota (1K texts per day). This workflow embeds what is missing and saves the
+# caches even when the quota stops it, so run it on two consecutive days: day two sends only the
+# few dozen texts still missing. It is also the runbook after a cache eviction (unused for 7 days)
+# or a corpus, model or chunking change.
+#
+# Run it from main only: a cache saved on any other branch is invisible to PRs. The caches are
+# derived data, never committed or uploaded by hand (AGENTS.md §11).
+# Keep the seeding steps in step with the retrieval-eval job in ci.yml.
+name: warm-cache
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two runs at once would race to save the same corpus key.
+concurrency:
+  group: warm-cache
+  cancel-in-progress: false
+
+jobs:
+  warm:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30 # the free tier paces ~100 texts per minute
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      db:
+        image: pgvector/pgvector:0.8.6-pg17-trixie
+        env:
+          POSTGRES_USER: grounded
+          POSTGRES_PASSWORD: grounded
+          POSTGRES_DB: grounded
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U grounded -d grounded"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://grounded:grounded@localhost:5433/grounded
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/tiktoken
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Read the settings the caches are keyed on
+        id: cfg
+        run: |
+          uv run python - >> "$GITHUB_OUTPUT" <<'PY'
+          from grounded.settings import get_settings
+
+          s = get_settings()
+          print(f"fastapi_ref={s.fastapi_ref}")
+          print(f"embedding_model={s.embedding_model}")
+          print(f"embedding_dim={s.embedding_dim}")
+          print(f"tokenizer_encoding={s.tokenizer_encoding}")
+          PY
+      - name: Restore the corpus clone
+        id: corpus-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/corpus
+          key: corpus-${{ steps.cfg.outputs.fastapi_ref }}
+      - name: Restore the embeddings cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/embeddings.sqlite
+          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}
+          restore-keys: |
+            embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-
+      - name: Restore tiktoken cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TIKTOKEN_CACHE_DIR }}
+          key: tiktoken-${{ steps.cfg.outputs.tokenizer_encoding }}-v1
+      - name: Migrate
+        run: uv run grounded migrate
+      # Chunk vectors. Exit 3 means the daily quota stopped it: the vectors embedded so far are in
+      # the cache, saved below, and the next run resumes from them.
+      - name: Ingest and activate the index
+        id: ingest
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: >-
+          bash ../.github/scripts/embedding-step.sh "grounded ingest"
+          uv run grounded ingest --ref "${{ steps.cfg.outputs.fastapi_ref }}" --activate
+      # The golden questions' query vectors: retrieval-eval needs them too, and a PR job can't
+      # save what it embeds. The scores are not used.
+      - name: Embed the golden questions
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: >-
+          bash ../.github/scripts/embedding-step.sh "grounded eval retrieval"
+          uv run grounded eval retrieval --config dense --out "$RUNNER_TEMP/warm-retrieval.json"
+      - name: Save the embeddings cache
+        if: always()
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/embeddings.sqlite
+          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}
+      # Once per tag (the key is immutable), and only after ingest got past the clone (exit 0, or 3
+      # when the quota stopped it while embedding): an interrupted clone must never be saved.
+      - name: Save the corpus clone
+        if: >-
+          always() && steps.corpus-cache.outputs.cache-hit != 'true'
+          && (steps.ingest.outputs.exit_code == '0' || steps.ingest.outputs.exit_code == '3')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/corpus
+          key: corpus-${{ steps.cfg.outputs.fastapi_ref }}

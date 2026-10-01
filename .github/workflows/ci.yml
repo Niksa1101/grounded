@@ -1,6 +1,6 @@
-# Lint, type-check and test both apps on every PR and on main (Tech.md, CI section).
-# Third-party actions are pinned to a commit SHA (the tag is in the comment), not to a movable tag.
-# The retrieval-eval job joins in Phase 2.
+# Lint, type-check and test both apps, and gate retrieval quality, on every PR and on main
+# (Tech.md §17). Third-party actions are pinned to a commit SHA (the tag is in the comment), not to
+# a movable tag.
 name: ci
 
 on:
@@ -97,3 +97,148 @@ jobs:
         run: npm run typecheck
       - name: Build
         run: npm run build
+
+  # Ingests the pinned corpus into a fresh pgvector service, scores dense/fts/hybrid on the golden
+  # set and gates the result against eval/baselines/retrieval.json (Tech.md §15.5, §17).
+  #
+  # Embeddings come from the caches, not the API (PRD D45): PR jobs only restore them, `main`
+  # pushes and warm-cache.yml save them. A cold cache plus no key or no quota fails the ingest or
+  # eval step with exit code 3 (an infrastructure failure, named in the summary). Only the gate
+  # step can mean "quality fail", and it runs only after both succeeded.
+  # Keep the seeding steps in step with warm-cache.yml.
+  retrieval-eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      db:
+        # Same image as the backend job and infra/docker-compose.yml.
+        image: pgvector/pgvector:0.8.6-pg17-trixie
+        env:
+          POSTGRES_USER: grounded
+          POSTGRES_PASSWORD: grounded
+          POSTGRES_DB: grounded
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U grounded -d grounded"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      APP_ENV: test
+      DATABASE_URL: postgresql://grounded:grounded@localhost:5433/grounded
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/tiktoken
+      RESULTS: ${{ github.workspace }}/eval/results/retrieval.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      # Settings is the single source of the ref, the model and the encoding: the cache keys and
+      # the ingest follow it, so they can't drift apart.
+      - name: Read the settings the caches are keyed on
+        id: cfg
+        run: |
+          uv run python - >> "$GITHUB_OUTPUT" <<'PY'
+          from grounded.settings import get_settings
+
+          s = get_settings()
+          print(f"fastapi_ref={s.fastapi_ref}")
+          print(f"embedding_model={s.embedding_model}")
+          print(f"embedding_dim={s.embedding_dim}")
+          print(f"tokenizer_encoding={s.tokenizer_encoding}")
+          PY
+      # `restore` only, in every run: a cache saved on a PR branch is invisible to main and to
+      # other PRs, and the save step of actions/cache runs only if the job succeeded.
+      - name: Restore the corpus clone
+        id: corpus-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/corpus
+          key: corpus-${{ steps.cfg.outputs.fastapi_ref }}
+      # Vectors are keyed by sha256(text), so the file only grows and any earlier one is a valid
+      # starting point. A cache key is immutable, hence the run id; restore-keys takes the newest.
+      - name: Restore the embeddings cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/embeddings.sqlite
+          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}
+          restore-keys: |
+            embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-
+      - name: Restore tiktoken cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TIKTOKEN_CACHE_DIR }}
+          key: tiktoken-${{ steps.cfg.outputs.tokenizer_encoding }}-v1
+      - name: Migrate
+        run: uv run grounded migrate
+      - name: Ingest and activate the index
+        id: ingest
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: >-
+          bash ../.github/scripts/embedding-step.sh "grounded ingest"
+          uv run grounded ingest --ref "${{ steps.cfg.outputs.fastapi_ref }}" --activate
+      - name: Retrieval eval (dense, fts, hybrid)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: >-
+          bash ../.github/scripts/embedding-step.sh "grounded eval retrieval"
+          uv run grounded eval retrieval --config dense --config fts --config hybrid --out "$RESULTS"
+      # Exit 1 is a quality fail, exit 2 means the gate could not run (a broken results or baseline
+      # file). The Markdown report goes to the log and to the job summary.
+      - name: Retrieval gate
+        run: |
+          errors=$(mktemp)
+          code=0
+          uv run grounded eval gate --suite retrieval --results "$RESULTS" > "$RUNNER_TEMP/gate-report.md" 2>"$errors" || code=$?
+          cat "$RUNNER_TEMP/gate-report.md" "$errors"
+          cat "$RUNNER_TEMP/gate-report.md" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$code" -eq 1 ]; then
+            echo "::error title=Retrieval gate failed::A gated metric fell below its threshold, or the run is not comparable with the baseline. See the job summary."
+          elif [ "$code" -ne 0 ]; then
+            {
+              echo "### ❌ The retrieval gate could not run (exit $code)"
+              echo
+              echo "A broken results or baseline file, not a quality verdict."
+              echo
+              echo '```text'
+              cat "$errors"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "::error title=Retrieval gate could not run::See the job summary."
+          fi
+          exit "$code"
+      - name: Upload the results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: retrieval-eval-results
+          path: eval/results/retrieval.json
+          if-no-files-found: ignore
+          retention-days: 14
+      # Only a push to main saves. `always()`, so vectors paid for before a quota stop are kept.
+      - name: Save the embeddings cache
+        if: always() && github.event_name == 'push'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/embeddings.sqlite
+          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}
+      # The clone is saved once per tag (the key is immutable) and only after ingest got past it:
+      # exit 0, or 3 (the quota stopped it while embedding). An interrupted clone must never be
+      # saved under that key.
+      - name: Save the corpus clone
+        if: >-
+          always() && github.event_name == 'push'
+          && steps.corpus-cache.outputs.cache-hit != 'true'
+          && (steps.ingest.outputs.exit_code == '0' || steps.ingest.outputs.exit_code == '3')
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/corpus
+          key: corpus-${{ steps.cfg.outputs.fastapi_ref }}

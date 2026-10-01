@@ -489,6 +489,13 @@ def test_from_settings_requires_a_key(monkeypatch: pytest.MonkeyPatch) -> None:
         GeminiEmbedder.from_settings(make_settings(), _words)
 
 
+@pytest.mark.parametrize("blank", ["", "   "])
+def test_from_settings_treats_a_blank_key_as_missing(blank: str) -> None:
+    # A GitHub secret that isn't set arrives as an empty string.
+    with pytest.raises(EmbedderUnavailableError, match="GEMINI_API_KEY must be set"):
+        GeminiEmbedder.from_settings(make_settings(gemini_api_key=blank), _words)
+
+
 def test_from_settings_builds_without_network() -> None:
     settings = make_settings(gemini_api_key="k", embedding_model="gemini-embedding-001")
     embedder = GeminiEmbedder.from_settings(settings, _words)

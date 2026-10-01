@@ -185,9 +185,12 @@ class GeminiEmbedder:
 
     @classmethod
     def from_settings(cls, settings: Settings, count_tokens: TokenCounter) -> GeminiEmbedder:
-        if settings.gemini_api_key is None:
+        # A blank value counts as unset: a CI secret that was never added (or isn't passed to a
+        # fork's PR) reaches the process as an empty string, not as a missing variable.
+        key = settings.gemini_api_key.get_secret_value().strip() if settings.gemini_api_key else ""
+        if not key:
             raise EmbedderUnavailableError("GEMINI_API_KEY must be set to embed")
-        client = genai.Client(api_key=settings.gemini_api_key.get_secret_value())
+        client = genai.Client(api_key=key)
         return cls(
             client,
             model=settings.embedding_model,
