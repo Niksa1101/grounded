@@ -23,7 +23,7 @@ from typing import Any, Final
 
 import psycopg
 from pgvector.psycopg import register_vector_async  # pyright: ignore[reportMissingTypeStubs]
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from grounded.evals.golden import GOLDEN_DIR
 from grounded.evals.metrics import ChunkRef, label_ranks, mrr, ndcg_at_k, recall_at_k
@@ -244,6 +244,11 @@ def read_run(path: Path) -> RetrievalRun:
     return RetrievalRun.model_validate_json(path.read_bytes())
 
 
+def read_baseline(path: Path) -> dict[str, RetrievalBaselineEntry]:
+    """The committed baseline file, validated: a row missing a required field is an error."""
+    return _BASELINE_FILE.validate_json(path.read_bytes())
+
+
 def update_baseline(path: Path, run: RetrievalRun) -> dict[str, RetrievalBaselineEntry]:
     """Replace the rows of the configs in ``run`` in the baseline file (created if missing) and
     keep the other rows, so ablation configs can be added one run at a time.
@@ -253,12 +258,30 @@ def update_baseline(path: Path, run: RetrievalRun) -> dict[str, RetrievalBaselin
     read that as a difference between the configs. A mismatch raises ``BaselineMismatchError`` and
     leaves the file untouched; the fix is one run of all configs together.
     """
-    rows = _BASELINE_FILE.validate_json(path.read_bytes()) if path.exists() else {}
+    git_dirty = run.info.git_dirty
+    if git_dirty is None:
+        # A baseline row must say whether its numbers came from committed code (the gate needs it).
+        raise RetrievalEvalError(
+            "this run has no git state (not a git checkout), so it can't become a baseline row"
+        )
+    try:
+        rows = read_baseline(path) if path.exists() else {}
+    except ValidationError as exc:
+        # E.g. a row written before the golden-set hash and git state became required.
+        raise BaselineMismatchError(
+            f"{path.name} has rows that no longer validate ({exc.error_count()} errors, first: "
+            f"{exc.errors()[0]['loc']}). Rows scored on an older setup must be rewritten together: "
+            "delete the file (keep a copy of its thresholds) and run all configs with "
+            "`--write-baseline`. The baseline file was not changed."
+        ) from exc
     kept = {name: row for name, row in rows.items() if name not in run.configs}
     _check_same_setup(kept, run, joint=[*dict.fromkeys([*kept, *run.configs])])
     for name, result in run.configs.items():
+        previous = rows.get(name)
         rows[name] = RetrievalBaselineEntry(
             metrics=result.metrics,
+            # Thresholds are hand-written policy: refreshing the numbers must not erase them.
+            thresholds=previous.thresholds if previous else {},
             n=result.n,
             k=result.k,
             golden_set_version=run.info.golden_set_version,
@@ -270,7 +293,7 @@ def update_baseline(path: Path, run: RetrievalRun) -> dict[str, RetrievalBaselin
             embedding_model=run.info.embedding_model,
             embedding_dim=run.info.embedding_dim,
             git_sha=run.info.git_sha,
-            git_dirty=run.info.git_dirty,
+            git_dirty=git_dirty,
             date=run.info.date,
         )
     _write_json(path, _BASELINE_FILE.dump_python(rows, mode="json"))

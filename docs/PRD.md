@@ -230,6 +230,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | **Hybrid SQL with RRF** (single query / CTEs, k=60, configurable K) | **A** |
 | Retrieval config object + config hash | G |
 | Ablation runs: `dense`, `fts`, `hybrid` | G |
+| **Retrieval gate logic** (`evaluate_gate`: thresholds, tolerance, setup mismatch) | **A** |
 | CI: retrieval eval job (corpus + embedding caches restored, ingest into service DB, gate vs baseline) | G |
 | Gate demonstration: a deliberately bad PR (e.g. broken fusion) is blocked. Keep the screenshot | A |
 
@@ -274,7 +275,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | Judge rubrics: faithfulness per claim, correctness vs reference (prompt files) | A + G together |
 | promptfoo config: Python provider calling the pipeline in-process; configs `no_rag`, `hybrid` | G |
 | Assertions: faithfulness (Python, per claim), correctness (`llm-rubric`), citation precision, refusal, schema validity | G |
-| **Metric aggregation + gate logic** (thresholds, tolerance, inconclusive rule) | **A** |
+| **Metric aggregation + generation gate logic** (thresholds, tolerance, inconclusive rule; the retrieval part is Phase 2) | **A** |
 | Eval mode: fallback off, temperature 0, LLM response cache (SQLite, keyed by full prompt), concurrency 1, backoff | G |
 | `eval.yml`: label `run-eval` + push to `main`; PR comment with diff table; promptfoo HTML report artifact | G |
 | Judge–human agreement: Author labels ≥10 judge verdicts; agreement recorded | A |

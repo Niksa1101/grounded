@@ -618,7 +618,11 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
 
 ### 15.5 Aggregation and gate [A]
 `uv run grounded eval gate --suite {retrieval|generation} --results … --baseline eval/baselines/….json`
-- Output: `pass | fail | inconclusive`, a Markdown table (metric, baseline, current, Δ, threshold, ✅/❌) and exit code (0 pass/inconclusive, 1 fail).
+- Output: `pass | fail | inconclusive`, a Markdown table (metric, baseline, current, Δ, threshold, ✅/❌) and exit code (0 pass/inconclusive, 1 fail). The report goes to stdout (CI appends it to the job summary). Exit code 2 means the gate **could not run** (a missing or invalid results/baseline file, a baseline row without a required field, the generation suite before Phase 4), so CI can tell a broken input from a quality fail (§17).
+- **Retrieval gate** (`evals/gate.py:evaluate_gate`, pure: `RetrievalRun` + the baseline rows → `GateReport`; code split: the function is [A], the Markdown and the exit code are boilerplate). The spec is in `tests/unit/test_gate.py`, the contract in the function's docstring:
+  - A config is **gated** when its baseline row has `thresholds` (metric → `{"tolerance": t}`, the rule `current >= baseline - t`); a config without them is reported only (`·` in the table) and never changes the status. Today the thresholds are meant for `hybrid` (Recall@5, MRR, nDCG@5, tolerance 0.04). They live in the baseline file only, added in their own baseline PR.
+  - It **fails closed, with a reason and never an exception**: a gated config or thresholded metric missing from the results; a run whose golden-set version, golden-set sha256 or index config hash differs from the gated row's (decided 2026-10-01: *fail*, not an error, because the PR is blocked either way and the table with the reason shows in the job summary; numbers from another setup are not compared); a baseline in which no config is gated (decided 2026-10-01: a gate that checks nothing must not look green).
+  - Retrieval never calls a provider, so it is never `inconclusive`.
 - **Inconclusive:** if > 20% of cases errored for provider reasons (429/quota/timeout) → `inconclusive`. Metrics are shown with `n` but not gated. The PR comment says so explicitly.
 - Otherwise metrics are computed over non-errored cases, and `n` is reported.
 - Initial thresholds (tuned after first baselines; stored in the baseline file, not in code):
@@ -639,7 +643,7 @@ Fallback off · temperature 0 · answer cache off · rate limit and budget off �
 
 ### 15.7 Baselines and history
 - `eval/baselines/retrieval.json`, `eval/baselines/generation.json`: per config → metrics, `n`, thresholds, golden set version, prompt version, model IDs, index config hash, git SHA, date.
-- `retrieval.json` today (`schemas/eval.py:RetrievalBaselineEntry`): per config `metrics`, `n`, `k`, `golden_set_version`, `index_config_hash`, `fastapi_ref`/`fastapi_sha`, `embedding_model`/`embedding_dim`, `git_sha`, `git_dirty`, `golden_set_sha256`, `date`. `golden_set_sha256` and `git_dirty` are optional in the schema only so the row written before them can be read (`None` = written before the field); the gate (2.09) makes them required. Thresholds are added with the Phase 2 gate.
+- `retrieval.json` today (`schemas/eval.py:RetrievalBaselineEntry`): per config `metrics`, `thresholds`, `n`, `k`, `golden_set_version`, `index_config_hash`, `retrieval_config_hash`, `fastapi_ref`/`fastapi_sha`, `embedding_model`/`embedding_dim`, `git_sha`, `git_dirty`, `golden_set_sha256`, `date`. `golden_set_sha256` and `git_dirty` are **required** (since 2.09): a row without them fails to load, and the gate exits 2. `retrieval_config_hash` is still optional (no gate rule uses it). `thresholds` (optional, default none) is the one hand-written part of a row: it maps a metric name (a key of `metrics`) to `{"tolerance": t}` with `t >= 0`. `--write-baseline` keeps a refreshed row's thresholds, and refuses a run without git state (`git_dirty` unknown). Adding thresholds to the committed file is a baseline PR.
 - Updated only by an explicit PR titled `eval: update baseline (<reason>)`, with the before/after table in the description.
 - Runs on `main` also insert into production `eval_runs` (owner connection via CI secret) for the dashboard.
 

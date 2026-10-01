@@ -6,9 +6,11 @@ Later phases add the ask command and more eval suites.
 from __future__ import annotations
 
 import asyncio
+import io
 import sys
 from collections.abc import Coroutine
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -17,6 +19,7 @@ import typer
 import uvicorn
 from psycopg.conninfo import conninfo_to_dict
 
+from grounded.evals.gate import evaluate_gate, exit_code, render_markdown
 from grounded.evals.golden import (
     GOLDEN_DIR,
     TARGET_TYPE_COUNTS,
@@ -36,6 +39,8 @@ from grounded.evals.retrieval_runner import (
     golden_set_digest,
     golden_set_version,
     metric_names,
+    read_baseline,
+    read_run,
     repo_state,
     results_path,
     run_retrieval_eval,
@@ -507,7 +512,7 @@ def eval_retrieval(
             )
         try:
             update_baseline(RETRIEVAL_BASELINE, run)
-        except BaselineMismatchError as exc:
+        except (BaselineMismatchError, RetrievalEvalError) as exc:
             raise _fail(f"Baseline not updated: {exc}") from exc
         typer.echo(f"Baseline updated: {RETRIEVAL_BASELINE} ({', '.join(run.configs)})")
 
@@ -526,3 +531,58 @@ def _retrieval_modes(names: list[str]) -> list[RetrievalMode]:
             available = ", ".join(_RETRIEVAL_MODES)
             raise _fail(f"Unknown retrieval config {name!r}; available: {available}.")
     return modes
+
+
+class GateSuite(StrEnum):
+    retrieval = "retrieval"
+    generation = "generation"
+
+
+def _gate_error(message: str) -> typer.Exit:
+    """Exit 2: the gate could not run. Exit 1 is reserved for a real fail, so CI can tell a
+    quality regression from a broken input (Tech.md §17)."""
+    typer.echo(message, err=True)
+    return typer.Exit(code=2)
+
+
+@eval_app.command("gate")
+def eval_gate(
+    suite: Annotated[GateSuite, typer.Option(help="Which eval suite to gate.")],
+    results: Annotated[Path, typer.Option(help="Results file of the run to check.")],
+    baseline: Annotated[
+        Path | None,
+        typer.Option(
+            help=f"Baseline file. Default: eval/baselines/{RETRIEVAL_BASELINE.name} (retrieval).",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Compare a run with the committed baseline. Exit 0 on pass or inconclusive, 1 on fail and
+    2 if the gate could not run. The Markdown report goes to stdout."""
+    if suite is not GateSuite.retrieval:
+        raise _gate_error("The generation gate arrives in Phase 4 (tickets 4.07-4.08).")
+    baseline_path = baseline or RETRIEVAL_BASELINE
+    try:
+        run = read_run(results)
+    except (OSError, ValueError) as exc:
+        raise _gate_error(f"Cannot read the results file {results}: {exc}") from exc
+    try:
+        rows = read_baseline(baseline_path)
+    except OSError as exc:
+        raise _gate_error(f"Cannot read the baseline {baseline_path}: {exc}") from exc
+    except ValueError as exc:
+        raise _gate_error(
+            f"Invalid baseline {baseline_path}: {exc}\n"
+            "A row written before the golden-set hash and git state became required has to be "
+            "regenerated in a baseline PR."
+        ) from exc
+
+    report = evaluate_gate(run, rows)
+    # The report has ✅ ❌ Δ ≥. Redirected, a Windows stdout is cp1252 and would crash on them.
+    stdout: object = sys.stdout
+    if isinstance(stdout, io.TextIOWrapper):
+        stdout.reconfigure(encoding="utf-8")
+    typer.echo(render_markdown(report), nl=False)
+    code = exit_code(report)
+    if code:
+        raise typer.Exit(code=code)
