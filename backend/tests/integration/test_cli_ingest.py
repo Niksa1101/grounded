@@ -13,7 +13,7 @@ import pytest
 from typer.testing import CliRunner
 
 import grounded.cli
-from grounded.cli import app
+from grounded.cli import EXIT_EMBEDDINGS_UNAVAILABLE, app
 from grounded.infra.provider_errors import ProviderRateLimited
 from grounded.ingest.embed import (
     FakeEmbedder,
@@ -130,7 +130,7 @@ def test_ingest_of_an_already_built_version_needs_no_key(
 @pytest.mark.usefixtures("cli_env", "no_key")
 def test_ingest_on_a_cold_cache_without_a_key_fails_cleanly(db: str) -> None:
     result = invoke("ingest")
-    assert result.exit_code == 1
+    assert result.exit_code == EXIT_EMBEDDINGS_UNAVAILABLE
     assert "GEMINI_API_KEY must be set to embed: " in result.output
     assert re.search(r"\d+ texts are not cached\. Nothing was written", result.output)
     assert isinstance(result.exception, SystemExit)
@@ -142,7 +142,7 @@ def test_ingest_on_a_cold_cache_without_a_key_fails_cleanly(db: str) -> None:
 def test_ingest_quota_stop_explains_how_to_resume(db: str) -> None:
     StubGemini.quota_after = 3
     result = invoke("ingest")
-    assert result.exit_code == 1
+    assert result.exit_code == EXIT_EMBEDDINGS_UNAVAILABLE
     assert "daily embedding quota reached: 3 of " in result.output
     assert "Nothing was written to the database" in result.output
     with psycopg.connect(db) as conn:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +12,17 @@ import pytest
 from typer.testing import CliRunner
 
 import grounded.cli
-from grounded.cli import app
+from grounded.cli import EXIT_EMBEDDINGS_UNAVAILABLE, app
 from grounded.evals.retrieval_runner import golden_set_digest, read_run
 from grounded.infra.kvcache import KVCache
-from grounded.ingest.embed import FakeEmbedder, GeminiEmbedder, TokenCounter
+from grounded.infra.provider_errors import ProviderRateLimited
+from grounded.ingest.embed import (
+    FakeEmbedder,
+    GeminiEmbedder,
+    TaskType,
+    TokenCounter,
+    Vector,
+)
 from grounded.ingest.pipeline import index_spec, ingest, prepare_corpus
 from grounded.ingest.types import ChunkingConfig, CorpusCheckout
 from grounded.retrieval.config import RetrievalConfig
@@ -312,9 +319,27 @@ def test_eval_on_a_cold_cache_without_a_key_fails_cleanly(
     build_index(db, tmp_path)
     without_a_key(monkeypatch)
     result = invoke("--golden", str(golden_file(tmp_path)), "--out", str(tmp_path / "r.json"))
-    assert result.exit_code == 1
+    assert result.exit_code == EXIT_EMBEDDINGS_UNAVAILABLE
     assert "GEMINI_API_KEY must be set to embed: 1 questions are not cached." in result.output
     assert isinstance(result.exception, SystemExit)
+
+
+class QuotaGemini(StubGemini):
+    """The daily embedding quota is already spent."""
+
+    async def embed(self, texts: Sequence[str], task_type: TaskType) -> list[Vector]:
+        raise ProviderRateLimited("quota", retry_after_s=None, is_quota=True)
+
+
+@pytest.mark.usefixtures("settings")
+def test_eval_stopped_by_the_daily_quota_is_not_a_plain_failure(
+    db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build_index(db, tmp_path)
+    monkeypatch.setattr(grounded.cli, "GeminiEmbedder", QuotaGemini)
+    result = invoke("--golden", str(golden_file(tmp_path)), "--out", str(tmp_path / "r.json"))
+    assert result.exit_code == EXIT_EMBEDDINGS_UNAVAILABLE
+    assert "Query embedding failed (ProviderRateLimited)" in result.output
 
 
 @pytest.mark.usefixtures("settings")

@@ -98,7 +98,11 @@ Nothing was tuned to improve these numbers: `K_*` and `RRF_K` are the defaults a
 n = 25, so differences under one question (0.04) are not claims either way.
 
 ### CI quality gate
-- **Every PR:** lint, types, unit + integration tests, retrieval eval vs baseline.
+- **Every PR:** lint, types, unit + integration tests, retrieval eval vs baseline (the `retrieval-eval` job: a fresh
+  pgvector service, the pinned corpus ingested from cached embeddings, dense/fts/hybrid scored on the golden set, and
+  `grounded eval gate` blocking a drop of more than one question's worth on hybrid Recall@5, MRR or nDCG@5). The
+  metrics table is in the job summary. A cold embedding cache with no key or quota is reported as an **infrastructure
+  failure** (exit code 3), never as a quality result; `warm-cache.yml` seeds the cache.
 - **PRs labeled `run-eval` and `main`:** full promptfoo generation eval, a PR comment with a diff table, and a blocking gate.
 - Runs dominated by free-tier quota errors are reported as **inconclusive**, not as failures.
 

@@ -51,7 +51,7 @@ from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
 from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
 from grounded.infra.migrations import migrate as run_migrations
-from grounded.infra.provider_errors import ProviderError
+from grounded.infra.provider_errors import ProviderError, ProviderRateLimited
 from grounded.ingest.corpus import CorpusError, fetch_corpus
 from grounded.ingest.embed import (
     CachedEmbedder,
@@ -164,6 +164,18 @@ def _fail(message: str) -> typer.Exit:
     return typer.Exit(code=1)
 
 
+# CI tells "the vectors could not be had" from every other failure by this code (Tech.md §17):
+# a cold cache with no GEMINI_API_KEY, or the daily embedding quota. It is the provider's side, not
+# a result about quality. 1 stays the plain failure and 2 is click's usage error (and the gate's
+# "could not run"), so neither can be confused with it.
+EXIT_EMBEDDINGS_UNAVAILABLE = 3
+
+
+def _embeddings_unavailable(message: str) -> typer.Exit:
+    typer.echo(message, err=True)
+    return typer.Exit(code=EXIT_EMBEDDINGS_UNAVAILABLE)
+
+
 @app.command()
 def ingest(
     ref: Annotated[
@@ -232,12 +244,12 @@ def ingest(
                 activate=activate,
             )
         except EmbedderUnavailableError as exc:
-            raise _fail(
+            raise _embeddings_unavailable(
                 f"{exc}: {count_uncached(cache, spec, chunks)} texts are not cached. "
                 "Nothing was written to the database."
             ) from exc
         except EmbeddingQuotaExhaustedError as exc:
-            raise _fail(
+            raise _embeddings_unavailable(
                 f"Stopped: {exc}. Nothing was written to the database. Run the same command "
                 "again after the quota resets (midnight Pacific); cached texts are not re-sent."
             ) from exc
@@ -484,9 +496,12 @@ def eval_retrieval(
                 "RETRIEVAL_QUERY",
                 [item.question for item in items if item.answerable],
             )
-            raise _fail(f"{exc}: {uncached} questions are not cached.") from exc
+            raise _embeddings_unavailable(f"{exc}: {uncached} questions are not cached.") from exc
         except ProviderError as exc:
-            raise _fail(f"Query embedding failed ({type(exc).__name__}): {exc}") from exc
+            message = f"Query embedding failed ({type(exc).__name__}): {exc}"
+            if isinstance(exc, ProviderRateLimited) and exc.is_quota:
+                raise _embeddings_unavailable(message) from exc
+            raise _fail(message) from exc
         except psycopg.Error as exc:
             raise _fail(f"Database error: {exc}") from exc
 
