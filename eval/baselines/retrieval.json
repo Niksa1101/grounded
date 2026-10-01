@@ -51,6 +51,17 @@
       "ndcg@5": 0.6647048536688612,
       "ndcg@10": 0.6845789920274221
     },
+    "thresholds": {
+      "recall@5": {
+        "tolerance": 0.04
+      },
+      "mrr": {
+        "tolerance": 0.04
+      },
+      "ndcg@5": {
+        "tolerance": 0.04
+      }
+    },
     "n": 25,
     "k": 40,
     "golden_set_version": "v1",
