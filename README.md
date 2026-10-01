@@ -61,13 +61,41 @@ than the generator, and the judge's agreement with human labels is published.
 |---|---|---|---|---|---|---|---|---|
 | no_rag (LLM only) | — | — | — | — | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 | dense | 0.76 | 0.71 | 0.70 | | | | | |
-| fts | _TBD_ | _TBD_ | _TBD_ | | | | | |
-| hybrid (RRF) | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
+| fts | 0.58 | 0.43 | 0.47 | | | | | |
+| hybrid (RRF) | 0.74 | 0.66 | 0.66 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 | hybrid + rerank | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
 
 \* Shadow cost: real token counts × paid list prices (dated in `backend/pricing.toml`); the demo itself runs on free tiers.
 
 Judge–human agreement: _TBD_ · Golden set: `v1`, retrieval n = 25 (answerable questions; 1 question = 0.04) · Numbers come from `eval/baselines/*.json`, rounded to 2 decimals.
+
+### Retrieval ablation
+
+Retrieval only (no LLM), golden set `v1`, index `0.141.1`, n = 25 answerable questions. `k` is the length of the list
+the mode returns (`K_DENSE`, `K_FTS` or `K_FUSED`; MRR runs over it). Copied from `eval/baselines/retrieval.json`.
+
+| Config | n | k | Recall@5 | Recall@10 | MRR | nDCG@5 | nDCG@10 |
+|---|---|---|---|---|---|---|---|
+| dense | 25 | 20 | 0.76 | 0.92 | 0.71 | 0.70 | 0.75 |
+| fts | 25 | 20 | 0.58 | 0.70 | 0.43 | 0.47 | 0.51 |
+| hybrid (RRF) | 25 | 40 | 0.74 | 0.78 | 0.66 | 0.66 | 0.68 |
+
+**Reading: hybrid did not beat dense here.** That misses the Phase 2 target (hybrid ≥ dense on Recall@5 and MRR).
+Per-question evidence from the results file of that run:
+
+- **Recall@5 (−0.02) is within noise**: it moves with one question (q017 and q026 lose it, q019 gains it), and one
+  question is worth 0.04.
+- **MRR (−0.06) is not clearly noise.** Hybrid ranks the first grade-2 section better on 4 questions and worse on 9.
+  Four questions that dense answers at rank 1 drop to rank 2 to 4 (q001, q002, q028, q039).
+- **Recall@10 (−0.14) is the largest loss, 4 questions** (q015, q016, q026, q043): dense had a labelled section at
+  rank 3 to 10, FTS did not retrieve it, and in the fused list it falls to rank 11 to 20.
+- **FTS alone is the weak side** (Recall@5 0.58, MRR 0.43). Its OR query with `ts_rank_cd` is not BM25. For q016 and
+  q026 none of the labelled sections is in its top 20. RRF gives both lists the same weight, so a chunk that both
+  lists put at a middle rank outranks one that only dense puts first. This is what the rows are consistent with; no
+  experiment here isolates it.
+
+Nothing was tuned to improve these numbers: `K_*` and `RRF_K` are the defaults and the lexical query is unchanged.
+n = 25, so differences under one question (0.04) are not claims either way.
 
 ### CI quality gate
 - **Every PR:** lint, types, unit + integration tests, retrieval eval vs baseline.
@@ -153,7 +181,7 @@ cd frontend && npm run lint && npm run typecheck && npm run build
 ```
 
 ```bash
-uv run grounded eval retrieval --config dense
+uv run grounded eval retrieval --config dense --config fts --config hybrid
 ```
 
 ```bash

@@ -17,8 +17,52 @@
     "fastapi_sha": "95f8322ee1dcda7ceace7b1c4f6c9915b36d748f",
     "embedding_model": "gemini-embedding-001",
     "embedding_dim": 768,
-    "git_sha": "f24b79d195b1a3d18ba3b4a6f40813424f8ab8f5",
+    "git_sha": "18fd3996c5c9b23b0af50257f64a61c20cab83e3",
     "git_dirty": false,
-    "date": "2026-09-29T21:36:35.204113Z"
+    "date": "2026-10-01T11:23:53.460857Z"
+  },
+  "fts": {
+    "metrics": {
+      "recall@5": 0.58,
+      "recall@10": 0.7,
+      "mrr": 0.4348888888888889,
+      "ndcg@5": 0.46558494599676614,
+      "ndcg@10": 0.5128436136204644
+    },
+    "n": 25,
+    "k": 20,
+    "golden_set_version": "v1",
+    "golden_set_sha256": "8f0848177a5cb5a8ef649ee211ab9afb7f9bc07c73d37b37cbf3ef554e1abcb2",
+    "index_config_hash": "4949e8a3207c4294f1f39a763eba8c286fc4fc79499420b841321a66c4cf7e5a",
+    "retrieval_config_hash": "cce990bc9da0cdeb62438213aefaa929ff8ae6387847ebdb412e4c0ff65ca2ca",
+    "fastapi_ref": "0.141.1",
+    "fastapi_sha": "95f8322ee1dcda7ceace7b1c4f6c9915b36d748f",
+    "embedding_model": "gemini-embedding-001",
+    "embedding_dim": 768,
+    "git_sha": "18fd3996c5c9b23b0af50257f64a61c20cab83e3",
+    "git_dirty": false,
+    "date": "2026-10-01T11:23:53.460857Z"
+  },
+  "hybrid": {
+    "metrics": {
+      "recall@5": 0.74,
+      "recall@10": 0.78,
+      "mrr": 0.6574268398268398,
+      "ndcg@5": 0.6647048536688612,
+      "ndcg@10": 0.6845789920274221
+    },
+    "n": 25,
+    "k": 40,
+    "golden_set_version": "v1",
+    "golden_set_sha256": "8f0848177a5cb5a8ef649ee211ab9afb7f9bc07c73d37b37cbf3ef554e1abcb2",
+    "index_config_hash": "4949e8a3207c4294f1f39a763eba8c286fc4fc79499420b841321a66c4cf7e5a",
+    "retrieval_config_hash": "2f0b02bd6c8ec24536f51b23347fed033b4ab4e16fc309cf95ef062db9924da6",
+    "fastapi_ref": "0.141.1",
+    "fastapi_sha": "95f8322ee1dcda7ceace7b1c4f6c9915b36d748f",
+    "embedding_model": "gemini-embedding-001",
+    "embedding_dim": 768,
+    "git_sha": "18fd3996c5c9b23b0af50257f64a61c20cab83e3",
+    "git_dirty": false,
+    "date": "2026-10-01T11:23:53.460857Z"
   }
 }

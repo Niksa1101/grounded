@@ -421,6 +421,10 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - Vercel Hobby is non-commercial only: no ads or paid features on the demo.
 - Exact model IDs (Gemini Flash, Groq model, judge model, Cohere rerank model) are pinned in config at implementation time after checking current availability and free-tier limits. They are never assumed from memory. The embedding model is the exception: it was verified on 2026-09-26 (Phase 1) and is a default in `Settings`, since it is tied to the index.
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
+- Hybrid retrieval was below dense in the first ablation (ticket 2.07, README "Retrieval ablation"). Not tried, because
+  tuning against the golden set needs an explicit decision (AGENTS.md §13): a lexical query closer to BM25 (AND-first,
+  or weighting rare terms), a smaller weight or a shorter list (`K_FTS`) for the lexical side, `RRF_K`. Any of them
+  would be a separate PR that says it was tuned on the golden set.
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
   (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
   null and not null. Tracked in ticket 9.06.
