@@ -30,6 +30,7 @@ from grounded.evals.metrics import ChunkRef, label_ranks, mrr, ndcg_at_k, recall
 from grounded.ingest.embed import Embedder, Vector
 from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.dense import dense_search
+from grounded.retrieval.hybrid import hybrid_search
 from grounded.retrieval.index import active_index_version
 from grounded.retrieval.lexical import lexical_search
 from grounded.schemas.eval import (
@@ -173,6 +174,15 @@ async def run_retrieval_eval(
                     )
 
                 return fts, config.k_fts
+            if config.mode == "hybrid":
+
+                async def hybrid(question: str, vector: Vector) -> Sequence[ChunkRef]:
+                    return await hybrid_search(
+                        conn, question, vector, index_version_id=index.id, cfg=config
+                    )
+
+                # MRR runs over the fused list, so k is its length, not either input list's.
+                return hybrid, config.k_fused
             raise RetrievalEvalError(f"retrieval mode {config.mode!r} is not implemented yet")
 
         results: dict[str, RetrievalConfigResult] = {}
