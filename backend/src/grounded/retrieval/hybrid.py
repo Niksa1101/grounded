@@ -1,7 +1,14 @@
 """Hybrid retrieval: dense and lexical lists fused with Reciprocal Rank Fusion (DB.md §6.3).
 
-**Author-owned** (AGENTS.md §3): the query is written in ticket 2.06, this file only fixes the
-contract. The spec tests are in ``tests/integration/test_hybrid.py``.
+The query is one SQL statement. ``dense`` and ``lexical`` each rank the chunks of one index
+version and are cut to their own K; ``fused`` full-outer-joins them on chunk id and adds
+``1 / (rrf_k + rank)`` per list a chunk is in; the final select cuts to ``k_fused`` and attaches the
+chunk fields. The question becomes a tsquery through the CTEs ``lexical_search`` uses
+(``LEXICAL_QUERY_CTES``), so both modes read it the same way.
+
+RRF fuses *ranks*, not scores: cosine distance and ``ts_rank_cd`` live on unrelated scales, so
+there is nothing to normalize and no weight to tune, only ``rrf_k`` (how fast the credit decays
+with rank).
 """
 
 from __future__ import annotations
@@ -9,10 +16,64 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from pgvector import Vector
 from psycopg import AsyncConnection
 
 from grounded.retrieval.config import RetrievalConfig
+from grounded.retrieval.lexical import LEXICAL_QUERY_CTES
 from grounded.retrieval.types import RetrievedChunk
+
+# - ``row_number()`` gives the dense 1-based rank; the chunk id is in both ORDER BYs, so ranks (and
+#   the cut at K) never depend on physical row order.
+# - ``rrf_k`` is cast to float8 so the division is floating point (``1 / 61`` in integers is 0).
+# - ``USING (id)`` merges the join keys, so ``id`` is the chunk from either side. A rank missing on
+#   one side is NULL there, and COALESCE turns its credit into 0.
+# - The tie-break ``rrf_score DESC, id`` is applied before ``LIMIT %(k_fused)s`` and once more
+#   after the join to ``chunks``, because a join does not promise to keep the order.
+# - Every value, the vector included, is a bound parameter (AGENTS.md §6.11).
+_HYBRID = (
+    "WITH"
+    + LEXICAL_QUERY_CTES
+    + r""",
+dense AS (
+    SELECT id,
+           embedding <=> %(query)s AS distance,
+           row_number() OVER (ORDER BY embedding <=> %(query)s, id) AS rank
+    FROM chunks
+    WHERE index_version_id = %(index_version_id)s
+    ORDER BY rank
+    LIMIT %(k_dense)s
+),
+lexical AS (
+    SELECT id,
+           ts_rank_cd(tsv, (SELECT q FROM query)) AS score,
+           row_number() OVER (ORDER BY ts_rank_cd(tsv, (SELECT q FROM query)) DESC, id) AS rank
+    FROM chunks
+    WHERE index_version_id = %(index_version_id)s
+      AND tsv @@ (SELECT q FROM query)
+    ORDER BY rank
+    LIMIT %(k_fts)s
+),
+fused AS (
+    SELECT id,
+           dense.rank AS dense_rank,
+           dense.distance AS dense_distance,
+           lexical.rank AS fts_rank,
+           lexical.score AS fts_score,
+           COALESCE(1.0::float8 / (%(rrf_k)s::float8 + dense.rank), 0)
+               + COALESCE(1.0::float8 / (%(rrf_k)s::float8 + lexical.rank), 0) AS rrf_score
+    FROM dense
+    FULL OUTER JOIN lexical USING (id)
+    ORDER BY rrf_score DESC, id
+    LIMIT %(k_fused)s
+)
+SELECT c.id, c.section_id, c.anchor_path, c.breadcrumb_text, c.url, c.content, c.token_count,
+       c.content_hash, f.dense_rank, f.dense_distance, f.fts_rank, f.fts_score, f.rrf_score
+FROM fused AS f
+JOIN chunks AS c ON c.id = f.id
+ORDER BY f.rrf_score DESC, c.id
+"""
+)
 
 
 async def hybrid_search(
@@ -61,4 +122,33 @@ async def hybrid_search(
     (``register_vector_async``), like for ``dense_search``. The vector's dimension must match the
     index's, or Postgres raises.
     """
-    raise NotImplementedError("Author implements the hybrid query in ticket 2.06")
+    params = {
+        # A NUL cannot live in Postgres text; it splits words like whitespace (see lexical_search).
+        "question": question.replace("\x00", " "),
+        "query": Vector(list(query_vector)),
+        "index_version_id": index_version_id,
+        "k_dense": cfg.k_dense,
+        "k_fts": cfg.k_fts,
+        "k_fused": cfg.k_fused,
+        "rrf_k": cfg.rrf_k,
+    }
+    cur = await conn.execute(_HYBRID, params)
+    rows: list[tuple[Any, ...]] = await cur.fetchall()
+    return [
+        RetrievedChunk(
+            chunk_id=int(row[0]),
+            section_id=str(row[1]),
+            anchor_path=tuple(row[2]),
+            breadcrumb_text=str(row[3]),
+            url=str(row[4]),
+            content=str(row[5]),
+            token_count=int(row[6]),
+            content_hash=str(row[7]),
+            dense_rank=None if row[8] is None else int(row[8]),
+            dense_distance=None if row[9] is None else float(row[9]),
+            fts_rank=None if row[10] is None else int(row[10]),
+            fts_score=None if row[11] is None else float(row[11]),
+            rrf_score=float(row[12]),
+        )
+        for row in rows
+    ]

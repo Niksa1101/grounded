@@ -4,10 +4,7 @@ The index is hand-made (``tests/hybrid_corpus.py``): every chunk has a known ang
 vector and some repeat a rare word, so the dense list, the lexical list and the fused order are all
 known without running any query. The numbers below are worked out by hand with ``rrf_k = 60``:
 a chunk at rank ``r`` in a list adds ``1 / (60 + r)``; a chunk in no list adds nothing.
-
-Every test is a strict ``xfail`` until 2.06. ``raises=NotImplementedError`` makes the marker mean
-"fails only because the stub raises", so a broken fixture or test shows up as a real failure now.
-When implementing, delete the ``SPEC`` line from ``pytestmark``.
+Each test pins one point of the contract, which is the docstring of ``hybrid_search``.
 """
 
 from __future__ import annotations
@@ -32,10 +29,7 @@ from grounded.retrieval.types import RetrievedChunk
 from tests.hybrid_corpus import CORPUS, PAGE, RADIANS_PER_STEP, Spec, at_angle, insert_page
 from tests.support import insert_index_version, unit_vector
 
-SPEC = pytest.mark.xfail(
-    strict=True, raises=NotImplementedError, reason="Author implements in 2.06"
-)
-pytestmark = [pytest.mark.integration, SPEC]
+pytestmark = pytest.mark.integration
 
 QUERY = unit_vector(0)
 # The whole fused order for "quokka" with the default config, worked out below.
