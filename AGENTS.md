@@ -35,7 +35,7 @@ The Author writes the core of the system. The Agent writes boilerplate and teach
 | Lexical FTS query | `backend/src/grounded/retrieval/lexical.py` | 2 |
 | Hybrid SQL + RRF | `backend/src/grounded/retrieval/hybrid.py` | 2 |
 | Confidence heuristic | `backend/src/grounded/generation/confidence.py` | 3 |
-| Eval aggregation + gate logic | `backend/src/grounded/evals/gate.py` | 4 |
+| Eval aggregation + gate logic | `backend/src/grounded/evals/gate.py` | retrieval part 2, generation part 4 |
 | Provider router: fallback + circuit breaker | `backend/src/grounded/generation/router.py` | 7 |
 
 For these modules the Agent **may**:
@@ -175,6 +175,10 @@ uv run grounded golden validate ../eval/golden/golden_set.v1.jsonl --against-ind
 
 ```bash
 uv run grounded eval retrieval --config dense --config fts --config hybrid
+```
+
+```bash
+uv run grounded eval gate --suite retrieval --results <results-file>.json
 ```
 
 ```bash

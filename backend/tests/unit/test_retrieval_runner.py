@@ -315,8 +315,10 @@ def test_update_baseline_creates_replaces_and_keeps_rows(tmp_path: Path) -> None
 def test_update_baseline_rejects_a_malformed_file(tmp_path: Path) -> None:
     path = tmp_path / "retrieval.json"
     path.write_text('{"dense": {"metrics": {}}}\n', encoding="utf-8")
-    with pytest.raises(ValueError, match="n"):
+    before = path.read_bytes()
+    with pytest.raises(BaselineMismatchError, match="no longer validate"):
         update_baseline(path, make_run(("fts", 0.25)))
+    assert path.read_bytes() == before
 
 
 def test_repo_state_in_and_outside_a_checkout(tmp_path: Path) -> None:
@@ -400,9 +402,9 @@ def test_update_baseline_names_every_differing_field_and_the_model(tmp_path: Pat
     assert "embedding_model: row gemini-embedding-001, run other-model" in message
 
 
-def test_update_baseline_refuses_a_legacy_row_without_the_new_fields(tmp_path: Path) -> None:
-    # A row written before golden_set_sha256/git_dirty existed can be read, but it can't be shown
-    # to come from the same golden-set bytes, so it counts as a mismatch.
+def test_update_baseline_refuses_a_legacy_row_without_the_required_fields(tmp_path: Path) -> None:
+    # A row written before golden_set_sha256/git_dirty existed can't be read any more (2.09): it
+    # can't be shown to come from the same golden-set bytes. The message names the way out.
     path = tmp_path / "retrieval.json"
     update_baseline(path, make_run(("dense", 0.5)))
     rows = json.loads(path.read_bytes())
@@ -411,11 +413,12 @@ def test_update_baseline_refuses_a_legacy_row_without_the_new_fields(tmp_path: P
     path.write_text(json.dumps(rows), encoding="utf-8")
     before = path.read_bytes()
 
-    with pytest.raises(BaselineMismatchError, match="golden_set_sha256: row unset"):
+    with pytest.raises(BaselineMismatchError, match=r"no longer validate.*run all configs"):
         update_baseline(path, make_run(("fts", 0.25)))
     assert path.read_bytes() == before
 
-    # Re-running the legacy row's own config replaces it, so a joint run is the way out.
+    # Starting the file again from a joint run works.
+    path.unlink()
     rows_after = update_baseline(path, make_run(("dense", 0.6)))
     assert rows_after["dense"].golden_set_sha256 == "a" * 64
     assert rows_after["dense"].retrieval_config_hash == retrieval_config("dense").config_hash

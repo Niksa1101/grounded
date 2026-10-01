@@ -147,24 +147,38 @@ class RetrievalRun(BaseModel):
     configs: dict[str, RetrievalConfigResult]
 
 
+class MetricThreshold(BaseModel):
+    """The gate rule for one metric: the run may be at most ``tolerance`` below the baseline
+    (``current >= baseline - tolerance``). The tolerance is policy, set by hand in the baseline
+    file (AGENTS.md §6.7), never in code."""
+
+    model_config = _FROZEN
+
+    tolerance: float = Field(ge=0)
+
+
 class RetrievalBaselineEntry(BaseModel):
-    """One config's row in ``eval/baselines/retrieval.json``, copied from a run, never typed.
+    """One config's row in ``eval/baselines/retrieval.json``. The numbers are copied from a run,
+    never typed; ``thresholds`` is the one hand-written part.
 
-    No thresholds yet: they arrive with the Phase 2 gate (plan decision #14).
+    ``thresholds`` maps a metric name to its gate rule. A config with thresholds is **gated**: the
+    gate fails the suite when any of its metrics falls too far. A config without them is only
+    reported. Names must be keys of ``metrics``. ``update_baseline`` keeps a row's thresholds when
+    it refreshes the numbers.
 
-    ``golden_set_sha256``, ``git_dirty`` and ``retrieval_config_hash`` are optional only so a row
-    written before they existed can still be read: ``None`` means "written before this field".
-    ``update_baseline`` treats a row without the golden-set hash as a different setup, and the gate
-    (2.09) makes all three required.
+    ``golden_set_sha256`` and ``git_dirty`` are required (a row written before R.03 can no longer be
+    read: regenerate it in a baseline PR). ``retrieval_config_hash`` stays optional: no gate rule
+    needs it yet.
     """
 
     model_config = _FROZEN
 
     metrics: dict[str, float]
+    thresholds: dict[str, MetricThreshold] = Field(default_factory=dict)
     n: int = Field(ge=1)
     k: int = Field(ge=1)
     golden_set_version: str
-    golden_set_sha256: str | None = None
+    golden_set_sha256: str
     index_config_hash: str
     retrieval_config_hash: str | None = None
     fastapi_ref: str
@@ -172,5 +186,12 @@ class RetrievalBaselineEntry(BaseModel):
     embedding_model: str
     embedding_dim: int
     git_sha: str | None
-    git_dirty: bool | None = None
+    git_dirty: bool
     date: datetime
+
+    @model_validator(mode="after")
+    def _check_thresholds(self) -> Self:
+        unknown = sorted(set(self.thresholds) - set(self.metrics))
+        if unknown:
+            raise ValueError(f"thresholds for metrics the row doesn't have: {', '.join(unknown)}")
+        return self
