@@ -31,11 +31,12 @@ from psycopg import AsyncConnection
 
 from grounded.retrieval.types import RetrievedChunk
 
-# ``query`` is a scalar sub-select, so the planner sees a single value and can use the GIN index on
-# ``chunks.tsv`` (a join against the CTE would not). The chunk id breaks score ties: eval
-# reproducibility depends on it (AGENTS.md §9). All values are bound parameters (AGENTS.md §6.11).
-_LEXICAL = r"""
-WITH lexemes AS (
+# Steps 1-3 above as two CTEs. ``hybrid`` prepends the same text, so the question is turned into a
+# tsquery one way everywhere. ``query`` is a scalar sub-select (``(SELECT q FROM query)``), so the
+# planner sees a single value and can use the GIN index on ``chunks.tsv`` (a join against the CTE
+# would not).
+LEXICAL_QUERY_CTES = r"""
+lexemes AS (
     SELECT unnest(tsvector_to_array(to_tsvector('english', %(question)s))) AS lexeme
 ),
 query AS (
@@ -45,6 +46,14 @@ query AS (
            ) AS q
     FROM lexemes
 )
+"""
+
+# The chunk id breaks score ties: eval reproducibility depends on it (AGENTS.md §9). All values are
+# bound parameters (AGENTS.md §6.11).
+_LEXICAL = (
+    "WITH"
+    + LEXICAL_QUERY_CTES
+    + r"""
 SELECT id, section_id, anchor_path, breadcrumb_text, url, content, token_count, content_hash,
        ts_rank_cd(tsv, (SELECT q FROM query)) AS score
 FROM chunks
@@ -53,6 +62,7 @@ WHERE index_version_id = %(index_version_id)s
 ORDER BY score DESC, id
 LIMIT %(k)s
 """
+)
 
 
 async def lexical_search(
