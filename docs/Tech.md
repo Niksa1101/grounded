@@ -303,7 +303,7 @@ Every stage is wrapped in a `timing.stage("name")` context manager that fills th
 - **Dense:** exact cosine scan, top `K_DENSE` (DB.md §6.1): `retrieval/dense.py:dense_search(conn, query_vector, index_version_id=, k=)`, async, the vector bound as a pgvector `Vector`, `ORDER BY distance, id`.
 - **Active version:** `retrieval/index.py:active_index_version(conn)` → `IndexVersion` (id, ref, SHA, embedding model/dim, config hash); none active → `NoActiveIndexError`.
 - **Lexical [A]:** OR-semantics tsquery over weighted `tsv`, top `K_FTS` (DB.md §6.2).
-- **Hybrid [A]:** RRF, `score = Σ 1/(RRF_K + rank)`, top `K_FUSED` unique chunks, deterministic tie-break (DB.md §6.3).
+- **Hybrid [A]:** `retrieval/hybrid.py:hybrid_search(conn, question, query_vector, *, index_version_id, cfg)`. One statement; RRF, `score = Σ 1/(RRF_K + rank)` over a dense list cut to `K_DENSE` and a lexical list cut to `K_FTS`, top `K_FUSED` unique chunks, deterministic tie-break (DB.md §6.3).
 - Output type: `list[RetrievedChunk]` (frozen dataclass, `retrieval/types.py`) with `chunk_id, section_id, anchor_path, breadcrumb_text, url, content, token_count, content_hash` and the signals `dense_rank, dense_distance, fts_rank, fts_score, rrf_score, rerank_score` (each `None` unless the mode produced it).
 - Retrieval modes (for evals and ablations): `dense`, `fts`, `hybrid`, `hybrid_rerank`. The `no_rag` mode skips retrieval entirely.
 - Context selection: the first `K_CONTEXT` chunks after (optional) rerank. If two selected chunks are adjacent parts of one split section, keep both (they are sent in document order within the source block).
