@@ -9,6 +9,7 @@ CLI wrapper, with ``evaluate_gate`` replaced by a scripted verdict.
 from __future__ import annotations
 
 import json
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -527,5 +528,7 @@ def test_the_generation_gate_is_not_there_yet(files: tuple[Path, Path]) -> None:
 def test_gate_help_names_the_options() -> None:
     result = runner.invoke(app, ["eval", "gate", "--help"])
     assert result.exit_code == 0
+    # CI sets FORCE_COLOR, so the help is styled: compare the text without the escape codes.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     for option in ("--suite", "--results", "--baseline"):
-        assert option in result.output
+        assert option in plain
