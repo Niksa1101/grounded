@@ -1,8 +1,8 @@
 """The eval gate: compare a run with the committed baseline and say pass or fail (Tech.md §15.5).
 
-**Author-owned** (AGENTS.md §3): ``evaluate_gate`` is written in ticket 2.10, this file only fixes
-the contract. The spec tests are in ``tests/unit/test_gate.py``. The retrieval part lives here in
-Phase 2; the generation part and the ``inconclusive`` rule arrive in Phase 4 (4.07-4.08).
+**Author-owned** (AGENTS.md §3): ``evaluate_gate`` was written in ticket 2.10 at the Author's
+explicit request. The spec tests are in ``tests/unit/test_gate.py``. The retrieval part lives here
+in Phase 2; the generation part and the ``inconclusive`` rule arrive in Phase 4 (4.07-4.08).
 
 Everything below ``evaluate_gate`` is boilerplate that decides nothing: the report's Markdown and
 the CLI exit code.
@@ -15,7 +15,7 @@ from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from grounded.schemas.eval import RetrievalBaselineEntry, RetrievalRun
+from grounded.schemas.eval import RetrievalBaselineEntry, RetrievalRun, RetrievalRunInfo
 
 GateStatus = Literal["pass", "fail", "inconclusive"]
 
@@ -76,7 +76,102 @@ def evaluate_gate(run: RetrievalRun, baseline: Mapping[str, RetrievalBaselineEnt
 
     ``baseline`` rows are already validated: ``golden_set_sha256`` and ``git_dirty`` are present.
     """
-    raise NotImplementedError("Author implements the gate in ticket 2.10")
+    rows: list[GateRow] = []
+    reasons: list[str] = []
+    gated_configs = 0
+
+    # Sorted, so the same inputs always give the same row order.
+    for name in sorted(baseline.keys() | run.configs.keys()):
+        entry = baseline.get(name)
+        result = run.configs.get(name)
+        gated = entry is not None and bool(entry.thresholds)
+        if gated:
+            gated_configs += 1
+
+        if result is None:
+            if gated:
+                reasons.append(f"{name}: gated config is missing from the run")
+            continue
+
+        if entry is not None and gated:
+            differences = _setup_differences(run.info, entry)
+            if differences:
+                reasons.append(
+                    f"{name}: run is not comparable with the baseline ({differences}); "
+                    "numbers scored on another golden set or index prove nothing"
+                )
+                continue
+
+        for metric in _metrics_to_report(result.metrics, entry):
+            row = _metric_row(name, metric, result.metrics.get(metric), result.n, entry)
+            rows.append(row)
+            if row.current is None and row.passed is not None:
+                reasons.append(f"{name}: gated metric {metric} is missing from the run")
+
+    if gated_configs == 0:
+        reasons.append("no config in the baseline is gated: the gate would check nothing")
+
+    failed = bool(reasons) or any(row.passed is False for row in rows)
+    return GateReport(status="fail" if failed else "pass", rows=rows, reasons=reasons)
+
+
+# --- Helpers of evaluate_gate --------------------------------------------------------------------
+
+# A drop of exactly the tolerance passes, but ``baseline - tolerance`` is floating point
+# (0.58 - 0.04 == 0.5399999999999999) and so is ``baseline - current``. Metrics are means of a few
+# dozen 0/1-ish values: far coarser than this, so it only absorbs rounding, never a real drop.
+_EPSILON: Final = 1e-9
+
+
+def _setup_differences(info: RetrievalRunInfo, entry: RetrievalBaselineEntry) -> str:
+    """The setup fields where the run and the baseline row disagree, empty when they match."""
+    pairs = (
+        ("golden_set_version", info.golden_set_version, entry.golden_set_version),
+        ("golden_set_sha256", info.golden_set_sha256, entry.golden_set_sha256),
+        ("index_config_hash", info.index_config_hash, entry.index_config_hash),
+    )
+    return ", ".join(
+        f"{field}: baseline {baseline[:12]}, run {current[:12]}"
+        for field, current, baseline in pairs
+        if current != baseline
+    )
+
+
+def _metrics_to_report(
+    current: Mapping[str, float], entry: RetrievalBaselineEntry | None
+) -> list[str]:
+    """Every metric the run has, plus any gated one it lacks (it must show up as a failure)."""
+    missing_gated = [] if entry is None else [m for m in entry.thresholds if m not in current]
+    return [*current, *missing_gated]
+
+
+def _metric_row(
+    config: str,
+    metric: str,
+    current: float | None,
+    n: int,
+    entry: RetrievalBaselineEntry | None,
+) -> GateRow:
+    baseline = None if entry is None else entry.metrics.get(metric)
+    delta = None if current is None or baseline is None else current - baseline
+    rule = None if entry is None else entry.thresholds.get(metric)
+
+    threshold = None
+    passed = None
+    if rule is not None and baseline is not None:
+        threshold = baseline - rule.tolerance
+        # ``>=`` is False for NaN, so a NaN current fails closed.
+        passed = current is not None and current >= threshold - _EPSILON
+    return GateRow(
+        config=config,
+        metric=metric,
+        baseline=baseline,
+        current=current,
+        delta=delta,
+        threshold=threshold,
+        passed=passed,
+        n=n,
+    )
 
 
 # --- Rendering and exit code (boilerplate: they decide nothing) -----------------------------------
