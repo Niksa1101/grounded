@@ -578,7 +578,7 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
   - `grounded golden validate [file] [--against-index]`: schema, unique IDs, type mix vs the PRD §12 target (reported, not enforced), then label resolution against the corpus chunks with `metrics.section_matches`: every label must match a chunk and no two labels of an item may match the same chunk. `--against-index` repeats it on the active index. Any problem → exit 1.
 
 ### 15.2 Retrieval eval (Python) [A: metrics]
-`uv run grounded eval retrieval [--config dense|fts ...] [--golden <golden_set.vN.jsonl>] [--out <file>] [--write-baseline]` (code: `evals/retrieval_runner.py`; Phase 2 currently has `dense` and `fts`, then adds `hybrid`)
+`uv run grounded eval retrieval [--config dense|fts ...] [--golden <golden_set.vN.jsonl>] [--out <file>] [--write-baseline]` (code: `evals/retrieval_runner.py`; modes: `dense`, `fts`, `hybrid`; `--config` is repeated, one per mode; `hybrid_rerank` arrives in Phase 6)
 - Runs against the **active** index of `DATABASE_URL`. The embedding model/dim in settings must equal the index's, or the run fails (vectors of another model are not comparable). Questions are embedded in one `RETRIEVAL_QUERY` batch through the SQLite embedding cache, so a re-run makes no API calls.
 - The golden-set file must be named `golden_set.v<N>.jsonl`; the version is recorded with the results.
 - Per answerable question: run retrieval mode → ranked chunks → rank of each label = 1-based position of the first **chunk** that matches it (each label counted once; every chunk takes a position, including further parts of an already ranked section, since those also fill the `K_CONTEXT` slots) → metrics. Contract and spec: `evals/metrics.py`, `tests/unit/test_metrics.py`.

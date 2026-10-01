@@ -174,7 +174,7 @@ uv run grounded golden validate ../eval/golden/golden_set.v1.jsonl --against-ind
 ```
 
 ```bash
-uv run grounded eval retrieval --config dense --config fts
+uv run grounded eval retrieval --config dense --config fts --config hybrid
 ```
 
 ```bash
