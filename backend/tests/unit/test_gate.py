@@ -1,9 +1,8 @@
 """The retrieval gate (Tech.md §15.5, ticket 2.09).
 
-``evaluate_gate`` is the Author's (ticket 2.10): its spec tests are strict ``xfail`` and name that
-ticket. They state *behavior* (a table of baselines, runs and verdicts), not the algorithm. The rest
-is boilerplate and must pass today: the baseline schema, the Markdown report, the exit code and the
-CLI wrapper, with ``evaluate_gate`` replaced by a scripted verdict.
+The spec tests of ``evaluate_gate`` (ticket 2.10) state *behavior* (a table of baselines, runs and
+verdicts), not the algorithm. The rest is boilerplate: the baseline schema, the Markdown report, the
+exit code and the CLI wrapper, with ``evaluate_gate`` replaced by a scripted verdict.
 """
 
 from __future__ import annotations
@@ -44,14 +43,6 @@ TOLERANCE = 0.04
 
 runner = CliRunner()
 HEADLINE = {"pass": "✅", "inconclusive": "⚠️", "fail": "❌"}
-
-# The Author removes this marker from every test below when evaluate_gate passes it (ticket 2.10).
-spec = pytest.mark.xfail(
-    strict=True,
-    raises=NotImplementedError,
-    reason="Author implements evaluate_gate in ticket 2.10",
-)
-
 
 # --- Builders ------------------------------------------------------------------------------------
 
@@ -146,10 +137,9 @@ def reason_mentioning(report: GateReport, word: str) -> bool:
     return any(word in reason for reason in report.reasons)
 
 
-# --- Spec: evaluate_gate (the Author's, ticket 2.10) --------------------------------------------
+# --- Spec: evaluate_gate (ticket 2.10) --------------------------------------------
 
 
-@spec
 def test_a_run_equal_to_the_baseline_passes() -> None:
     report = evaluate_gate(make_run({"hybrid": all_metrics()}), {"hybrid": entry()})
     assert report.status == "pass"
@@ -158,7 +148,6 @@ def test_a_run_equal_to_the_baseline_passes() -> None:
     assert {name for name, row in gated.items() if row.passed} == set(GATED)
 
 
-@spec
 def test_a_run_better_than_the_baseline_passes() -> None:
     report = evaluate_gate(
         make_run({"hybrid": all_metrics(0.9)}), {"hybrid": entry(all_metrics(0.7))}
@@ -183,7 +172,6 @@ JUST_PAST = [
 ]
 
 
-@spec
 @pytest.mark.parametrize(("baseline", "tolerance", "current"), AT_TOLERANCE)
 def test_a_drop_of_exactly_the_tolerance_passes(
     baseline: float, tolerance: float, current: float
@@ -194,7 +182,6 @@ def test_a_drop_of_exactly_the_tolerance_passes(
     assert all(row.passed for name, row in rows_of(report, "hybrid").items() if name in GATED)
 
 
-@spec
 @pytest.mark.parametrize(("baseline", "tolerance", "current"), JUST_PAST)
 def test_a_drop_just_past_the_tolerance_fails(
     baseline: float, tolerance: float, current: float
@@ -206,7 +193,6 @@ def test_a_drop_just_past_the_tolerance_fails(
 
 
 @pytest.mark.parametrize("metric", GATED)
-@spec
 def test_one_failing_metric_fails_the_suite(metric: str) -> None:
     current = all_metrics(0.7, **{metric: 0.5})
     report = evaluate_gate(make_run({"hybrid": current}), {"hybrid": entry(all_metrics(0.7))})
@@ -215,7 +201,6 @@ def test_one_failing_metric_fails_the_suite(metric: str) -> None:
     assert [name for name, row in rows.items() if row.passed is False] == [metric]
 
 
-@spec
 def test_rows_carry_baseline_current_delta_threshold_and_n() -> None:
     report = evaluate_gate(
         make_run({"hybrid": all_metrics(0.5)}, n=30), {"hybrid": entry(all_metrics(0.75))}
@@ -228,7 +213,6 @@ def test_rows_carry_baseline_current_delta_threshold_and_n() -> None:
     assert row.n == 30  # the run's n, not the baseline's 25
 
 
-@spec
 def test_only_metrics_with_a_threshold_are_gated() -> None:
     # recall@10 collapses, but the baseline only gates the three headline metrics.
     current = all_metrics(0.7, **{"recall@10": 0.0})
@@ -238,7 +222,6 @@ def test_only_metrics_with_a_threshold_are_gated() -> None:
     assert unrated is None or unrated.passed is None
 
 
-@spec
 def test_a_gated_config_missing_from_the_results_fails_with_its_name() -> None:
     baseline = {"hybrid": entry(), "dense": entry(gated=())}
     report = evaluate_gate(make_run({"dense": all_metrics()}), baseline)
@@ -246,7 +229,6 @@ def test_a_gated_config_missing_from_the_results_fails_with_its_name() -> None:
     assert reason_mentioning(report, "hybrid")
 
 
-@spec
 def test_a_gated_metric_missing_from_the_run_fails_with_the_config_name() -> None:
     current = {name: value for name, value in all_metrics().items() if name != "mrr"}
     report = evaluate_gate(make_run({"hybrid": current}), {"hybrid": entry()})
@@ -254,7 +236,6 @@ def test_a_gated_metric_missing_from_the_run_fails_with_the_config_name() -> Non
     assert reason_mentioning(report, "hybrid")
 
 
-@spec
 def test_configs_without_thresholds_are_reported_but_never_gated() -> None:
     baseline = {"hybrid": entry(), "dense": entry(all_metrics(0.76), gated=())}
     run = make_run({"hybrid": all_metrics(), "dense": all_metrics(0.1), "fts": all_metrics(0.1)})
@@ -268,7 +249,6 @@ def test_configs_without_thresholds_are_reported_but_never_gated() -> None:
     assert (fts.baseline, fts.passed, fts.threshold) == (None, None, None)
 
 
-@spec
 def test_a_baseline_that_gates_nothing_fails() -> None:
     report = evaluate_gate(
         make_run({"hybrid": all_metrics(), "dense": all_metrics()}),
@@ -285,7 +265,6 @@ MISMATCHES = [
 ]
 
 
-@spec
 @pytest.mark.parametrize("differs", MISMATCHES)
 def test_a_run_from_another_setup_than_the_baseline_fails_with_a_reason(
     differs: dict[str, str],
@@ -298,7 +277,6 @@ def test_a_run_from_another_setup_than_the_baseline_fails_with_a_reason(
     assert not any(row.passed for row in rows_of(report, "hybrid").values())
 
 
-@spec
 def test_the_same_inputs_give_the_same_report() -> None:
     run = make_run({"hybrid": all_metrics(0.5)})
     baseline = {"hybrid": entry(all_metrics(0.7))}
