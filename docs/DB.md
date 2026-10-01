@@ -347,8 +347,10 @@ The query specs below are **contracts**. The Author implements the lexical and h
 ### 6.3 Hybrid with RRF (Phase 2, Author)
 - One SQL statement with CTEs: `dense` (ranked), `lexical` (ranked), `fused` = full outer join on `chunk_id`.
 - RRF score = Σ over lists of `1 / (k_rrf + rank)`, with `k_rrf = 60`. A missing rank contributes 0.
-- Return the top `k_fused` (up to 40 unique chunks) with `rrf_score, dense_rank, fts_rank` (kept for confidence and debugging), joined with chunk fields needed downstream (`section_id, anchor_path, breadcrumb_text, url, content, token_count, content_hash`).
-- Deterministic tie-break: `rrf_score DESC, chunk_id ASC`. Eval reproducibility depends on it.
+- Return the top `k_fused` (up to 40 unique chunks) with `rrf_score, dense_rank, dense_distance, fts_rank, fts_score` (kept for confidence and debugging; a signal is `NULL` for a chunk that is not in that list), joined with chunk fields needed downstream (`section_id, anchor_path, breadcrumb_text, url, content, token_count, content_hash`).
+- Deterministic tie-break: `rrf_score DESC, chunk_id ASC`, applied before the cut to `k_fused`. Eval reproducibility depends on it.
+- Each list is cut to its own K (`k_dense`, `k_fts`) *before* fusion. A question with no lexemes leaves the `lexical` list empty, so the result is the dense ranking (RRF over one list), not an error. `k_dense`, `k_fts`, `k_fused` and `k_rrf` come from `RetrievalConfig` (`rrf_k`), never literals.
+- Code: `retrieval/hybrid.py:hybrid_search(conn, question, query_vector, *, index_version_id, cfg)`. The contract is its docstring, the spec is `tests/integration/test_hybrid.py`.
 - Parameters are bound (`%s`), never string-formatted, including the vector.
 
 ## 7. Runtime state queries (Agent)

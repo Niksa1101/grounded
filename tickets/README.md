@@ -143,7 +143,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [2.02](phase-2/2.02-lexical-spec.md) | Lexical FTS search — spec | Spec | G | done | [#21](https://github.com/Niksa1101/grounded/pull/21) |
 | [2.03](phase-2/2.03-lexical.md) | Lexical FTS search — implementation | Author | A | done | [#22](https://github.com/Niksa1101/grounded/pull/22) |
 | [2.04](phase-2/2.04-eval-fts.md) | `fts` mode in the retrieval eval | Build | G | done | [#26](https://github.com/Niksa1101/grounded/pull/26) |
-| [2.05](phase-2/2.05-hybrid-spec.md) | Hybrid RRF search — spec | Spec | G | todo | |
+| [2.05](phase-2/2.05-hybrid-spec.md) | Hybrid RRF search — spec | Spec | G | done | [#27](https://github.com/Niksa1101/grounded/pull/27) |
 | [2.06](phase-2/2.06-hybrid-rrf.md) | Hybrid RRF search — implementation | Author | A | todo | |
 | [2.07](phase-2/2.07-ablation.md) | `hybrid` mode, ablation run and baseline rows | Build + Baseline | G | todo | |
 | [2.08](phase-2/2.08-decision-ci-cache.md) | Decision: seeding the CI corpus and embedding caches | Decision | D | todo | |
