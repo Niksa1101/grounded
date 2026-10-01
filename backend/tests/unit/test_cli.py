@@ -20,9 +20,10 @@ from tests.support import make_settings
 runner = CliRunner()
 
 
-def test_retrieval_eval_selects_fts_and_preserves_mode_order() -> None:
+def test_retrieval_eval_selects_every_mode_and_preserves_order() -> None:
     assert _retrieval_modes(["fts"]) == ["fts"]
-    assert _retrieval_modes(["dense", "fts"]) == ["dense", "fts"]
+    assert _retrieval_modes(["dense", "fts", "hybrid"]) == ["dense", "fts", "hybrid"]
+    assert _retrieval_modes(["hybrid", "dense"]) == ["hybrid", "dense"]
 
 
 # Nothing listens on port 1, so the connection is refused locally (no external network). The timeout

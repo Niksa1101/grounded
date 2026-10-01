@@ -407,7 +407,7 @@ def eval_retrieval(
         list[str] | None,
         typer.Option(
             "--config",
-            help="Retrieval mode to score (repeatable): dense or fts.",
+            help="Retrieval mode to score (repeatable): dense, fts or hybrid.",
             show_default=False,
         ),
     ] = None,
@@ -512,7 +512,7 @@ def eval_retrieval(
         typer.echo(f"Baseline updated: {RETRIEVAL_BASELINE} ({', '.join(run.configs)})")
 
 
-_RETRIEVAL_MODES: tuple[RetrievalMode, ...] = ("dense", "fts")
+_RETRIEVAL_MODES: tuple[RetrievalMode, ...] = ("dense", "fts", "hybrid")
 
 
 def _retrieval_modes(names: list[str]) -> list[RetrievalMode]:

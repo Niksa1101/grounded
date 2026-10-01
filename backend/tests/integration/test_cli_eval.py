@@ -216,6 +216,37 @@ def test_fts_and_dense_fts_score_the_active_index_without_new_embeddings(
     assert not baseline.exists()
 
 
+def test_hybrid_scores_the_fused_list_next_to_its_two_inputs(
+    db: str, tmp_path: Path, baseline: Path, settings: Settings
+) -> None:
+    build_index(db, tmp_path)
+    golden, out = golden_file(tmp_path), tmp_path / "results" / "run.json"
+
+    result = invoke(
+        *("--config", "dense", "--config", "fts", "--config", "hybrid"),
+        *("--golden", str(golden), "--out", str(out), "--write-baseline"),
+    )
+    assert result.exit_code == 0, result.output
+    # The first mode embeds the question, the other two read it from the cache.
+    assert "1 questions embedded, 2 from cache" in result.stdout
+    assert sum(len(texts) for stub in StubGemini.instances for texts, _ in stub.calls) == 1
+    run = read_run(out)
+    assert list(run.configs) == ["dense", "fts", "hybrid"]
+    hybrid = run.configs["hybrid"]
+    expected = RetrievalConfig.from_settings(settings, "hybrid")
+    assert hybrid.retrieval_config == expected
+    assert hybrid.retrieval_config_hash == expected.config_hash
+    assert hybrid.k == settings.k_fused  # MRR is taken over the fused list
+    [question] = hybrid.questions
+    assert 0 < len(question.retrieved) <= settings.k_fused
+
+    rows = json.loads(baseline.read_bytes())
+    assert list(rows) == ["dense", "fts", "hybrid"]
+    assert rows["hybrid"]["metrics"] == hybrid.metrics
+    assert rows["hybrid"]["k"] == settings.k_fused
+    assert rows["hybrid"]["retrieval_config_hash"] == expected.config_hash
+
+
 @pytest.mark.usefixtures("settings")
 def test_eval_without_an_active_index(db: str, tmp_path: Path) -> None:
     build_index(db, tmp_path, activate=False)
@@ -240,7 +271,10 @@ def test_eval_refuses_another_embedding_model(
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--config", "hybrid"], "Unknown retrieval config 'hybrid'; available: dense, fts."),
+        (
+            ["--config", "hybrid_rerank"],
+            "Unknown retrieval config 'hybrid_rerank'; available: dense, fts, hybrid.",
+        ),
         (["--golden", "{tmp}/golden.jsonl"], "golden_set.v<N>.jsonl"),
     ],
 )
