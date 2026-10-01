@@ -659,6 +659,7 @@ Rules: **no real network calls in pytest.** A socket-blocking fixture fails any 
 
 | Workflow | Trigger | Jobs |
 |---|---|---|
+| `warm-cache.yml` | `workflow_dispatch` (on `main`) | restore `.cache` → migrate → ingest pinned ref into a service DB → save `.cache` (`if: always()`). Seeds and re-seeds the CI caches (below) |
 | `ci.yml` | PR, push `main` | **backend**: `uv sync --frozen`, ruff check/format --check, pyright, pytest (pgvector service). **frontend**: `npm ci`, lint, typecheck, build. **retrieval-eval**: restore `.cache` (corpus + embeddings) → migrate → ingest pinned ref into service DB → retrieval eval (all configs) → gate vs `eval/baselines/retrieval.json` → job summary |
 | `eval.yml` | PR `labeled`/`synchronize` with label `run-eval`; push `main` | same DB setup → `npx promptfoo@<ver> eval -j 1` → gate → PR comment (create/update by marker `<!-- grounded-eval -->`) → upload HTML/JSON report artifact → on `main`: insert `eval_runs` |
 | `ingest.yml` | `workflow_dispatch(ref, activate)` | ingest into Neon with `DATABASE_URL_DIRECT`; prints index stats |
@@ -668,7 +669,15 @@ Notes:
 - Every third-party action in a workflow is pinned to a **commit SHA** with the version in a comment (`uses: actions/checkout@<sha> # v7.0.1`), read with `gh api repos/<owner>/<repo>/git/ref/tags/<tag>` (dereferencing annotated tags). A tag can move; a SHA can't. Bump them deliberately, not by a floating tag.
 - GitHub disables scheduled workflows after 60 days without repo activity. Documented in README limitations.
 - Secrets: `GEMINI_API_KEY`, `GROQ_API_KEY`, `COHERE_API_KEY`, `DATABASE_URL_DIRECT`. Backend deploys go through the Vercel Git integration, not a workflow. PR workflows only run for same-repo branches, so secrets are available.
-- `.cache` key: `hash(FASTAPI_REF, chunking config, EMBEDDING_MODEL, EMBEDDING_DIM)` with a restore-key fallback. GitHub evicts caches unused for 7 days, which means one full re-embed (~3k texts), acceptable.
+- **CI caches (PRD D45, checked 2026-10-01).** Two `actions/cache` entries, not one:
+  - corpus clone `.cache/corpus`: key `corpus-<FASTAPI_REF>`;
+  - `.cache/embeddings.sqlite`: key `embeddings-<EMBEDDING_MODEL>-<EMBEDDING_DIM>-<run_id>`, `restore-keys: embeddings-<EMBEDDING_MODEL>-<EMBEDDING_DIM>-`. The chunking config is **not** in the key: vectors are keyed by `sha256(text)` (§5.6), so a chunker change misses only the chunks whose text changed, and the file only grows. A key is immutable and `save` never overwrites one, hence the unique `run_id` suffix. Of several prefix matches, GitHub restores the most recently created.
+  - Scope: a run restores caches of its own branch and of the default branch. A cache saved on a PR branch is invisible to `main` and other PRs, so **PR jobs restore only**. Only `main` pushes and the warm-cache workflow save.
+  - `actions/cache` saves in a post step that runs only if the job succeeded. The jobs that save use `actions/cache/restore` and `actions/cache/save` with `if: always()`, so vectors paid for before a quota stop are kept.
+  - GitHub evicts caches not used for 7 days (10 GB per repository, least recently used first). Every restore resets the clock, and `main` pushes restore it.
+- **Seeding and re-seeding.** A full ingest is ~1,045 chunk texts plus 25 answerable golden questions, which is over one day of the free embedding quota (1K texts per day, §5.6). `warm-cache.yml` (`workflow_dispatch`, `main`, `GEMINI_API_KEY`) runs the same ingest into a service pgvector DB and saves the cache even when the daily quota stops it. Run it on two consecutive days; day two sends only the ~70 texts still missing. The same workflow is the runbook after an eviction or a corpus/model change. The cache is derived data and is never committed (AGENTS.md §11) or uploaded by hand.
+- **Infra failure is not a quality failure.** In `retrieval-eval`, a cold-cache miss that hits the daily quota, or a miss with no `GEMINI_API_KEY` (`EmbedderUnavailableError`), fails the ingest/eval step with a distinct exit code and a message that says how many texts are missing. The gate step runs only after those steps succeed, so only the gate step can mean "quality fail". The job summary names which of the two happened. It is never a skip and never a pass (AGENTS.md §7).
+- CI configuration: the only secret for this is `GEMINI_API_KEY`. `DATABASE_URL` points at the service pgvector container (a plain env value, like the `backend` job). `EMBEDDING_MODEL` and `FASTAPI_REF` are **not** CI variables: they have defaults in `Settings`, which stays the single source.
 
 ## 18. Deployment
 
