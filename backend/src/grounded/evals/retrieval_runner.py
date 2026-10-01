@@ -31,6 +31,7 @@ from grounded.ingest.embed import Embedder, Vector
 from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.dense import dense_search
 from grounded.retrieval.index import active_index_version
+from grounded.retrieval.lexical import lexical_search
 from grounded.schemas.eval import (
     GoldenItem,
     RetrievalBaselineEntry,
@@ -156,13 +157,23 @@ async def run_retrieval_eval(
 
         def build_search(config: RetrievalConfig) -> tuple[Search, int]:
             """The search for ``config.mode`` and how many chunks it retrieves."""
-            if config.mode != "dense":  # Phase 2 adds fts and hybrid
-                raise RetrievalEvalError(f"retrieval mode {config.mode!r} is not implemented yet")
+            if config.mode == "dense":
 
-            async def dense(question: str, vector: Vector) -> Sequence[ChunkRef]:
-                return await dense_search(conn, vector, index_version_id=index.id, k=config.k_dense)
+                async def dense(question: str, vector: Vector) -> Sequence[ChunkRef]:
+                    return await dense_search(
+                        conn, vector, index_version_id=index.id, k=config.k_dense
+                    )
 
-            return dense, config.k_dense
+                return dense, config.k_dense
+            if config.mode == "fts":
+
+                async def fts(question: str, vector: Vector) -> Sequence[ChunkRef]:
+                    return await lexical_search(
+                        conn, question, index_version_id=index.id, k=config.k_fts
+                    )
+
+                return fts, config.k_fts
+            raise RetrievalEvalError(f"retrieval mode {config.mode!r} is not implemented yet")
 
         results: dict[str, RetrievalConfigResult] = {}
         for config in configs:

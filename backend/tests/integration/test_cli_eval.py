@@ -173,6 +173,49 @@ def test_eval_writes_results_and_reuses_cached_query_vectors(
     assert rows["dense"]["retrieval_config_hash"] == expected.config_hash
 
 
+def test_fts_and_dense_fts_score_the_active_index_without_new_embeddings(
+    db: str, tmp_path: Path, baseline: Path, settings: Settings
+) -> None:
+    build_index(db, tmp_path)
+    golden = golden_file(tmp_path)
+    stop_words = {
+        "id": "q003",
+        "question": "the and or",
+        "type": "how_to",
+        "answerable": True,
+        "reference_answer": "Use BackgroundTasks.",
+        "relevant_sections": [{"section": f"{BG}#using-backgroundtasks", "grade": 2}],
+    }
+    with golden.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(stop_words) + "\n")
+    out = tmp_path / "results" / "run.json"
+
+    first = invoke("--config", "fts", "--golden", str(golden), "--out", str(out))
+    assert first.exit_code == 0, first.output
+    assert "2 questions embedded, 0 from cache" in first.stdout
+    fts_only = read_run(out)
+    assert list(fts_only.configs) == ["fts"]
+    fts = fts_only.configs["fts"]
+    assert (fts.n, fts.k, fts.skipped_unanswerable) == (2, settings.k_fts, 1)
+    assert fts.retrieval_config_hash == RetrievalConfig.from_settings(settings, "fts").config_hash
+    stop_result = next(question for question in fts.questions if question.id == "q003")
+    assert stop_result.retrieved == []
+    assert all(rank is None for rank in stop_result.ranks.values())
+    assert all(value == 0 for value in stop_result.metrics.values())
+
+    again = invoke(
+        "--config", "dense", "--config", "fts", "--golden", str(golden), "--out", str(out)
+    )
+    assert again.exit_code == 0, again.output
+    assert "0 questions embedded, 4 from cache" in again.stdout
+    assert sum(len(texts) for stub in StubGemini.instances for texts, _ in stub.calls) == 2
+    combined = read_run(out)
+    assert list(combined.configs) == ["dense", "fts"]
+    assert combined.configs["fts"].metrics == fts.metrics
+    assert combined.configs["dense"].k == settings.k_dense
+    assert not baseline.exists()
+
+
 @pytest.mark.usefixtures("settings")
 def test_eval_without_an_active_index(db: str, tmp_path: Path) -> None:
     build_index(db, tmp_path, activate=False)
@@ -197,7 +240,7 @@ def test_eval_refuses_another_embedding_model(
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--config", "hybrid"], "Unknown retrieval config 'hybrid'; available: dense."),
+        (["--config", "hybrid"], "Unknown retrieval config 'hybrid'; available: dense, fts."),
         (["--golden", "{tmp}/golden.jsonl"], "golden_set.v<N>.jsonl"),
     ],
 )
