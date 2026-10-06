@@ -5,16 +5,9 @@ as_of = "2026-10-06"  # the day the pages were read; the pricing page itself say
 source = "https://ai.google.dev/gemini-api/docs/pricing, https://ai.google.dev/gemini-api/docs/deprecations"
 
 # Gemini API, Standard tier. "Output price (including thinking tokens)": thinking tokens are billed as output.
-# The page lists a later price that starts on 2027-01-01; the cost code picks the row by request date.
-[models."gemini-3.6-flash"]
-input_per_mtok = 0.75
-output_per_mtok = 3.75
-valid_until = "2026-12-31"
-
-[models."gemini-3.6-flash".next]
-valid_from = "2027-01-01"
-input_per_mtok = 1.50
-output_per_mtok = 7.50
+[models."gemini-3.5-flash-lite"]
+input_per_mtok = 0.30
+output_per_mtok = 2.50
 
 # The model Grounded embeds with. The current pricing page lists only gemini-embedding-2 ($0.20 per 1M
 # text tokens), a different model. The 0.15 below is the price Google announced when this model became
