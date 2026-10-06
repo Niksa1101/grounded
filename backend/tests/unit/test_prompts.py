@@ -6,6 +6,7 @@ import pytest
 
 from grounded.generation.prompts import (
     ANSWER_PLACEHOLDERS,
+    ANSWER_RETRY_PLACEHOLDERS,
     PromptLoadError,
     PromptRenderError,
     load_answer_prompt,
@@ -149,6 +150,82 @@ def test_render_with_an_unknown_variable_is_an_error() -> None:
         prompt.render_user(question="a", sources="b", extra="c")
 
 
+# --- retry feedback section ------------------------------------------------------------------
+
+WITH_RETRY = VALID + "\n# Retry feedback\n\nIt was invalid because {{error}}\n"
+
+
+def test_the_retry_section_is_optional_and_versioned() -> None:
+    without = parse_prompt("p", VALID, placeholders=PLACEHOLDERS, retry_placeholders=("error",))
+    with_retry = parse_prompt(
+        "p", WITH_RETRY, placeholders=PLACEHOLDERS, retry_placeholders=("error",)
+    )
+    assert without.retry_template is None
+    assert with_retry.retry_template == "It was invalid because {{error}}"
+    assert with_retry.retry_placeholders == frozenset({"error"})
+    # The user template ends where the retry section starts.
+    assert with_retry.user_template == without.user_template
+    assert with_retry.version != without.version
+
+
+def test_render_retry_appends_the_filled_feedback_to_the_user_message() -> None:
+    prompt = parse_prompt("p", WITH_RETRY, placeholders=PLACEHOLDERS, retry_placeholders=("error",))
+    user = prompt.render_user(question="why?", sources="S")
+    assert prompt.render_retry(user, error="a bad thing") == (
+        f"{user}\n\nIt was invalid because a bad thing"
+    )
+
+
+def test_render_retry_is_a_single_pass() -> None:
+    prompt = parse_prompt("p", WITH_RETRY, placeholders=PLACEHOLDERS, retry_placeholders=("error",))
+    assert prompt.render_retry("U", error="{{error}} {x}").endswith("because {{error}} {x}")
+
+
+def test_render_retry_without_a_retry_section_or_with_wrong_variables_is_an_error() -> None:
+    plain = parse_prompt("p", VALID, placeholders=PLACEHOLDERS)
+    with pytest.raises(PromptRenderError, match="no '# Retry feedback' section"):
+        plain.render_retry("U", error="x")
+    prompt = parse_prompt("p", WITH_RETRY, placeholders=PLACEHOLDERS, retry_placeholders=("error",))
+    with pytest.raises(PromptRenderError, match="error"):
+        prompt.render_retry("U")
+    with pytest.raises(PromptRenderError, match="extra"):
+        prompt.render_retry("U", error="x", extra="y")
+
+
+@pytest.mark.parametrize(
+    "retry_section",
+    [
+        "# Retry feedback\n\nIt was invalid because {{why}}\n",  # unknown placeholder
+        "# Retry feedback\n\nIt was invalid.\n",  # the expected placeholder is missing
+        "# Retry feedback\n\nIt was invalid because {{error}\n",  # unbalanced braces
+        "# Retry feedback\n\n\n",  # empty
+        "# Retry feedback\n\nA {{error}}\n\n# Retry feedback\n\nB {{error}}\n",  # duplicate
+    ],
+)
+def test_a_malformed_retry_section_is_a_load_error(retry_section: str) -> None:
+    with pytest.raises(PromptLoadError):
+        parse_prompt(
+            "p",
+            f"{VALID}\n{retry_section}",
+            placeholders=PLACEHOLDERS,
+            retry_placeholders=("error",),
+        )
+
+
+def test_the_retry_section_must_come_after_the_user_template() -> None:
+    text = (
+        "# System\n\nBe brief.\n\n# Retry feedback\n\n{{error}}\n\n"
+        "# User template\n\n{{question}} {{sources}}\n"
+    )
+    with pytest.raises(PromptLoadError, match="must come after"):
+        parse_prompt("p", text, placeholders=PLACEHOLDERS, retry_placeholders=("error",))
+
+
+def test_a_retry_section_nobody_declared_placeholders_for_is_a_load_error() -> None:
+    with pytest.raises(PromptLoadError, match="retry feedback placeholders"):
+        parse_prompt("p", WITH_RETRY, placeholders=PLACEHOLDERS)
+
+
 # --- the real prompt file --------------------------------------------------------------------
 
 
@@ -157,10 +234,18 @@ def test_the_committed_answer_prompt_loads() -> None:
     assert prompt.name == "answer_v1"
     assert prompt.version.startswith("answer_v1@")
     assert prompt.placeholders == ANSWER_PLACEHOLDERS
+    assert prompt.retry_placeholders == ANSWER_RETRY_PLACEHOLDERS
     assert "{{" not in prompt.system
     rendered = prompt.render_user(question="How do I run a background task?", sources="S")
     assert "How do I run a background task?" in rendered
     assert "{{" not in rendered
+
+
+def test_the_committed_answer_prompt_has_the_tech_9_5_retry_feedback() -> None:
+    prompt = load_answer_prompt()
+    assert prompt.retry_template == "Your previous output was invalid because {{error}}"
+    retry = prompt.render_retry("USER", error="the status is wrong")
+    assert retry == "USER\n\nYour previous output was invalid because the status is wrong"
 
 
 def test_the_answer_prompt_states_every_rule_and_the_marker_grammar() -> None:
