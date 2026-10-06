@@ -44,11 +44,11 @@ async def healthz() -> HealthResponse:
     responses={status.HTTP_503_SERVICE_UNAVAILABLE: {"model": ReadinessResponse}},
 )
 async def readyz(pool: PoolDep, settings: SettingsDep, response: Response) -> ReadinessResponse:
-    """Database reachable and schema present.
+    """Database reachable, schema present and an index version active.
 
-    Querying ``index_versions`` doubles as a "migrations applied" check. Having an active index is
-    reported but not yet required: nothing serves answers before Phase 3, when ``/v1/ask`` lands and
-    a missing active index becomes a readiness failure.
+    Querying ``index_versions`` doubles as a "migrations applied" check. Without an active index
+    ``/v1/ask`` cannot retrieve anything, so that is a readiness failure too (503, with
+    ``database: ok``).
     """
     try:
         async with pool.connection(timeout=settings.db_pool_timeout_s) as conn:
@@ -59,8 +59,10 @@ async def readyz(pool: PoolDep, settings: SettingsDep, response: Response) -> Re
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
         return ReadinessResponse(status="unavailable", database="error", active_index_version=None)
 
-    active = None
-    if row is not None:
-        git_ref, config_hash = row
-        active = f"{git_ref}@{config_hash[:8]}"
-    return ReadinessResponse(status="ok", database="ok", active_index_version=active)
+    if row is None:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return ReadinessResponse(status="unavailable", database="ok", active_index_version=None)
+    git_ref, config_hash = row
+    return ReadinessResponse(
+        status="ok", database="ok", active_index_version=f"{git_ref}@{config_hash[:8]}"
+    )

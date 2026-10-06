@@ -189,3 +189,18 @@ def test_relative_cache_dir_is_anchored_at_the_repo_root(tmp_path: Path) -> None
     assert make_settings().cache_dir == repo_root / ".cache"
     assert make_settings(cache_dir="custom").cache_dir == repo_root / "custom"
     assert make_settings(cache_dir=tmp_path).cache_dir == tmp_path
+
+
+def test_request_path_defaults_match_tech_md() -> None:
+    s = make_settings()
+    assert (s.llm_timeout_s, s.active_index_ttl_s, s.query_embedding_cache_size) == (
+        12.0,
+        300.0,
+        256,
+    )
+
+
+def test_k_context_is_limited_to_the_nine_labels_the_citation_grammar_has() -> None:
+    assert make_settings(k_context=9).k_context == 9
+    with pytest.raises(ValidationError):
+        make_settings(k_context=10)

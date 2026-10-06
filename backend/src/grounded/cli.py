@@ -1,23 +1,26 @@
 """``grounded`` command-line entry point (Typer).
 
-Later phases add the ask command and more eval suites.
+Later phases add more eval suites.
 """
 
 from __future__ import annotations
 
 import asyncio
 import io
+import json
 import sys
 from collections.abc import Coroutine
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import uuid4
 
 import psycopg
 import typer
 import uvicorn
 from psycopg.conninfo import conninfo_to_dict
+from pydantic import ValidationError
 
 from grounded.evals.gate import evaluate_gate, exit_code, render_markdown
 from grounded.evals.golden import (
@@ -47,6 +50,7 @@ from grounded.evals.retrieval_runner import (
     update_baseline,
     write_run,
 )
+from grounded.generation.providers.fake import StubLLMProvider
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
 from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
@@ -77,6 +81,8 @@ from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
 from grounded.retrieval.config import RetrievalConfig, RetrievalMode
 from grounded.retrieval.index import NoActiveIndexError
+from grounded.runtime import ProviderConfigError, open_runtime
+from grounded.schemas.api import AskRequest
 from grounded.settings import Settings, get_settings
 
 app = typer.Typer(no_args_is_help=True, help="Grounded command-line tools.")
@@ -121,6 +127,44 @@ def serve(
         # runs the server in a subprocess (--reload/--workers). Elsewhere uvicorn's choice is fine.
         loop="asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto",
     )
+
+
+@app.command()
+def ask(
+    question: Annotated[str, typer.Argument(help="The question, 3 to 500 characters.")],
+    fake: Annotated[
+        bool,
+        typer.Option(help="Answer with the stub provider instead of a model (no generator key)."),
+    ] = False,
+) -> None:
+    """Ask one question through the same pipeline as POST /v1/ask and print the AskResponse JSON.
+
+    The question is still embedded for real, from the cache or with GEMINI_API_KEY.
+    """
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    try:
+        request = AskRequest(question=question)
+    except ValidationError as exc:
+        raise _fail(f"Invalid question: {exc.errors()[0]['msg']}") from exc
+
+    async def run() -> str:
+        async with open_runtime(settings, provider=StubLLMProvider() if fake else None) as runtime:
+            response = await runtime.pipeline.ask(request.question, uuid4())
+        return json.dumps(response.model_dump(mode="json"), indent=2)  # ASCII-escaped: any console
+
+    try:
+        typer.echo(_run_async(run()))
+    except ProviderConfigError as exc:
+        raise _fail(str(exc)) from exc
+    except NoActiveIndexError as exc:
+        raise _fail(f"Cannot answer: {exc}") from exc
+    except EmbedderUnavailableError as exc:
+        raise _fail(f"{exc}: this question is not in the embedding cache.") from exc
+    except ProviderError as exc:
+        raise _fail(f"Provider failed ({type(exc).__name__}): {exc}") from exc
+    except psycopg.Error as exc:
+        raise _fail(f"Database error: {exc}") from exc
 
 
 def _describe_target(conninfo: str) -> str:

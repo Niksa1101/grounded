@@ -93,7 +93,8 @@ The point is to show the mechanics.
 │   ├── prompts/                   # answer_v1.md, judge_faithfulness_v1.md, judge_correctness_v1.md
 │   ├── pricing.toml               # dated list prices for shadow cost
 │   ├── src/grounded/
-│   │   ├── main.py                # app factory, lifespan (pool, active index, providers)
+│   │   ├── main.py                # app factory, lifespan
+│   │   ├── runtime.py             # open_runtime: pool, query embedder, provider and AskPipeline, shared by the API and the CLI
 │   │   ├── settings.py            # pydantic-settings
 │   │   ├── cli.py                 # Typer: migrate, ingest, index, eval, ask, golden
 │   │   ├── api/                   # routes_ask.py, routes_metrics.py, routes_health.py, deps.py, errors.py, security.py
@@ -144,16 +145,19 @@ or with `ALLOW_DIRECT_API=true`.
 | `EMBEDDING_MAX_INPUT_TOKENS` | `2048` | longer texts fail before any call; must be ≤ `EMBEDDING_TPM` |
 | `EMBEDDING_MAX_RETRIES`, `EMBEDDING_TIMEOUT_S` | `5`, `30.0` | per batch, on 429 / 5xx / timeout |
 | `EMBEDDING_MAX_RETRY_WAIT_S` | `60` | a server-given `Retry-After` above this stops the run instead of waiting (§5.6) |
-| `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list (eval: `gemini`) |
+| `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list (eval: `gemini`). Until the router (Phase 7) the first entry is the only provider used. The extra value `fake` selects the canned stub provider for local runs (`StubLLMProvider`); it is refused with `APP_ENV=prod` |
 | `GEMINI_MODEL`, `GROQ_MODEL`, `JUDGE_MODEL` | pinned IDs, verified at implementation time | no floating aliases. `GEMINI_MODEL` is `gemini-3.5-flash-lite` (D46, verified 2026-10-06) |
 | `GEMINI_THINKING_BUDGET` → `GEMINI_THINKING_LEVEL` | `minimal` (D46) | thinking adds latency and billed output tokens. Gemini 3.x models are controlled by a level, not a token budget, and the docs don't say that budget `0` still turns thinking off. The setting is renamed in ticket 3.08 (it changes `Settings` and `.env.example`); until then the budget field is unused |
 | `LLM_TEMPERATURE` | `0` | same in prod and eval |
 | `LLM_MAX_OUTPUT_TOKENS` | `800` | answer length cap |
+| `LLM_TIMEOUT_S` | `12.0` | each generation attempt (§6) |
 | `RERANK_PROVIDER` | `none` \| `cohere` | feature flag |
 | `RERANK_MODEL`, `RERANK_DAILY_CAP` | pinned, `30` | trial quota protection (~1k/month) |
 | `CHUNK_MAX_TOKENS`, `CHUNK_OVERLAP_TOKENS`, `CHUNK_MIN_TOKENS` | `450`, `50`, `40` | chunking config (§5.5); min < max, overlap < max |
 | `TOKENIZER_ENCODING` | `o200k_base` | tiktoken encoding for chunk sizing (approximate counts) |
-| `K_DENSE`, `K_FTS`, `K_FUSED`, `K_CONTEXT`, `RRF_K` | `20`, `20`, `40`, `5`, `60` | retrieval config |
+| `K_DENSE`, `K_FTS`, `K_FUSED`, `K_CONTEXT`, `RRF_K` | `20`, `20`, `40`, `5`, `60` | retrieval config; `K_CONTEXT` ≤ 9 (the labels `c1..c9`) |
+| `ACTIVE_INDEX_TTL_S` | `300.0` | how long the request path caches the active index version (DB.md §7.3); not part of `RetrievalConfig` |
+| `QUERY_EMBEDDING_CACHE_SIZE` | `256` | prod only: size of the in-memory LRU of question vectors (§11); dev/CI/eval use SQLite |
 | `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `30` | per IP hash |
 | `DAILY_LLM_BUDGET` | below provider free RPD | global cap; optional until Phase 5 |
 | `ANSWER_CACHE_TTL_DAYS` | `30` | ≤ retention |
@@ -513,7 +517,7 @@ Base path `/v1`. JSON only. Errors share one shape:
 | Method | Path | Auth | Description |
 |---|---|---|---|
 | GET | `/healthz` | public | process up (liveness) |
-| GET | `/readyz` | public | DB reachable + active index loaded (Phases 0–2: DB reachable + schema present; reports `active_index_version` but doesn't require it until Phase 3) |
+| GET | `/readyz` | public | DB reachable, schema present and an index version active; no active index → 503 with `database: ok` and `active_index_version: null` (required since Phase 3; Phases 0–2 only reported it) |
 | POST | `/v1/ask` | proxy secret | body `AskRequest` → `AskResponse` |
 | GET | `/v1/metrics/summary?window=7d` | proxy secret | aggregates for the dashboard (no question text) |
 
@@ -527,6 +531,8 @@ Base path `/v1`. JSON only. Errors share one shape:
 | `provider_unavailable` | 503 | all providers down/open |
 | `deadline_exceeded` | 504 | overall deadline |
 | `internal_error` | 500 | anything else (logged with request_id) |
+
+`request_id` is created per request (also for validation errors and unhandled exceptions) and is the same id as `meta.request_id`. An invalid body is `422` with code `bad_request`, and the message names the field and the rule but never echoes the input. A missing active index on `/v1/ask` is `500 internal_error`.
 
 OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the portfolio.
 

@@ -155,8 +155,8 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [3.01](phase-3/3.01-decision-gemini.md) | Decision: Gemini generator model, structured output, thinking budget, prices | Decision | D | done | [#40](https://github.com/Niksa1101/grounded/pull/40) |
 | [3.02](phase-3/3.02-provider-contract.md) | `LLMProvider` protocol, `FakeLLMProvider` and `LLMAnswer` | Build | G | done | [#41](https://github.com/Niksa1101/grounded/pull/41) |
 | [3.03](phase-3/3.03-prompts.md) | `answer_v1` prompt and the versioned prompt loader | Build | G | done | [#42](https://github.com/Niksa1101/grounded/pull/42) |
-| [3.04](phase-3/3.04-context.md) | Context builder (`c1..cK` source blocks) | Build | G | todo | |
-| [3.05](phase-3/3.05-ask-tracer.md) | Tracer bullet: `POST /v1/ask` end to end with the fake provider | Build | G | todo | |
+| [3.04](phase-3/3.04-context.md) | Context builder (`c1..cK` source blocks) | Build | G | done | [#43](https://github.com/Niksa1101/grounded/pull/43) |
+| [3.05](phase-3/3.05-ask-tracer.md) | Tracer bullet: `POST /v1/ask` end to end with the fake provider | Build | G | done | PR_LINK |
 | [3.06](phase-3/3.06-citations.md) | Citation validation, mapping and marker rewriting | Build | G | todo | |
 | [3.07](phase-3/3.07-validation-retry.md) | Output validation with one retry and error feedback | Build | G | todo | |
 | [3.08](phase-3/3.08-gemini-provider.md) | `GeminiProvider` adapter | Build | G | todo | |

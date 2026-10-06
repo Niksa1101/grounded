@@ -20,6 +20,7 @@ from pydantic import BaseModel, ValidationError
 
 from grounded.generation.providers.base import GenerationResult, Usage
 from grounded.infra.provider_errors import ProviderBadOutput, ProviderError
+from grounded.schemas.llm import LLMAnswer, LLMClaim
 
 ScriptStep = BaseModel | str | ProviderError
 
@@ -88,6 +89,45 @@ class FakeLLMProvider:
             parsed=parsed,
             raw_text=raw,
             usage=self._usage,
+            provider=self.name,
+            model=self.model,
+            latency_ms=0,
+        )
+
+
+class StubLLMProvider:
+    """Dev-only: answers every request with the same canned answer, citing source ``c1``.
+
+    For ``grounded serve`` and ``grounded ask`` before a real adapter exists (``GENERATOR_PROVIDERS=
+    fake``, refused in prod). Unlike ``FakeLLMProvider`` it never runs out, and it says plainly
+    that the text is a stand-in, so nobody mistakes it for a model answer.
+    """
+
+    name = "fake"
+    model = "stub"
+
+    async def generate[T: BaseModel](
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[T],
+        temperature: float,
+        max_output_tokens: int,
+        timeout_s: float,
+    ) -> GenerationResult[T]:
+        answer = LLMAnswer(
+            status="answered",
+            answer_markdown="Stub answer from the fake provider, not a model output. [c1]",
+            claims=[
+                LLMClaim(text="This is a stub claim.", citation_ids=["c1"], self_confidence=0.5)
+            ],
+        )
+        raw = answer.model_dump_json()
+        return GenerationResult(
+            parsed=schema.model_validate_json(raw),
+            raw_text=raw,
+            usage=Usage(input_tokens=0, output_tokens=0),
             provider=self.name,
             model=self.model,
             latency_ms=0,
