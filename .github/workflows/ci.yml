@@ -168,7 +168,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/embeddings.sqlite
-          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}
+          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-
       - name: Restore tiktoken cache
@@ -229,7 +229,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .cache/embeddings.sqlite
-          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}
+          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}-${{ github.run_attempt }}
       # The clone is saved once per tag (the key is immutable) and only after ingest got past it:
       # exit 0, or 3 (the quota stopped it while embedding). An interrupted clone must never be
       # saved under that key.
