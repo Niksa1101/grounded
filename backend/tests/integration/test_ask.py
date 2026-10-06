@@ -186,3 +186,67 @@ async def test_ask_without_an_active_index_is_a_500_internal_error(test_database
     body = response.json()
     assert body["error"]["code"] == "internal_error"
     assert "no index" in body["error"]["message"]
+
+
+async def test_citations_carry_db_urls_with_anchors_and_a_snippet(
+    test_database_url: str, index: Index
+) -> None:
+    provider = FakeLLMProvider(
+        [LLMAnswer(status="answered", answer_markdown="Quokkas sleep. [c1]", claims=[])]
+    )
+    async with app_client(
+        make_settings(database_url=test_database_url),
+        embedder=FakeEmbedder(dim=EMBEDDING_DIM),
+        provider=provider,
+    ) as client:
+        response = await client.post("/v1/ask", json={"question": QUESTION})
+    body = AskResponse.model_validate(response.json())
+    [citation] = body.citations
+    assert "#" in str(citation.url)
+    assert len(citation.snippet) <= 300
+
+
+async def test_an_answer_with_no_valid_citation_is_a_502_until_the_retry_exists(
+    test_database_url: str, index: Index
+) -> None:
+    # 3.07 turns this into one retry; until then the semantic check fails the request.
+    provider = FakeLLMProvider(
+        [
+            LLMAnswer(
+                status="answered",
+                answer_markdown="Quokkas sleep. [c9]",
+                claims=[claim("Quokkas sleep.", "c9")],
+            )
+        ]
+    )
+    async with app_client(
+        make_settings(database_url=test_database_url),
+        embedder=FakeEmbedder(dim=EMBEDDING_DIM),
+        provider=provider,
+    ) as client:
+        response = await client.post("/v1/ask", json={"question": QUESTION})
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "validation_failed"
+
+
+async def test_insufficient_context_claims_are_dropped(
+    test_database_url: str, index: Index
+) -> None:
+    provider = FakeLLMProvider(
+        [
+            LLMAnswer(
+                status="insufficient_context",
+                answer_markdown="The documentation does not cover this.",
+                claims=[claim("Quokkas sleep.", "c1")],
+            )
+        ]
+    )
+    async with app_client(
+        make_settings(database_url=test_database_url),
+        embedder=FakeEmbedder(dim=EMBEDDING_DIM),
+        provider=provider,
+    ) as client:
+        response = await client.post("/v1/ask", json={"question": QUESTION})
+    assert response.status_code == 200
+    body = AskResponse.model_validate(response.json())
+    assert (body.claims, body.citations, body.min_confidence) == ([], [], None)
