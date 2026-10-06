@@ -306,7 +306,7 @@ Every stage is wrapped in a `timing.stage("name")` context manager that fills th
 - **Hybrid [A]:** `retrieval/hybrid.py:hybrid_search(conn, question, query_vector, *, index_version_id, cfg)`. One statement; RRF, `score = Σ 1/(RRF_K + rank)` over a dense list cut to `K_DENSE` and a lexical list cut to `K_FTS`, top `K_FUSED` unique chunks, deterministic tie-break (DB.md §6.3).
 - Output type: `list[RetrievedChunk]` (frozen dataclass, `retrieval/types.py`) with `chunk_id, section_id, anchor_path, breadcrumb_text, url, content, token_count, content_hash` and the signals `dense_rank, dense_distance, fts_rank, fts_score, rrf_score, rerank_score` (each `None` unless the mode produced it).
 - Retrieval modes (for evals and ablations): `dense`, `fts`, `hybrid`, `hybrid_rerank`. The `no_rag` mode skips retrieval entirely.
-- Context selection: the first `K_CONTEXT` chunks after (optional) rerank. If two selected chunks are adjacent parts of one split section, keep both (they are sent in document order within the source block).
+- Context selection: the first `K_CONTEXT` chunks after (optional) rerank. If two selected chunks are adjacent parts of one split section, keep both. `generation/context.py` pulls the worse-ranked parts right behind the best-ranked one and sends them in document order (`chunk_id` ascending, which ingest guarantees per document; `RetrievedChunk` has no `ordinal`). Labels are assigned after that, so they ascend in the prompt.
 
 ## 8. Re-ranking (Phase 6)
 
@@ -367,7 +367,9 @@ class LLMProvider(Protocol):
 ...chunk markdown...
 </source>
 ```
-Labels `c1..cK` are per request and map to chunk IDs server-side. The LLM never sees DB IDs or has to produce URLs.
+Labels `c1..cK` are per request and map to chunk IDs server-side. The LLM never sees DB IDs or has to produce URLs. `K_CONTEXT` is at most 9, the range the citation grammar can express.
+
+Escaping (`generation/context.py`): in chunk content, a `<` that starts `<source` or `</source` (any case, optional whitespace) becomes `&lt;`, so content cannot close or open a block; nothing else in content is touched, so code stays faithful. In the `section` and `url` attributes, `&`, `"` and `<` become entities and whitespace in `section` collapses to one space; `>` is left (it is the breadcrumb separator).
 
 ### 9.4 Schemas
 

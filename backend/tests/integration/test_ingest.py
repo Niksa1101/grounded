@@ -155,6 +155,30 @@ def test_ingest_stores_a_ready_verified_version(
     assert ready_at is not None
 
 
+def test_chunk_ids_ascend_with_ordinal_within_a_document(
+    db: str, corpus: PreparedCorpus, cache: KVCache
+) -> None:
+    """``generation/context.py`` orders the parts of a split section by ``chunk_id``."""
+    report = run(db, corpus, FakeEmbedder(dim=DIM), cache)
+    by_id = fetch(
+        db,
+        "SELECT document_id, ordinal FROM chunks WHERE index_version_id = %s ORDER BY id",
+        report.index_version_id,
+    )
+    by_ordinal = fetch(
+        db,
+        "SELECT document_id, ordinal FROM chunks WHERE index_version_id = %s"
+        " ORDER BY document_id, ordinal",
+        report.index_version_id,
+    )
+    assert len(by_id) > 1
+    # Documents may interleave across ids in principle; within each one the order must agree.
+    for document_id in {d for d, _ in by_ordinal}:
+        assert [o for d, o in by_id if d == document_id] == [
+            o for d, o in by_ordinal if d == document_id
+        ]
+
+
 def test_ingest_stores_chunks_exactly_as_chunked(
     db: str, corpus: PreparedCorpus, cache: KVCache
 ) -> None:
