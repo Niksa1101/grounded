@@ -7,9 +7,9 @@ stage lives in its own module. Failures are raised as the typed errors of the st
 Tracer-bullet state (Phase 3): the stages thicken in later tickets, and what is deliberately thin
 today is marked below.
 
-- Citation mapping (``_map_citations``) is the basic version: valid labels become display numbers
-  by first appearance, invalid ones are dropped. Counting them, code fences and the semantic
-  checks arrive with ``citations.py`` (3.06).
+- Citation mapping lives in ``citations.py`` (3.06). A semantic failure (an answer with no valid
+  citation) is raised as ``ProviderBadOutput`` straight away; 3.07 turns it into the one retry.
+  ``invalid_citation_count`` is computed per request, and 3.12 logs it.
 - ``_generate`` is one call with no retry (3.07 adds the single retry with feedback, and 7.04 moves
   it into the router).
 - Claim confidence is ``0.0`` with no components until the heuristic lands (3.10), and
@@ -19,27 +19,24 @@ today is marked below.
 
 from __future__ import annotations
 
-import re
 import time
-from collections.abc import Mapping
 from uuid import UUID
 
 from psycopg_pool import AsyncConnectionPool
 
+from grounded.generation.citations import map_citations
 from grounded.generation.context import build_context
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider
+from grounded.infra.provider_errors import ProviderBadOutput
 from grounded.ingest.embed import Embedder
 from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.hybrid import hybrid_search
 from grounded.retrieval.index import ActiveIndexCache, chunk_titles
-from grounded.retrieval.types import IndexVersion, RetrievedChunk
-from grounded.schemas.api import AskResponse, Citation, Claim, Meta
+from grounded.retrieval.types import IndexVersion
+from grounded.schemas.api import AskResponse, Claim, Meta
 from grounded.schemas.llm import LLMAnswer
 from grounded.settings import Settings
-
-_MARKER = re.compile(r"\[(c[1-9])\]")
-_SNIPPET_CHARS = 300
 
 
 class IndexMismatchError(RuntimeError):
@@ -87,12 +84,28 @@ class AskPipeline:
         result = await self._generate(user)
         generated = time.perf_counter()
 
-        markdown, claims, citations = _map_citations(result.parsed, context.labels, titles)
+        mapped = map_citations(result.parsed, context.labels, titles)
+        if mapped.bad_output is not None:
+            raise ProviderBadOutput(
+                "the answer failed the citation checks",
+                raw=result.raw_text,
+                validation_error=mapped.bad_output,
+            )
+        claims = [
+            # Confidence is a placeholder until the heuristic lands (3.10).
+            Claim(
+                text=claim.text,
+                citations=list(claim.citations),
+                confidence=0.0,
+                confidence_components={},
+            )
+            for claim in mapped.claims
+        ]
         return AskResponse(
             status=result.parsed.status,
-            answer_markdown=markdown,
+            answer_markdown=mapped.answer_markdown,
             claims=claims,
-            citations=citations,
+            citations=list(mapped.citations),
             follow_up_questions=result.parsed.follow_up_questions,
             min_confidence=min((c.confidence for c in claims), default=None),
             meta=Meta(
@@ -142,50 +155,3 @@ class AskPipeline:
 
 def _ms(start: float, end: float) -> int:
     return round((end - start) * 1000)
-
-
-def _map_citations(
-    answer: LLMAnswer, labels: Mapping[str, RetrievedChunk], titles: Mapping[int, str]
-) -> tuple[str, list[Claim], list[Citation]]:
-    """Per-request labels -> display numbers (Tech §9.6, basic version).
-
-    Numbers follow the first appearance of a label in the text; a label cited only by a claim comes
-    after those. A label that is not in ``labels`` is removed, so every URL in the response comes
-    from a DB row (AGENTS.md §6.3).
-    """
-    numbers: dict[str, int] = {}
-
-    def number(label: str) -> int:
-        return numbers.setdefault(label, len(numbers) + 1)
-
-    def rewrite(match: re.Match[str]) -> str:
-        return f"[{number(match[1])}]" if match[1] in labels else ""
-
-    markdown = _MARKER.sub(rewrite, answer.answer_markdown)
-    claims = [
-        Claim(
-            text=claim.text,
-            citations=[
-                number(label) for label in dict.fromkeys(claim.citation_ids) if label in labels
-            ],
-            confidence=0.0,
-            confidence_components={},
-        )
-        for claim in answer.claims
-    ]
-    citations: list[Citation] = []
-    for label, n in numbers.items():
-        chunk = labels[label]
-        citations.append(
-            Citation.model_validate(
-                {
-                    "n": n,
-                    "chunk_id": chunk.chunk_id,
-                    "url": chunk.url,
-                    "title": titles[chunk.chunk_id],
-                    "breadcrumb": chunk.breadcrumb_text,
-                    "snippet": chunk.content[:_SNIPPET_CHARS].strip(),
-                }
-            )
-        )
-    return markdown, claims, citations

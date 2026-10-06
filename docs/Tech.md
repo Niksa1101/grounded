@@ -446,7 +446,10 @@ class AskResponse(BaseModel):
 ### 9.6 Citation mapping
 - Valid label = present in this request's label map. Invalid labels are removed from claims and from `answer_markdown`, and counted (`invalid_citation_count`). Invalid labels are a tracked metric; they are *not* silently fixed.
 - Display numbering: `[cK]` markers in `answer_markdown` → `[n]` by order of first appearance. Claims' citation lists are mapped to the same `n`.
-- Each distinct cited chunk becomes one `Citation` (URL with anchor, H1 title, breadcrumb, snippet).
+- Each distinct cited chunk becomes one `Citation` (URL with anchor, H1 title, breadcrumb, snippet). A label cited only by a claim (not in the text) is numbered after the labels that appear in the text, in claim order.
+- A marker is any `[c<digits>]` outside fenced code (so `[c0]` and `[c12]` are invalid labels, not prose). A bracket pair holding several labels (`[c1, c2]`) is removed and counted once. Markers inside fenced code blocks are left untouched and not counted (a fence is a line of 3+ backticks or tildes, closed by the same character at least as long; an unclosed fence runs to the end).
+- `invalid_citation_count` counts removed references: invalid markers in the text plus invalid labels in claims' `citation_ids` (the same bad label in both places counts twice). Labels of claims dropped under `insufficient_context` are not counted again; those claims are counted in `dropped_claim_count`.
+- `snippet` = the first 300 characters of the chunk content, stripped and cut back to a word boundary (an unbroken run longer than 300 is hard-cut); no ellipsis.
 
 ### 9.7 Refusal
 - `insufficient_context` answers are short, have no claims or citations, and may include `follow_up_questions` pointing to what *is* covered.
