@@ -110,7 +110,7 @@ The point is to show the mechanics.
 │   │   │   ├── confidence.py      # heuristic [A]
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
 │   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), golden.py, retrieval_runner.py, gate.py [A], report.py, judge.py
-│   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
+│   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, gemini_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
 │   │   └── observability/         # request_log.py, cost.py
 │   └── tests/                     # unit/, integration/, conftest.py (fixtures), support.py (helpers), fixtures/
 ├── eval/
@@ -353,7 +353,7 @@ class LLMProvider(Protocol):
     ) -> GenerationResult[T]: ...
 ```
 
-- Adapters translate the Pydantic model to the provider's structured-output format (Gemini `response_schema` / JSON schema; Groq `response_format` with `json_schema` on a model that supports it). They return **validated** objects or raise typed errors: `ProviderRateLimited(retry_after_s, is_quota)`, `ProviderUnavailable`, `ProviderTimeout`, `ProviderBadOutput(raw, validation_error)`, `ProviderRequestRejected(status_code)` (a 4xx other than 429, e.g. a bad request or key: retrying the same call won't help). They live in `infra/provider_errors.py`, which the embedding adapter uses too.
+- Adapters translate the Pydantic model to the provider's structured-output format (Gemini `response_schema` / JSON schema; Groq `response_format` with `json_schema` on a model that supports it). They return **validated** objects or raise typed errors: `ProviderRateLimited(retry_after_s, is_quota)`, `ProviderUnavailable`, `ProviderTimeout`, `ProviderBadOutput(raw, validation_error)`, `ProviderRequestRejected(status_code)` (a 4xx other than 429, e.g. a bad request or key: retrying the same call won't help). They live in `infra/provider_errors.py`, which the embedding adapter uses too. The Gemini-specific mapping (429 with `RetryInfo`/`QuotaFailure` → `ProviderRateLimited(retry_after_s, is_quota)`, 5xx → `ProviderUnavailable`, other 4xx → `ProviderRequestRejected`) is one function, `infra/gemini_errors.py:map_api_error`, used by both the embedder and the generator.
 - **Provider schema support differs.** Keep `LLMAnswer` simple: no unions, no recursive refs, enums as string literals. Constraints a provider can't express (regex, lengths) are enforced by Pydantic after the call. A unit test per adapter checks that the schema converts.
 - `FakeLLMProvider` returns scripted results/errors in order. It is used by all tests.
 
