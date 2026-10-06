@@ -29,6 +29,20 @@ def make_settings(**overrides: Any) -> Settings:
     return Settings(_env_file=None, **{"app_env": "test", **overrides})  # pyright: ignore[reportCallIssue]
 
 
+class FakeClock:
+    """A clock tests move by hand (AGENTS.md §8: no wall-clock timing). Callable like
+    ``time.perf_counter``; ``advance`` is what a fake provider calls to "take" time."""
+
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 @asynccontextmanager
 async def app_client(
     settings: Settings,
