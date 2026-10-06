@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from grounded.generation.providers.fake import StubLLMProvider
+from grounded.generation.providers.gemini import GeminiProvider
 from grounded.ingest.embed import FakeEmbedder
 from grounded.retrieval.query_embedding import LRUEmbedder
 from grounded.runtime import ProviderConfigError, build_provider
@@ -66,6 +67,34 @@ def test_the_fake_provider_is_refused_in_prod() -> None:
         build_provider(settings)
 
 
-def test_a_provider_without_an_adapter_is_a_clear_error() -> None:
-    with pytest.raises(ProviderConfigError, match="gemini"):
-        build_provider(make_settings(generator_providers=["gemini", "groq"]))
+def test_gemini_is_built_from_the_first_provider_entry() -> None:
+    settings = make_settings(
+        generator_providers=["gemini", "groq"],
+        gemini_api_key="k-123",
+        gemini_model="gemini-3.5-flash-lite",
+        gemini_thinking_level="low",
+    )
+    provider = build_provider(settings)
+    assert isinstance(provider, GeminiProvider)
+    assert (provider.name, provider.model) == ("gemini", "gemini-3.5-flash-lite")
+
+
+@pytest.mark.parametrize(
+    ("overrides", "missing"),
+    [
+        ({"gemini_model": "gemini-3.5-flash-lite"}, "GEMINI_API_KEY"),
+        ({"gemini_model": "gemini-3.5-flash-lite", "gemini_api_key": "  "}, "GEMINI_API_KEY"),
+        ({"gemini_api_key": "k-123"}, "GEMINI_MODEL"),
+        ({"gemini_api_key": "k-123", "gemini_model": " "}, "GEMINI_MODEL"),
+    ],
+)
+def test_gemini_without_a_key_or_a_pinned_model_is_a_clear_error(
+    overrides: dict[str, str], missing: str
+) -> None:
+    with pytest.raises(ProviderConfigError, match=missing):
+        build_provider(make_settings(generator_providers=["gemini"], **overrides))
+
+
+def test_an_unknown_provider_is_a_clear_error() -> None:
+    with pytest.raises(ProviderConfigError, match="'groq'"):
+        build_provider(make_settings(generator_providers=["groq", "gemini"]))

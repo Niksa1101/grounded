@@ -110,7 +110,7 @@ The point is to show the mechanics.
 │   │   │   ├── confidence.py      # heuristic [A]
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
 │   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), golden.py, retrieval_runner.py, gate.py [A], report.py, judge.py
-│   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
+│   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, gemini_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
 │   │   └── observability/         # request_log.py, cost.py
 │   └── tests/                     # unit/, integration/, conftest.py (fixtures), support.py (helpers), fixtures/
 ├── eval/
@@ -146,8 +146,8 @@ or with `ALLOW_DIRECT_API=true`.
 | `EMBEDDING_MAX_RETRIES`, `EMBEDDING_TIMEOUT_S` | `5`, `30.0` | per batch, on 429 / 5xx / timeout |
 | `EMBEDDING_MAX_RETRY_WAIT_S` | `60` | a server-given `Retry-After` above this stops the run instead of waiting (§5.6) |
 | `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list (eval: `gemini`). Until the router (Phase 7) the first entry is the only provider used. The extra value `fake` selects the canned stub provider for local runs (`StubLLMProvider`); it is refused with `APP_ENV=prod` |
-| `GEMINI_MODEL`, `GROQ_MODEL`, `JUDGE_MODEL` | pinned IDs, verified at implementation time | no floating aliases. `GEMINI_MODEL` is `gemini-3.5-flash-lite` (D46, verified 2026-10-06) |
-| `GEMINI_THINKING_BUDGET` → `GEMINI_THINKING_LEVEL` | `minimal` (D46) | thinking adds latency and billed output tokens. Gemini 3.x models are controlled by a level, not a token budget, and the docs don't say that budget `0` still turns thinking off. The setting is renamed in ticket 3.08 (it changes `Settings` and `.env.example`); until then the budget field is unused |
+| `GEMINI_MODEL`, `GROQ_MODEL`, `JUDGE_MODEL` | pinned IDs, verified at implementation time | no floating aliases. `GEMINI_MODEL` is `gemini-3.5-flash-lite` (D46, verified 2026-10-06). Required, with `GEMINI_API_KEY`, when `gemini` is the first provider; a blank value is an error at startup |
+| `GEMINI_THINKING_LEVEL` | `minimal` (D46) | `minimal` \| `low` \| `medium` \| `high`; thinking adds latency and billed output tokens. Gemini 3.x models are controlled by a level, not a token budget (renamed from `GEMINI_THINKING_BUDGET` in 3.08). Which levels a model accepts differs (`gemini-3.7-flash` and `gemini-3.8-flash` reject `minimal`), so the API validates the pair |
 | `LLM_TEMPERATURE` | `0` | same in prod and eval |
 | `LLM_MAX_OUTPUT_TOKENS` | `800` | answer length cap |
 | `LLM_TIMEOUT_S` | `12.0` | each generation attempt (§6) |
@@ -353,9 +353,10 @@ class LLMProvider(Protocol):
     ) -> GenerationResult[T]: ...
 ```
 
-- Adapters translate the Pydantic model to the provider's structured-output format (Gemini `response_schema` / JSON schema; Groq `response_format` with `json_schema` on a model that supports it). They return **validated** objects or raise typed errors: `ProviderRateLimited(retry_after_s, is_quota)`, `ProviderUnavailable`, `ProviderTimeout`, `ProviderBadOutput(raw, validation_error)`, `ProviderRequestRejected(status_code)` (a 4xx other than 429, e.g. a bad request or key: retrying the same call won't help). They live in `infra/provider_errors.py`, which the embedding adapter uses too.
+- Adapters translate the Pydantic model to the provider's structured-output format (Gemini `response_schema` / JSON schema; Groq `response_format` with `json_schema` on a model that supports it). They return **validated** objects or raise typed errors: `ProviderRateLimited(retry_after_s, is_quota)`, `ProviderUnavailable`, `ProviderTimeout`, `ProviderBadOutput(raw, validation_error)`, `ProviderRequestRejected(status_code)` (a 4xx other than 429, e.g. a bad request or key: retrying the same call won't help). They live in `infra/provider_errors.py`, which the embedding adapter uses too. The Gemini-specific mapping (429 with `RetryInfo`/`QuotaFailure` → `ProviderRateLimited(retry_after_s, is_quota)`, 5xx → `ProviderUnavailable`, other 4xx → `ProviderRequestRejected`) is one function, `infra/gemini_errors.py:map_api_error`, used by both the embedder and the generator.
 - **Provider schema support differs.** Keep `LLMAnswer` simple: no unions, no recursive refs, enums as string literals. Constraints a provider can't express (regex, lengths) are enforced by Pydantic after the call. A unit test per adapter checks that the schema converts.
 - `FakeLLMProvider` returns scripted results/errors in order. It is used by all tests.
+- **`GeminiProvider`** (`generation/providers/gemini.py`, async `google-genai` client): one `generate_content` call with `response_mime_type="application/json"` and `response_json_schema` = the model's JSON Schema reduced to the keywords Gemini documents (`to_gemini_schema`: `$defs`/`$ref`, `type`, `enum`, `items`, `minItems`/`maxItems`, `minimum`/`maximum`, `anyOf`, `properties`, `required`, …; `minLength`/`maxLength`/`pattern`/`default` are dropped and enforced by Pydantic after the call). `thinking_config.thinking_level` comes from `GEMINI_THINKING_LEVEL`; the per-attempt timeout is an `asyncio.timeout` around the call. The reply text is always re-validated (`ProviderBadOutput` with `raw` and the Pydantic message; a no-candidate or blocked reply is bad output too, a `MAX_TOKENS` cut shows up as invalid JSON with the finish reason in the message). Usage: `input_tokens = prompt_token_count`, `thinking_tokens = thoughts_token_count`, and `output_tokens = candidates_token_count + thoughts_token_count`, because Gemini keeps thoughts out of `candidates_token_count` but bills them as output (`max_output_tokens` limits both together). Errors go through `infra/gemini_errors.py`. `build_provider` picks it when `GENERATOR_PROVIDERS[0]` is `gemini`.
 
 ### 9.2 Prompts
 - Files in `backend/prompts/`, e.g. `answer_v1.md` (system + user template sections), `judge_faithfulness_v1.md`, `judge_correctness_v1.md`.
