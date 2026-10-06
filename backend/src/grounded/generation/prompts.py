@@ -38,6 +38,7 @@ DEFAULT_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
 
 ANSWER_PLACEHOLDERS = frozenset({"question", "sources"})
 ANSWER_RETRY_PLACEHOLDERS = frozenset({"error"})
+NO_RAG_PLACEHOLDERS = frozenset({"question"})  # no sources: the baseline has no retrieval
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _PLACEHOLDER_RE = re.compile(r"\{\{([^{}]*)\}\}")
@@ -154,6 +155,16 @@ def load_answer_prompt(directory: Path = DEFAULT_PROMPTS_DIR) -> Prompt:
     return load_prompt(
         "answer_v1",
         placeholders=ANSWER_PLACEHOLDERS,
+        retry_placeholders=ANSWER_RETRY_PLACEHOLDERS,
+        directory=directory,
+    )
+
+
+def load_no_rag_prompt(directory: Path = DEFAULT_PROMPTS_DIR) -> Prompt:
+    """The sibling of ``answer_v1`` for the ``no_rag`` baseline: same schema, no sources (3.11)."""
+    return load_prompt(
+        "answer_no_rag_v1",
+        placeholders=NO_RAG_PLACEHOLDERS,
         retry_placeholders=ANSWER_RETRY_PLACEHOLDERS,
         directory=directory,
     )

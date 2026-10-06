@@ -96,7 +96,7 @@ class FakeLLMProvider:
 
 
 class StubLLMProvider:
-    """Dev-only: answers every request with the same canned answer, citing source ``c1``.
+    """Dev-only: answers every request with the same canned answer, citing ``c1`` if it has sources.
 
     For ``grounded serve`` and ``grounded ask`` before a real adapter exists (``GENERATOR_PROVIDERS=
     fake``, refused in prod). Unlike ``FakeLLMProvider`` it never runs out, and it says plainly
@@ -116,11 +116,14 @@ class StubLLMProvider:
         max_output_tokens: int,
         timeout_s: float,
     ) -> GenerationResult[T]:
+        # No ``<source`` block means a ``no_rag`` request: there is nothing to cite.
+        cited = ["c1"] if "<source " in user else []
         answer = LLMAnswer(
             status="answered",
-            answer_markdown="Stub answer from the fake provider, not a model output. [c1]",
+            answer_markdown="Stub answer from the fake provider, not a model output."
+            + (" [c1]" if cited else ""),
             claims=[
-                LLMClaim(text="This is a stub claim.", citation_ids=["c1"], self_confidence=0.5)
+                LLMClaim(text="This is a stub claim.", citation_ids=cited, self_confidence=0.5)
             ],
         )
         raw = answer.model_dump_json()

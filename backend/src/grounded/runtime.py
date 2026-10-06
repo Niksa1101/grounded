@@ -16,7 +16,7 @@ from google import genai
 from psycopg_pool import AsyncConnectionPool
 
 from grounded.generation.pipeline import AskPipeline
-from grounded.generation.prompts import load_answer_prompt
+from grounded.generation.prompts import load_answer_prompt, load_no_rag_prompt
 from grounded.generation.providers.base import LLMProvider
 from grounded.generation.providers.fake import StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
@@ -93,5 +93,6 @@ async def open_runtime(
             embedder=embedder or build_query_embedder(settings, stack),
             provider=provider,
             prompt=load_answer_prompt(),
+            no_rag_prompt=load_no_rag_prompt(),
         )
         yield Runtime(pool=pool, pipeline=pipeline)
