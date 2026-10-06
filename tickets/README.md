@@ -160,7 +160,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [3.06](phase-3/3.06-citations.md) | Citation validation, mapping and marker rewriting | Build | G | done | [#45](https://github.com/Niksa1101/grounded/pull/45) |
 | [3.07](phase-3/3.07-validation-retry.md) | Output validation with one retry and error feedback | Build | G | done | [#46](https://github.com/Niksa1101/grounded/pull/46) |
 | [3.08](phase-3/3.08-gemini-provider.md) | `GeminiProvider` adapter | Build | G | done | [#47](https://github.com/Niksa1101/grounded/pull/47) |
-| [3.09](phase-3/3.09-confidence-spec.md) | Confidence heuristic — spec | Spec | G | todo | |
+| [3.09](phase-3/3.09-confidence-spec.md) | Confidence heuristic — spec | Spec | G | done | [#48](https://github.com/Niksa1101/grounded/pull/48) |
 | [3.10](phase-3/3.10-confidence.md) | Confidence heuristic — implementation and wiring | Author | A (+G wiring) | todo | |
 | [3.11](phase-3/3.11-refusal-no-rag.md) | Refusal handling and `no_rag` mode | Build | G | todo | |
 | [3.12](phase-3/3.12-request-logs.md) | Request logging, stage timing and shadow cost | Build | G | todo | |
