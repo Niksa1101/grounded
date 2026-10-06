@@ -60,8 +60,7 @@ fused AS (
            dense.distance AS dense_distance,
            lexical.rank AS fts_rank,
            lexical.score AS fts_score,
-           COALESCE(1.0::float8 / (%(rrf_k)s::float8 + dense.rank), 0)
-               + COALESCE(1.0::float8 / (%(rrf_k)s::float8 + lexical.rank), 0) AS rrf_score
+           COALESCE(1.0::float8 / (%(rrf_k)s::float8 + lexical.rank), 0) AS rrf_score
     FROM dense
     FULL OUTER JOIN lexical USING (id)
     ORDER BY rrf_score DESC, id
