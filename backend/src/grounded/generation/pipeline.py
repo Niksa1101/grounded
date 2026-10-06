@@ -8,10 +8,10 @@ Tracer-bullet state (Phase 3): the stages thicken in later tickets, and what is 
 today is marked below.
 
 - Citation mapping lives in ``citations.py`` (3.06). A semantic failure (an answer with no valid
-  citation) is raised as ``ProviderBadOutput`` straight away; 3.07 turns it into the one retry.
+  citation) is treated like a schema failure: ``ProviderBadOutput``, which gets the one retry.
   ``invalid_citation_count`` is computed per request, and 3.12 logs it.
-- ``_generate`` is one call with no retry (3.07 adds the single retry with feedback, and 7.04 moves
-  it into the router).
+- ``_generate_validated`` is the one retry with feedback (3.07, Tech §9.5 step 3). It counts
+  ``validation_retries`` (3.12 logs it), and 7.04 moves it into the router.
 - Claim confidence is ``0.0`` with no components until the heuristic lands (3.10), and
   ``shadow_cost_usd`` and the timings are partial until 3.12. The model's ``self_confidence`` is
   never shown as confidence (AGENTS.md §6.6).
@@ -19,24 +19,42 @@ today is marked below.
 
 from __future__ import annotations
 
+import logging
 import time
+from collections.abc import Mapping
+from dataclasses import dataclass
 from uuid import UUID
 
 from psycopg_pool import AsyncConnectionPool
 
-from grounded.generation.citations import map_citations
+from grounded.generation.citations import MappedAnswer, map_citations
 from grounded.generation.context import build_context
 from grounded.generation.prompts import Prompt
-from grounded.generation.providers.base import GenerationResult, LLMProvider
+from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
 from grounded.infra.provider_errors import ProviderBadOutput
 from grounded.ingest.embed import Embedder
 from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.hybrid import hybrid_search
 from grounded.retrieval.index import ActiveIndexCache, chunk_titles
-from grounded.retrieval.types import IndexVersion
+from grounded.retrieval.types import IndexVersion, RetrievedChunk
 from grounded.schemas.api import AskResponse, Claim, Meta
 from grounded.schemas.llm import LLMAnswer
 from grounded.settings import Settings
+
+logger = logging.getLogger(__name__)
+
+# AGENTS.md §6.4: one retry on the same provider, then give up (fallback arrives with the router).
+MAX_VALIDATION_RETRIES = 1
+
+
+@dataclass(frozen=True, slots=True)
+class Generation:
+    """An answer that passed the checks, plus what it took to get it."""
+
+    result: GenerationResult[LLMAnswer]  # the successful attempt
+    mapped: MappedAnswer
+    usage: Usage  # summed over the attempts whose usage we saw
+    validation_retries: int  # 0 or 1; 3.12 writes it to the request log
 
 
 class IndexMismatchError(RuntimeError):
@@ -81,16 +99,10 @@ class AskPipeline:
         retrieved = time.perf_counter()
 
         user = self._prompt.render_user(question=question, sources=context.text)
-        result = await self._generate(user)
+        generation = await self._generate_validated(user, context.labels, titles, request_id)
+        result, mapped = generation.result, generation.mapped
         generated = time.perf_counter()
 
-        mapped = map_citations(result.parsed, context.labels, titles)
-        if mapped.bad_output is not None:
-            raise ProviderBadOutput(
-                "the answer failed the citation checks",
-                raw=result.raw_text,
-                validation_error=mapped.bad_output,
-            )
         claims = [
             # Confidence is a placeholder until the heuristic lands (3.10).
             Claim(
@@ -125,12 +137,58 @@ class AskPipeline:
                     "llm": _ms(retrieved, generated),
                 },
                 tokens={
-                    "input": result.usage.input_tokens,
-                    "output": result.usage.output_tokens,
+                    "input": generation.usage.input_tokens,
+                    "output": generation.usage.output_tokens,
                 },
                 shadow_cost_usd=0.0,
             ),
         )
+
+    async def _generate_validated(
+        self,
+        user: str,
+        labels: Mapping[str, RetrievedChunk],
+        titles: Mapping[int, str],
+        request_id: UUID,
+    ) -> Generation:
+        """Generate, check the answer, and on bad output retry exactly once on the same provider.
+
+        Bad output is either a schema failure raised by the adapter or a semantic failure from the
+        citation checks (Tech §9.5). The retry's user message is the original one plus the
+        prompt's "Retry feedback" section with the reason filled in. A second failure propagates
+        as ``ProviderBadOutput`` (HTTP 502). Rate limits, 5xx and timeouts are not bad output and
+        propagate straight away, on the retry as well. There is no loop, no sleep, and no fallback
+        yet: 7.04 moves this whole step into the router, which then falls back instead of failing.
+
+        ``usage`` sums the attempts whose token counts we saw. An adapter that raises
+        ``ProviderBadOutput`` reports no usage, so a schema-invalid first attempt is not counted.
+        """
+        spent = Usage(input_tokens=0, output_tokens=0)
+        retries = 0
+        attempt_user = user
+        while True:
+            try:
+                result = await self._generate(attempt_user)
+                spent = _add(spent, result.usage)
+                mapped = map_citations(result.parsed, labels, titles)
+                if mapped.bad_output is not None:
+                    raise ProviderBadOutput(
+                        "the answer failed the citation checks",
+                        raw=result.raw_text,
+                        validation_error=mapped.bad_output,
+                    )
+                return Generation(result, mapped, spent, retries)
+            except ProviderBadOutput as exc:
+                if retries >= MAX_VALIDATION_RETRIES:
+                    raise
+                retries += 1
+                logger.info(
+                    "model output invalid, retrying once",
+                    extra={"request_id": str(request_id), "validation_retries": retries},
+                )
+                attempt_user = self._prompt.render_retry(
+                    user, error=exc.validation_error or str(exc)
+                )
 
     async def _generate(self, user: str) -> GenerationResult[LLMAnswer]:
         return await self._provider.generate(
@@ -151,6 +209,14 @@ class AskPipeline:
                 f"embedder {self._embedder.model}/{self._embedder.dim} does not match active "
                 f"index {index.label} ({index.embedding_model}/{index.embedding_dim})"
             )
+
+
+def _add(a: Usage, b: Usage) -> Usage:
+    return Usage(
+        input_tokens=a.input_tokens + b.input_tokens,
+        output_tokens=a.output_tokens + b.output_tokens,
+        thinking_tokens=a.thinking_tokens + b.thinking_tokens,
+    )
 
 
 def _ms(start: float, end: float) -> int:

@@ -55,3 +55,7 @@ Question:
 
 Sources:
 {{sources}}
+
+# Retry feedback
+
+Your previous output was invalid because {{error}}

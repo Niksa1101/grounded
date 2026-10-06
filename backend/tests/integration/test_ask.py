@@ -6,6 +6,7 @@ import re
 from collections.abc import Iterator
 from typing import NamedTuple
 
+import httpx
 import psycopg
 import pytest
 
@@ -137,7 +138,8 @@ async def test_insufficient_context_has_no_claims_and_no_min_confidence(
 async def test_provider_output_that_fails_validation_is_a_502(
     test_database_url: str, index: Index
 ) -> None:
-    provider = FakeLLMProvider([ProviderBadOutput("bad", raw="{", validation_error="oops")])
+    bad = ProviderBadOutput("bad", raw="{", validation_error="oops")
+    provider = FakeLLMProvider([bad, bad])
     settings = make_settings(database_url=test_database_url)
     async with app_client(
         settings, embedder=FakeEmbedder(dim=EMBEDDING_DIM), provider=provider
@@ -146,6 +148,7 @@ async def test_provider_output_that_fails_validation_is_a_502(
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "validation_failed"
     assert "oops" not in response.text
+    assert len(provider.calls) == 2
 
 
 async def test_rate_limited_provider_is_a_503_with_retry_after(
@@ -153,16 +156,18 @@ async def test_rate_limited_provider_is_a_503_with_retry_after(
 ) -> None:
     error = ProviderRateLimited("slow down", retry_after_s=6.2, is_quota=False)
     settings = make_settings(database_url=test_database_url)
+    provider = FakeLLMProvider([error])
     async with app_client(
         settings,
         embedder=FakeEmbedder(dim=EMBEDDING_DIM),
-        provider=FakeLLMProvider([error]),
+        provider=provider,
     ) as client:
         response = await client.post("/v1/ask", json={"question": QUESTION})
     assert response.status_code == 503
     assert response.headers["Retry-After"] == "7"
     error_body = response.json()["error"]
     assert (error_body["code"], error_body["retry_after_s"]) == ("provider_unavailable", 7)
+    assert len(provider.calls) == 1  # a rate limit is not bad output: no retry
 
 
 async def test_embedder_that_built_another_index_is_refused(
@@ -206,29 +211,6 @@ async def test_citations_carry_db_urls_with_anchors_and_a_snippet(
     assert len(citation.snippet) <= 300
 
 
-async def test_an_answer_with_no_valid_citation_is_a_502_until_the_retry_exists(
-    test_database_url: str, index: Index
-) -> None:
-    # 3.07 turns this into one retry; until then the semantic check fails the request.
-    provider = FakeLLMProvider(
-        [
-            LLMAnswer(
-                status="answered",
-                answer_markdown="Quokkas sleep. [c9]",
-                claims=[claim("Quokkas sleep.", "c9")],
-            )
-        ]
-    )
-    async with app_client(
-        make_settings(database_url=test_database_url),
-        embedder=FakeEmbedder(dim=EMBEDDING_DIM),
-        provider=provider,
-    ) as client:
-        response = await client.post("/v1/ask", json={"question": QUESTION})
-    assert response.status_code == 502
-    assert response.json()["error"]["code"] == "validation_failed"
-
-
 async def test_insufficient_context_claims_are_dropped(
     test_database_url: str, index: Index
 ) -> None:
@@ -250,3 +232,104 @@ async def test_insufficient_context_claims_are_dropped(
     assert response.status_code == 200
     body = AskResponse.model_validate(response.json())
     assert (body.claims, body.citations, body.min_confidence) == ([], [], None)
+
+
+FEEDBACK = "Your previous output was invalid because"
+
+
+def good_answer() -> LLMAnswer:
+    return LLMAnswer(
+        status="answered",
+        answer_markdown="Quokkas sleep. [c1]",
+        claims=[claim("Quokkas sleep.", "c1")],
+    )
+
+
+def uncited_answer() -> LLMAnswer:
+    return LLMAnswer(
+        status="answered",
+        answer_markdown="Quokkas sleep. [c9]",
+        claims=[claim("Quokkas sleep.", "c9")],
+    )
+
+
+async def ask(test_database_url: str, provider: FakeLLMProvider) -> httpx.Response:
+    async with app_client(
+        make_settings(database_url=test_database_url),
+        embedder=FakeEmbedder(dim=EMBEDDING_DIM),
+        provider=provider,
+    ) as client:
+        return await client.post("/v1/ask", json={"question": QUESTION})
+
+
+async def test_invalid_json_is_retried_once_with_the_error_and_then_succeeds(
+    test_database_url: str, index: Index
+) -> None:
+    provider = FakeLLMProvider(["{", good_answer()])
+    response = await ask(test_database_url, provider)
+
+    assert response.status_code == 200
+    AskResponse.model_validate(response.json())
+    first, retry = provider.calls
+    assert FEEDBACK not in first.user
+    # The retry is the original message plus the feedback section with the validation error.
+    assert retry.user.startswith(first.user)
+    assert f"{FEEDBACK} " in retry.user
+    assert "validation error for LLMAnswer" in retry.user
+    assert (retry.system, retry.temperature) == (first.system, first.temperature)
+    assert provider.remaining == 0
+
+
+async def test_zero_valid_citations_is_retried_once_with_the_reason_and_then_succeeds(
+    test_database_url: str, index: Index
+) -> None:
+    provider = FakeLLMProvider([uncited_answer(), good_answer()])
+    response = await ask(test_database_url, provider)
+
+    assert response.status_code == 200
+    body = AskResponse.model_validate(response.json())
+    assert [c.n for c in body.citations] == [1]
+    first, retry = provider.calls
+    assert retry.user.startswith(first.user)
+    assert f"{FEEDBACK} the status is 'answered' but the answer cites no valid source label" in (
+        retry.user
+    )
+    # Both attempts were billed: their tokens add up.
+    assert body.meta.tokens == {"input": 200, "output": 100}
+
+
+async def test_invalid_json_twice_is_a_502_after_exactly_two_calls(
+    test_database_url: str, index: Index
+) -> None:
+    # A third step is scripted to prove it is never reached.
+    provider = FakeLLMProvider(["{", "[]", good_answer()])
+    response = await ask(test_database_url, provider)
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert len(provider.calls) == 2
+    assert provider.remaining == 1
+
+
+async def test_zero_valid_citations_twice_is_a_502_after_exactly_two_calls(
+    test_database_url: str, index: Index
+) -> None:
+    provider = FakeLLMProvider([uncited_answer(), uncited_answer(), good_answer()])
+    response = await ask(test_database_url, provider)
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert len(provider.calls) == 2
+    assert provider.remaining == 1
+
+
+async def test_a_rate_limit_on_the_retry_is_a_503_with_retry_after(
+    test_database_url: str, index: Index
+) -> None:
+    error = ProviderRateLimited("slow down", retry_after_s=3.0, is_quota=False)
+    provider = FakeLLMProvider(["{", error])
+    response = await ask(test_database_url, provider)
+
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "3"
+    assert len(provider.calls) == 2
