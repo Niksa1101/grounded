@@ -1,12 +1,8 @@
 """Spec tests of the confidence heuristic (Tech.md §9.8, ticket 3.09).
 
 They state *invariants* (a range, a cap, an ordering, determinism), never the value of a score, so
-they describe what any acceptable heuristic must satisfy without being the heuristic. Each one is a
-strict ``xfail`` until the Author implements ``score_claims`` in ticket 3.10, who then removes the
-marker. ``raises=NotImplementedError`` makes the marker mean "not written yet": a real failure of
-the finished code is a failure, not an expected one.
-
-The tests that need no heuristic (the value objects and the settings bounds) are plain tests.
+they describe what any acceptable heuristic must satisfy without being the heuristic. They were
+strict ``xfail`` until ``score_claims`` landed in ticket 3.10, which removed the markers.
 """
 
 from __future__ import annotations
@@ -29,10 +25,6 @@ from grounded.generation.confidence import (
 from grounded.retrieval.types import RetrievedChunk
 from grounded.schemas.llm import LLMClaim
 from tests.support import make_settings
-
-SPEC = pytest.mark.xfail(
-    strict=True, raises=NotImplementedError, reason="Author implements in 3.10"
-)
 
 CONFIG = ConfidenceConfig.from_settings(make_settings())
 
@@ -206,7 +198,6 @@ def labels_of(profile: Mapping[str, Any], *others: Mapping[str, Any]) -> dict[st
     return {f"c{n}": chunk(n, **p) for n, p in enumerate([profile, *others], start=1)}
 
 
-@SPEC
 @pytest.mark.parametrize("name", PROFILES)
 @pytest.mark.parametrize("self_confidence", SELF_VALUES)
 @pytest.mark.parametrize(
@@ -233,7 +224,6 @@ def test_confidence_and_components_are_in_range_with_stable_keys(
     assert all(math.isfinite(v) and 0.0 <= v <= 1.0 for v in result.components.values())
 
 
-@SPEC
 def test_confidence_is_in_range_over_a_grid_of_signals() -> None:
     grid = {
         "dense_rank": (None, 1, 40),
@@ -250,12 +240,10 @@ def test_confidence_is_in_range_over_a_grid_of_signals() -> None:
             assert 0.0 <= result.confidence <= 1.0, signals
 
 
-@SPEC
 def test_no_claims_gives_no_scores() -> None:
     assert score([], labels_of(PROFILES["both_lists"])) == []
 
 
-@SPEC
 @pytest.mark.parametrize(
     "config",
     [
@@ -279,7 +267,6 @@ def test_a_claim_without_a_valid_citation_is_capped(
     assert set(result.components) == set(COMPONENT_KEYS)
 
 
-@SPEC
 @pytest.mark.parametrize(
     "weakest",
     [
@@ -327,7 +314,6 @@ SUPPORT_PAIRS = {
 }
 
 
-@SPEC
 @pytest.mark.parametrize("self_confidence", SELF_VALUES)
 @pytest.mark.parametrize("pair", SUPPORT_PAIRS)
 def test_better_retrieval_support_never_lowers_confidence(
@@ -339,14 +325,12 @@ def test_better_retrieval_support_never_lowers_confidence(
     assert high.confidence >= low.confidence
 
 
-@SPEC
 def test_a_higher_self_confidence_never_lowers_confidence() -> None:
     labels = {"c1": chunk(1, **PROFILES["dense_only"])}
     values = [one(("c1",), labels, self_confidence=s).confidence for s in (0.0, 0.2, 0.5, 0.9, 1.0)]
     assert values == sorted(values)
 
 
-@SPEC
 @pytest.mark.parametrize("first", ["strong", "weak"])
 @pytest.mark.parametrize("added", ["stronger", "equal", "weaker"])
 @pytest.mark.parametrize("self_confidence", SELF_VALUES)
@@ -369,21 +353,18 @@ def test_one_more_valid_citation_never_lowers_confidence(
     assert both.confidence >= alone.confidence
 
 
-@SPEC
 @pytest.mark.parametrize("name", ["dense_only", "both_lists", "reranked"])
 def test_a_repeated_label_is_one_citation(name: str) -> None:
     labels = labels_of(PROFILES[name])
     assert one(("c1", "c1", "c1"), labels) == one(("c1",), labels)
 
 
-@SPEC
 def test_unknown_labels_are_not_citations() -> None:
     # They are counted elsewhere (citations.py); here they must not change what the valid ones earn.
     labels = labels_of(PROFILES["both_lists"])
     assert one(("c1", "c8"), labels) == one(("c1",), labels)
 
 
-@SPEC
 @pytest.mark.parametrize("bottom", [False, True])
 def test_rerank_off_is_handled(bottom: bool) -> None:
     labels = labels_of({"dense_rank": 2, "rrf_score": 1 / 62})
@@ -393,7 +374,6 @@ def test_rerank_off_is_handled(bottom: bool) -> None:
     assert set(result.components) == set(COMPONENT_KEYS)
 
 
-@SPEC
 def test_same_input_gives_the_same_output_and_inputs_are_untouched() -> None:
     labels = labels_of(PROFILES["reranked"], PROFILES["dense_only"])
     claims = [claim("c1", self_confidence=0.7), claim("c2", "c1"), claim(), claim("c5")]
@@ -404,7 +384,6 @@ def test_same_input_gives_the_same_output_and_inputs_are_untouched() -> None:
     assert (dict(labels), list(claims)) == snapshot
 
 
-@SPEC
 def test_each_claim_is_scored_on_its_own_and_in_order() -> None:
     labels = labels_of(PROFILES["both_lists"], PROFILES["dense_only"], PROFILES["extreme_low"])
     claims = [claim("c1", self_confidence=0.9), claim(), claim("c2", "c3"), claim("c3")]
@@ -412,3 +391,92 @@ def test_each_claim_is_scored_on_its_own_and_in_order() -> None:
     assert len(together) == len(claims)
     assert together == [score([c], labels)[0] for c in claims]
     assert score(claims[::-1], labels) == together[::-1]
+
+
+# --- Tests added with the implementation (3.10): gaps the spec tests leave -------------------
+
+# Weakest to strongest value of each signal, for the monotonicity sweep below.
+SIGNAL_ORDER: dict[str, tuple[float, ...]] = {
+    "dense_rank": (40, 10, 1),
+    "dense_distance": (2.0, 0.5, 0.0),
+    "fts_rank": (40, 10, 1),
+    "fts_score": (0.0, 1.0, 12.0),
+    "rrf_score": (0.0, 0.01, 0.0328),
+    "rerank_score": (0.0, 0.5, 1.0),
+}
+
+
+@pytest.mark.parametrize("self_confidence", [0.0, 1.0])
+@pytest.mark.parametrize("key", SIGNAL_ORDER)
+def test_improving_any_one_signal_never_lowers_confidence_in_any_context(
+    key: str, self_confidence: float
+) -> None:
+    # The spec pairs fix one context; this sweeps every combination of the other signals being
+    # absent or present, so a non-monotone interaction between two signals cannot hide.
+    others = [k for k in SIGNAL_ORDER if k != key]
+    for present in product((False, True), repeat=len(others)):
+        base = {k: SIGNAL_ORDER[k][1] for k, on in zip(others, present, strict=True) if on}
+        values = [
+            one(
+                ("c1",),
+                {"c1": chunk(1, **base, **{key: v})},
+                self_confidence=self_confidence,
+            ).confidence
+            for v in SIGNAL_ORDER[key]
+        ]
+        assert values == sorted(values), (key, base, values)
+
+
+@pytest.mark.parametrize("bottom", [False, True])
+@pytest.mark.parametrize("found_by", ["dense", "fts"])
+def test_a_chunk_found_by_one_list_cannot_pass_point_six_even_with_perfect_signals(
+    found_by: str, bottom: bool
+) -> None:
+    # The self-report bound must not depend on the signals being weak: one list alone cannot
+    # corroborate the chunk, so even its best values stay under the line.
+    perfect = (
+        {"dense_rank": 1, "dense_distance": 0.0, "rrf_score": 1.0}
+        if found_by == "dense"
+        else {"fts_rank": 1, "fts_score": 12.0, "rrf_score": 1.0}
+    )
+    result = one(("c1",), {"c1": chunk(1, **perfect)}, self_confidence=1.0, bottom=bottom)
+    assert result.confidence <= 0.6
+    assert result.components["agreement"] == 0.0
+
+
+def test_the_confidence_is_the_weighted_mean_of_its_components() -> None:
+    labels = labels_of(PROFILES["both_lists"], PROFILES["dense_only"])
+    config = replace(CONFIG, w_rerank=0.3)
+    result = one(("c1", "c2"), labels, self_confidence=0.7, config=config)
+    weights = {
+        "retrieval": config.w_retrieval,
+        "agreement": config.w_agreement,
+        "citations": config.w_citations,
+        "self_confidence": config.w_self,
+        "rerank": config.w_rerank,
+    }
+    expected = sum(weights[k] * result.components[k] for k in COMPONENT_KEYS) / sum(
+        weights.values()
+    )
+    assert math.isclose(result.confidence, expected)
+    assert result.components["self_confidence"] == 0.7
+    assert result.components["rerank"] == 0.0  # rerank is off: the component is 0, not an error
+
+
+def test_an_uncited_claim_has_zero_support_components() -> None:
+    result = one(("c9",), labels_of(PROFILES["both_lists"]), self_confidence=0.8)
+    assert result.components == {
+        "retrieval": 0.0,
+        "agreement": 0.0,
+        "citations": 0.0,
+        "self_confidence": 0.8,
+        "rerank": 0.0,
+    }
+
+
+def test_all_weights_zero_gives_zero_not_a_division_error() -> None:
+    config = ConfidenceConfig(
+        w_retrieval=0.0, w_agreement=0.0, w_citations=0.0, w_self=0.0, w_rerank=0.0, uncited_cap=0.2
+    )
+    result = one(("c1",), labels_of(PROFILES["both_lists"]), config=config)
+    assert result.confidence == 0.0

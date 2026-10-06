@@ -104,10 +104,10 @@ class Settings(BaseSettings):
     active_index_ttl_s: float = Field(default=300.0, gt=0)  # DB.md §7.3
     query_embedding_cache_size: int = Field(default=256, gt=0)  # in-memory LRU, prod (Tech.md §11)
 
-    # --- Confidence (generation/confidence.py, Tech §9.8; the Author may rename them in 3.10) ----
-    # Relative importance of each signal. The defaults sum to 1.0 so they read as shares; whether
-    # they are normalised is the heuristic's business. ``w_rerank`` is 0 until Phase 6 measures
-    # whether rerank scores help (it is also moot whenever rerank is off).
+    # --- Confidence (generation/confidence.py, Tech §9.8) -------------------------------------
+    # Relative importance of each signal. The defaults sum to 1.0 so they read as shares; the
+    # heuristic divides by their sum, so any non-negative set works. ``w_rerank`` is 0 until
+    # Phase 6 measures whether rerank scores help (it is also moot whenever rerank is off).
     confidence_w_retrieval: float = Field(default=0.40, ge=0.0, le=1.0)
     confidence_w_agreement: float = Field(default=0.25, ge=0.0, le=1.0)
     confidence_w_citations: float = Field(default=0.20, ge=0.0, le=1.0)

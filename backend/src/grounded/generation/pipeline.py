@@ -12,9 +12,10 @@ today is marked below.
   ``invalid_citation_count`` is computed per request, and 3.12 logs it.
 - ``_generate_validated`` is the one retry with feedback (3.07, Tech §9.5 step 3). It counts
   ``validation_retries`` (3.12 logs it), and 7.04 moves it into the router.
-- Claim confidence is ``0.0`` with no components until the heuristic lands (3.10), and
-  ``shadow_cost_usd`` and the timings are partial until 3.12. The model's ``self_confidence`` is
-  never shown as confidence (AGENTS.md §6.6).
+- Claim confidence comes from ``confidence.score_claims`` (3.10): the server computes it from the
+  retrieval signals of the cited chunks, and the model's ``self_confidence`` is only one weak input,
+  never shown as confidence (AGENTS.md §6.6). ``shadow_cost_usd`` and the timings are partial
+  until 3.12.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from uuid import UUID
 from psycopg_pool import AsyncConnectionPool
 
 from grounded.generation.citations import MappedAnswer, map_citations
+from grounded.generation.confidence import ConfidenceConfig, score_claims
 from grounded.generation.context import build_context
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
@@ -80,6 +82,7 @@ class AskPipeline:
         self._provider = provider
         self._prompt = prompt
         self._cfg = RetrievalConfig.from_settings(settings, "hybrid")
+        self._confidence_cfg = ConfidenceConfig.from_settings(settings)
 
     async def ask(self, question: str, request_id: UUID) -> AskResponse:
         started = time.perf_counter()
@@ -103,15 +106,20 @@ class AskPipeline:
         result, mapped = generation.result, generation.mapped
         generated = time.perf_counter()
 
+        # ``mapped.claims`` are the model's claims one to one (citations.py), except that an
+        # ``insufficient_context`` answer has none: its claims are dropped, so nothing is scored.
+        model_claims = (
+            [] if result.parsed.status == "insufficient_context" else result.parsed.claims
+        )
+        scores = score_claims(model_claims, context.labels, chunks, config=self._confidence_cfg)
         claims = [
-            # Confidence is a placeholder until the heuristic lands (3.10).
             Claim(
                 text=claim.text,
                 citations=list(claim.citations),
-                confidence=0.0,
-                confidence_components={},
+                confidence=score.confidence,
+                confidence_components=score.components,
             )
-            for claim in mapped.claims
+            for claim, score in zip(mapped.claims, scores, strict=True)
         ]
         return AskResponse(
             status=result.parsed.status,

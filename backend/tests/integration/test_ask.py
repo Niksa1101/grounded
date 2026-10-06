@@ -10,6 +10,7 @@ import httpx
 import psycopg
 import pytest
 
+from grounded.generation.confidence import COMPONENT_KEYS
 from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.infra.provider_errors import ProviderBadOutput, ProviderRateLimited
 from grounded.ingest.embed import FakeEmbedder
@@ -90,9 +91,19 @@ async def test_ask_returns_a_schema_valid_response(test_database_url: str, index
         assert citation.breadcrumb.startswith(f"{index.title} > Part ")
         assert citation.snippet
 
-    # Placeholders until 3.10: confidence is never the model's self-confidence.
-    assert all(c.confidence == 0.0 and c.confidence_components == {} for c in body.claims)
-    assert body.min_confidence == 0.0
+    # Confidence is computed by the server (3.10), never the model's self_confidence (0.9 here).
+    first, second = body.claims
+    for scored in body.claims:
+        assert set(scored.confidence_components) == set(COMPONENT_KEYS)
+        assert 0.0 < scored.confidence < 1.0
+        assert scored.confidence != 0.9
+        assert scored.confidence_components["self_confidence"] == 0.9
+        assert scored.confidence_components["rerank"] == 0.0  # rerank is off
+        assert scored.confidence_components["retrieval"] > 0.0  # real hybrid signals were used
+    # One valid source gives n/(n+1) = 1/2, two give 2/3; the unknown label c9 is not a source.
+    assert first.confidence_components["citations"] == pytest.approx(1 / 2)
+    assert second.confidence_components["citations"] == pytest.approx(2 / 3)
+    assert body.min_confidence == min(first.confidence, second.confidence)
 
     meta = body.meta
     assert (meta.provider, meta.model) == ("fake", "fake-model")
@@ -106,6 +117,34 @@ async def test_ask_returns_a_schema_valid_response(test_database_url: str, index
     assert call.temperature == settings.llm_temperature
     assert call.max_output_tokens == settings.llm_max_output_tokens
     assert call.timeout_s == settings.llm_timeout_s
+
+
+async def test_a_claim_without_a_valid_citation_is_capped_and_sets_min_confidence(
+    test_database_url: str, index: Index
+) -> None:
+    # The answer cites c1 in the text (so it is valid), but the second claim cites only an unknown
+    # label: its confidence is capped, however confident the model says it is.
+    provider = FakeLLMProvider(
+        [
+            LLMAnswer(
+                status="answered",
+                answer_markdown="Quokkas sleep. [c1] Odd.",
+                claims=[claim("Quokkas sleep.", "c1"), claim("Odd.", "c9")],
+            )
+        ]
+    )
+    settings = make_settings(database_url=test_database_url)
+    async with app_client(
+        settings, embedder=FakeEmbedder(dim=EMBEDDING_DIM), provider=provider
+    ) as client:
+        response = await client.post("/v1/ask", json={"question": QUESTION})
+    body = AskResponse.model_validate(response.json())
+    cited, uncited = body.claims
+    assert uncited.confidence <= settings.confidence_uncited_cap
+    assert uncited.confidence_components["citations"] == 0.0
+    assert uncited.confidence_components["self_confidence"] == 0.9
+    assert cited.confidence > uncited.confidence
+    assert body.min_confidence == uncited.confidence
 
 
 async def test_insufficient_context_has_no_claims_and_no_min_confidence(

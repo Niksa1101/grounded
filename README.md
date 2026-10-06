@@ -113,6 +113,31 @@ n = 25.
 
 ![The retrieval-eval job fails on a PR that breaks fusion](docs/images/gate-blocked-pr.png)
 
+## How confidence is computed
+
+> **Drafted by the agent** while implementing `generation/confidence.py` under the Author's delegation (ticket
+> 3.10). It is a placeholder for the Author to rewrite in their own words.
+
+Every claim in an answer carries a confidence in `[0, 1]` that the **server** computes (`score_claims`). The model's
+own `self_confidence` is only one weak input, because self-reports are poorly calibrated. For each claim the server
+looks at the chunks it cites (only valid labels, each counted once) and builds five components, which the API returns
+next to the number:
+
+| Component | Meaning | Default weight (`Settings`) |
+|---|---|---|
+| `retrieval` | how strongly retrieval ranked the best cited chunk: its dense rank and distance, its FTS rank and score, and its RRF score relative to the top of the list | `CONFIDENCE_W_RETRIEVAL` = 0.40 |
+| `agreement` | whether *both* the dense and the lexical search found the best cited chunk (the weaker of their two verdicts, so 0 if only one list found it) | `CONFIDENCE_W_AGREEMENT` = 0.25 |
+| `citations` | how many distinct valid sources back the claim: `n / (n + 1)` | `CONFIDENCE_W_CITATIONS` = 0.20 |
+| `self_confidence` | what the model said about itself | `CONFIDENCE_W_SELF` = 0.15 (at most 0.6) |
+| `rerank` | rerank relevance of the cited chunks, `0` while rerank is off (Phase 6) | `CONFIDENCE_W_RERANK` = 0.0 |
+
+The confidence is the weighted mean of the components (the weights are relative, they need not sum to 1). A claim
+with no valid citation is capped at `CONFIDENCE_UNCITED_CAP` (at most 0.2) whatever else it has. With several
+citations the best chunk counts for `retrieval` and `agreement` and every extra source raises `citations`, so adding a
+citation never lowers the score (an average over the cited chunks would). `min_confidence` of an answer is the lowest
+claim confidence. Whether the number is calibrated is measured in Phase 8; until then it is a documented heuristic,
+not a probability. Details and the invariants: [docs/Tech.md §9.8](docs/Tech.md).
+
 ## Cost and latency
 
 _TBD (Phase 8)._ Will show p50/p95 per stage (embed, retrieval, rerank, LLM), cold-start latency, cache hit rate,
