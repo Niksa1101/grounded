@@ -148,9 +148,9 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [2.07](phase-2/2.07-ablation.md) | `hybrid` mode, ablation run and baseline rows | Build + Baseline | G | done | [#29](https://github.com/Niksa1101/grounded/pull/29), [#31](https://github.com/Niksa1101/grounded/pull/31) |
 | [2.08](phase-2/2.08-decision-ci-cache.md) | Decision: seeding the CI corpus and embedding caches | Decision | D | done | [#32](https://github.com/Niksa1101/grounded/pull/32) |
 | [2.09](phase-2/2.09-gate-spec.md) | Retrieval gate — spec | Spec | G | done | [#33](https://github.com/Niksa1101/grounded/pull/33) |
-| [2.10](phase-2/2.10-gate.md) | Retrieval gate — implementation | Author | A | todo | |
+| [2.10](phase-2/2.10-gate.md) | Retrieval gate — implementation | Author | A | done | [#34](https://github.com/Niksa1101/grounded/pull/34) |
 | [2.11](phase-2/2.11-ci-retrieval-eval.md) | CI `retrieval-eval` job | Build | G | done | [#36](https://github.com/Niksa1101/grounded/pull/36) |
-| [2.12](phase-2/2.12-closeout.md) | Gate demonstration and Phase 2 closeout | Closeout | A+G | todo | |
+| [2.12](phase-2/2.12-closeout.md) | Gate demonstration and Phase 2 closeout | Closeout | A+G | done | [#37](https://github.com/Niksa1101/grounded/pull/37) (demo), closeout PR |
 | **3** | **[`/ask` with structured output](phase-3/README.md)** | | | | |
 | [3.01](phase-3/3.01-decision-gemini.md) | Decision: Gemini generator model, structured output, thinking budget, prices | Decision | D | todo | |
 | [3.02](phase-3/3.02-provider-contract.md) | `LLMProvider` protocol, `FakeLLMProvider` and `LLMAnswer` | Build | G | todo | |
