@@ -166,6 +166,14 @@ uv run grounded ask "<question>"   # real Gemini: needs GEMINI_API_KEY and GEMIN
 ```
 
 ```bash
+uv run grounded ask --golden ../eval/golden/golden_set.v1.jsonl --fake   # whole golden set, stub provider
+```
+
+```bash
+uv run grounded ask --golden ../eval/golden/golden_set.v1.jsonl   # real Gemini: ~30 generator calls, uses quota; --limit N for a trial
+```
+
+```bash
 uv run grounded ingest --dry-run
 ```
 

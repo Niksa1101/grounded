@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| Status | Phases 0–2 done; Phase 3 (`/ask` with structured output) next |
+| Status | Phases 0–2 done; Phase 3 (`/ask` with structured output) implemented, closeout pending the Author's real-provider golden-set run (ticket 3.14) |
 | Owner / Author | probniprobic4@gmail.com |
 | Last updated | 2026-10-06 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
