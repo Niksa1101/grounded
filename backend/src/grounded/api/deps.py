@@ -12,6 +12,7 @@ from grounded.settings import Settings
 
 if TYPE_CHECKING:
     from grounded.generation.pipeline import AskPipeline
+    from grounded.observability.request_log import RequestLogger, RequestTrace
 
 
 def get_settings_dep(request: Request) -> Settings:
@@ -24,6 +25,15 @@ def get_pool(request: Request) -> AsyncConnectionPool:
 
 def get_pipeline(request: Request) -> AskPipeline:
     return cast("AskPipeline", request.app.state.pipeline)
+
+
+def get_request_logger(request: Request) -> RequestLogger:
+    return cast("RequestLogger", request.app.state.request_logger)
+
+
+def trace_of(request: Request) -> RequestTrace:
+    """The trace ``AskRoute`` started for this request (api/routes_ask.py)."""
+    return cast("RequestTrace", request.state.trace)
 
 
 def request_id_of(request: Request) -> UUID:
@@ -43,3 +53,4 @@ SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 PoolDep = Annotated[AsyncConnectionPool, Depends(get_pool)]
 PipelineDep = Annotated["AskPipeline", Depends(get_pipeline)]
 RequestIdDep = Annotated[UUID, Depends(request_id_of)]
+TraceDep = Annotated["RequestTrace", Depends(trace_of)]

@@ -302,6 +302,7 @@ Design notes:
 - **Why `breadcrumb_text` is denormalized.** Generated columns need immutable expressions. Joining an array inside the generated `tsv` expression is avoided, and the same string is reused in the prompt and in the embedded text.
 - **Why FTS weights.** Headings (weight A) matter more than body text (B). `ts_rank_cd` respects weights.
 - **Why `eval_runs.index_config_hash` has no FK.** CI builds its own index in a throwaway database. The config hash identifies the same index across databases.
+- **`request_logs.id` is the request's `request_id`** (the one in `meta.request_id` and in every log line), so a row and a log line correlate directly. A `bad_request` row has `question` NULL: the rejected text may be huge or not text at all; its `question_hash` is kept.
 - **Why `request_logs.source` has no `ci`.** Evals run the pipeline in-process with `source='eval'` and write logs only to the CI database, never to production.
 
 ## 5. Roles and privileges

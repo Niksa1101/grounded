@@ -9,13 +9,16 @@ today is marked below.
 
 - Citation mapping lives in ``citations.py`` (3.06). A semantic failure (an answer with no valid
   citation) is treated like a schema failure: ``ProviderBadOutput``, which gets the one retry.
-  ``invalid_citation_count`` is computed per request, and 3.12 logs it.
+  ``invalid_citation_count`` is computed per request and recorded on the trace.
 - ``_generate_validated`` is the one retry with feedback (3.07, Tech §9.5 step 3). It counts
-  ``validation_retries`` (3.12 logs it), and 7.04 moves it into the router.
+  ``validation_retries`` on the trace, and 7.04 moves it into the router.
 - Claim confidence comes from ``confidence.score_claims`` (3.10): the server computes it from the
   retrieval signals of the cited chunks, and the model's ``self_confidence`` is only one weak input,
-  never shown as confidence (AGENTS.md §6.6). ``shadow_cost_usd`` and the timings are partial
-  until 3.12.
+  never shown as confidence (AGENTS.md §6.6).
+- ``RequestTrace`` (3.12) is filled as the stages run: versions, usage, retries and citation counts
+  for the ``request_logs`` row, and the stage timings and shadow cost for ``meta``. The pipeline
+  never writes the row itself (the route does, and the error handlers for the failures), so a
+  request that raises still leaves its trace behind.
 - ``AskMode.NO_RAG`` (3.11) is the Phase 4 baseline: no embedding, no index lookup, no retrieval,
   the sibling prompt ``answer_no_rag_v1`` and no zero-citations check (there is nothing to cite, so
   the check would send every answer to the retry). It is reachable from ``grounded ask --mode
@@ -37,9 +40,12 @@ from grounded.generation.citations import MappedAnswer, map_citations
 from grounded.generation.confidence import ConfidenceConfig, score_claims
 from grounded.generation.context import build_context
 from grounded.generation.prompts import Prompt
-from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
+from grounded.generation.providers.base import GenerationResult, LLMProvider
 from grounded.infra.provider_errors import ProviderBadOutput
+from grounded.infra.timing import Clock, StageTimer
 from grounded.ingest.embed import Embedder
+from grounded.observability.cost import Pricing
+from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.hybrid import hybrid_search
 from grounded.retrieval.index import ActiveIndexCache, chunk_titles
@@ -71,8 +77,6 @@ class Generation:
 
     result: GenerationResult[LLMAnswer]  # the successful attempt
     mapped: MappedAnswer
-    usage: Usage  # summed over the attempts whose usage we saw
-    validation_retries: int  # 0 or 1; 3.12 writes it to the request log
 
 
 class IndexMismatchError(RuntimeError):
@@ -91,6 +95,8 @@ class AskPipeline:
         provider: LLMProvider,
         prompt: Prompt,
         no_rag_prompt: Prompt,
+        pricing: Pricing,
+        clock: Clock = time.perf_counter,
     ) -> None:
         self._settings = settings
         self._pool = pool
@@ -101,11 +107,31 @@ class AskPipeline:
         self._no_rag_prompt = no_rag_prompt
         self._cfg = RetrievalConfig.from_settings(settings, "hybrid")
         self._confidence_cfg = ConfidenceConfig.from_settings(settings)
+        self._pricing = pricing
+        self._clock = clock
+        # An unpriced model stops the service here, at startup, instead of turning into a silent
+        # cost of 0 (Tech §14). The embedder is built from ``settings.embedding_model``, so that
+        # is the model whose price the shadow cost uses.
+        pricing.require_generator(provider.name, provider.model)
+        pricing.require_embedding(settings.embedding_model)
 
     async def ask(
-        self, question: str, request_id: UUID, *, mode: AskMode = AskMode.HYBRID
+        self,
+        question: str,
+        request_id: UUID,
+        *,
+        mode: AskMode = AskMode.HYBRID,
+        trace: RequestTrace | None = None,
     ) -> AskResponse:
-        started = time.perf_counter()
+        """``trace`` is the request's scratchpad (3.12). The route passes the one it created before
+        parsing the body, so the total covers the whole request and a failure leaves it filled; the
+        CLI and the evals pass none and get a private one."""
+        if trace is None:
+            trace = RequestTrace(request_id=request_id, timer=StageTimer(self._clock))
+        timer = trace.timer
+        trace.provider = self._provider.name
+        trace.model = self._provider.model
+
         if mode is AskMode.NO_RAG:
             # No embedding and no database access at all: the index is not even looked up, so this
             # mode also works before the first ingest.
@@ -116,33 +142,47 @@ class AskPipeline:
             labels: Mapping[str, RetrievedChunk] = {}
             titles: Mapping[int, str] = {}
             user = prompt.render_user(question=question)
-            embedded = retrieved = time.perf_counter()
+            trace.prompt_version = prompt.version
+            trace.retrieval_config_hash = config_hash  # index_version_id stays None: no index
         else:
             prompt = self._prompt
-            index = await self._index_cache.get()
+            trace.prompt_version = prompt.version
+            config_hash = self._cfg.config_hash
+            trace.retrieval_config_hash = config_hash
+            with timer.stage("retrieval"):
+                index = await self._index_cache.get()
+            trace.index_version_id = index.id
             self._check_embedder(index)
             index_version = index.label
-            config_hash = self._cfg.config_hash
 
-            [vector] = await self._embedder.embed([question], "RETRIEVAL_QUERY")
-            embedded = time.perf_counter()
+            # Recorded before the call: a failed call may still have been billed.
+            trace.embedding_model = self._settings.embedding_model
+            trace.embedding_tokens = len(question)
+            with timer.stage("embed"):
+                [vector] = await self._embedder.embed([question], "RETRIEVAL_QUERY")
 
-            async with self._pool.connection() as conn:
-                chunks = await hybrid_search(
-                    conn, question, vector, index_version_id=index.id, cfg=self._cfg
-                )
-                context = build_context(chunks, k_context=self._cfg.k_context)
-                titles = await chunk_titles(conn, [c.chunk_id for c in context.labels.values()])
+            with timer.stage("retrieval"):
+                async with self._pool.connection() as conn:
+                    chunks = await hybrid_search(
+                        conn, question, vector, index_version_id=index.id, cfg=self._cfg
+                    )
+                    context = build_context(chunks, k_context=self._cfg.k_context)
+                    titles = await chunk_titles(conn, [c.chunk_id for c in context.labels.values()])
             labels = context.labels
-            # The connection is back in the pool before the (slow) LLM call.
-            retrieved = time.perf_counter()
+            # The connection went back to the pool before the (slow) LLM call.
             user = prompt.render_user(question=question, sources=context.text)
 
-        generation = await self._generate_validated(
-            prompt, user, labels, titles, request_id, require_citations=mode is AskMode.HYBRID
-        )
+        with timer.stage("llm"):
+            generation = await self._generate_validated(
+                prompt,
+                user,
+                labels,
+                titles,
+                request_id,
+                trace,
+                require_citations=mode is AskMode.HYBRID,
+            )
         result, mapped = generation.result, generation.mapped
-        generated = time.perf_counter()
 
         # ``mapped.claims`` are the model's claims one to one (citations.py), except that an
         # ``insufficient_context`` answer has none: its claims are dropped, so nothing is scored.
@@ -159,13 +199,21 @@ class AskPipeline:
             )
             for claim, score in zip(mapped.claims, scores, strict=True)
         ]
+        min_confidence = min((c.confidence for c in claims), default=None)
+
+        trace.status = result.parsed.status
+        trace.citation_count = len(mapped.citations)
+        trace.min_claim_confidence = min_confidence
+        trace.latency_total_ms = timer.total_ms()  # frozen: the response and the row agree
+        shadow_cost = trace.shadow_cost(self._pricing)
+
         return AskResponse(
             status=result.parsed.status,
             answer_markdown=mapped.answer_markdown,
             claims=claims,
             citations=list(mapped.citations),
             follow_up_questions=result.parsed.follow_up_questions,
-            min_confidence=min((c.confidence for c in claims), default=None),
+            min_confidence=min_confidence,
             meta=Meta(
                 request_id=request_id,
                 provider=result.provider,
@@ -176,17 +224,9 @@ class AskPipeline:
                 prompt_version=prompt.version,
                 index_version=index_version,
                 retrieval_config_hash=config_hash,
-                latency_ms={
-                    "total": _ms(started, time.perf_counter()),
-                    "embed": _ms(started, embedded),  # embed and retrieval are 0 in no_rag: skipped
-                    "retrieval": _ms(embedded, retrieved),
-                    "llm": _ms(retrieved, generated),
-                },
-                tokens={
-                    "input": generation.usage.input_tokens,
-                    "output": generation.usage.output_tokens,
-                },
-                shadow_cost_usd=0.0,
+                latency_ms=trace.latency_ms(),  # embed and retrieval are 0 in no_rag: skipped
+                tokens={"input": trace.input_tokens or 0, "output": trace.output_tokens or 0},
+                shadow_cost_usd=float(shadow_cost),
             ),
         )
 
@@ -197,6 +237,7 @@ class AskPipeline:
         labels: Mapping[str, RetrievedChunk],
         titles: Mapping[int, str],
         request_id: UUID,
+        trace: RequestTrace,
         *,
         require_citations: bool,
     ) -> Generation:
@@ -212,33 +253,38 @@ class AskPipeline:
         ``require_citations=False`` (``no_rag``) turns the zero-valid-citations check off, so only a
         schema failure can cause the retry.
 
-        ``usage`` sums the attempts whose token counts we saw. An adapter that raises
-        ``ProviderBadOutput`` reports no usage, so a schema-invalid first attempt is not counted.
+        The trace gets the usage of every attempt whose token counts we saw (an adapter that raises
+        ``ProviderBadOutput`` reports none, so a schema-invalid attempt is not counted), the retry
+        count and the citation counts of the last attempt, so a request that fails here still logs
+        what it spent.
         """
-        spent = Usage(input_tokens=0, output_tokens=0)
-        retries = 0
         attempt_user = user
         while True:
             try:
                 result = await self._generate(prompt, attempt_user)
-                spent = _add(spent, result.usage)
+                trace.add_usage(result.usage)
                 mapped = map_citations(
                     result.parsed, labels, titles, require_citations=require_citations
                 )
+                trace.invalid_citation_count = mapped.invalid_citation_count
+                trace.dropped_claim_count = mapped.dropped_claim_count
                 if mapped.bad_output is not None:
                     raise ProviderBadOutput(
                         "the answer failed the citation checks",
                         raw=result.raw_text,
                         validation_error=mapped.bad_output,
                     )
-                return Generation(result, mapped, spent, retries)
+                return Generation(result, mapped)
             except ProviderBadOutput as exc:
-                if retries >= MAX_VALIDATION_RETRIES:
+                if trace.validation_retries >= MAX_VALIDATION_RETRIES:
                     raise
-                retries += 1
+                trace.validation_retries += 1
                 logger.info(
                     "model output invalid, retrying once",
-                    extra={"request_id": str(request_id), "validation_retries": retries},
+                    extra={
+                        "request_id": str(request_id),
+                        "validation_retries": trace.validation_retries,
+                    },
                 )
                 attempt_user = prompt.render_retry(user, error=exc.validation_error or str(exc))
 
@@ -261,15 +307,3 @@ class AskPipeline:
                 f"embedder {self._embedder.model}/{self._embedder.dim} does not match active "
                 f"index {index.label} ({index.embedding_model}/{index.embedding_dim})"
             )
-
-
-def _add(a: Usage, b: Usage) -> Usage:
-    return Usage(
-        input_tokens=a.input_tokens + b.input_tokens,
-        output_tokens=a.output_tokens + b.output_tokens,
-        thinking_tokens=a.thinking_tokens + b.thinking_tokens,
-    )
-
-
-def _ms(start: float, end: float) -> int:
-    return round((end - start) * 1000)

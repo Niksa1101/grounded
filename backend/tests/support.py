@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any
 
 import httpx
@@ -13,8 +15,10 @@ from pgvector import Vector
 
 from grounded.generation.providers.base import LLMProvider
 from grounded.generation.providers.fake import StubLLMProvider
+from grounded.infra.timing import Clock
 from grounded.ingest.embed import Embedder, FakeEmbedder
 from grounded.main import create_app
+from grounded.observability.cost import EmbeddingPrice, Pricing, load_pricing
 from grounded.settings import Settings
 
 EMBEDDING_DIM = 768
@@ -27,6 +31,14 @@ class NetworkBlockedError(RuntimeError):
 def make_settings(**overrides: Any) -> Settings:
     """Settings for tests: ignores any developer .env, but still honors real env vars (CI)."""
     return Settings(_env_file=None, **{"app_env": "test", **overrides})  # pyright: ignore[reportCallIssue]
+
+
+def pricing_for_fake_embedder() -> Pricing:
+    """The real ``pricing.toml`` plus a free ``fake-embedding`` row, for tests whose settings name
+    the fake embedder's model (the pipeline refuses to start with an unpriced embedding model)."""
+    real = load_pricing()
+    free = EmbeddingPrice(input_per_mtok=Decimal(0))
+    return real.model_copy(update={"embeddings": {**real.embeddings, "fake-embedding": free}})
 
 
 class FakeClock:
@@ -50,6 +62,7 @@ async def app_client(
     embedder: Embedder | None = None,
     provider: LLMProvider | None = None,
     raise_app_exceptions: bool = True,
+    clock: Clock = time.perf_counter,
 ) -> AsyncGenerator[httpx.AsyncClient]:
     """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client.
 
@@ -61,6 +74,7 @@ async def app_client(
         settings,
         embedder=embedder or FakeEmbedder(dim=settings.embedding_dim),
         provider=provider or StubLLMProvider(),
+        clock=clock,
     )
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
