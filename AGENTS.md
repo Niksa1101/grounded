@@ -158,6 +158,10 @@ uv run grounded ask "<question>" --fake
 ```
 
 ```bash
+uv run grounded ask "<question>"   # real Gemini: needs GEMINI_API_KEY and GEMINI_MODEL, uses quota
+```
+
+```bash
 uv run grounded ingest --dry-run
 ```
 

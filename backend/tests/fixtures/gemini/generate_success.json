@@ -1,0 +1,28 @@
+{
+ "_synthetic": true,
+ "_note": "SYNTHETIC: hand-built from the google-genai 2.25.0 response/error types and the google.rpc error model, NOT recorded from the API. Re-record with `uv run python tests/fixtures/gemini/record_generate_fixture.py` (see that script) and delete this field.",
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "text": "{\"status\": \"answered\", \"answer_markdown\": \"Declare a parameter of type `BackgroundTasks` and call `add_task()` on it; the task runs after the response is sent. [c1]\", \"claims\": [{\"text\": \"Background tasks run after the response has been sent.\", \"citation_ids\": [\"c1\"], \"self_confidence\": 0.9}], \"follow_up_questions\": [\"How do I run a task that needs a database session?\"]}"
+      }
+     ],
+     "role": "model"
+    },
+    "finish_reason": "STOP",
+    "index": 0
+   }
+  ],
+  "model_version": "gemini-3.5-flash-lite",
+  "response_id": "synthetic-0001",
+  "usage_metadata": {
+   "candidates_token_count": 210,
+   "prompt_token_count": 1234,
+   "thoughts_token_count": 40,
+   "total_token_count": 1484
+  }
+ }
+}

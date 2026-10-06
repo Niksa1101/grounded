@@ -22,6 +22,9 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 AppEnv = Literal["dev", "test", "prod", "eval"]
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 RerankProvider = Literal["none", "cohere"]
+# Gemini 3.x is controlled by a level, not a token budget (PRD D46, Tech §4). Which levels a model
+# accepts differs (3.7/3.8 reject "minimal"), so the model is checked by the API, not here.
+GeminiThinkingLevel = Literal["minimal", "low", "medium", "high"]
 
 # Matches infra/docker-compose.yml (DB.md §2). Convenient for local dev; prod must set its own.
 _LOCAL_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/grounded"
@@ -75,7 +78,7 @@ class Settings(BaseSettings):
     gemini_model: str | None = None
     groq_model: str | None = None
     judge_model: str | None = None
-    gemini_thinking_budget: int = Field(default=0, ge=0)
+    gemini_thinking_level: GeminiThinkingLevel = "minimal"
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_max_output_tokens: int = Field(default=800, gt=0)
     llm_timeout_s: float = Field(default=12.0, gt=0)  # each generation attempt (Tech.md §6)

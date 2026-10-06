@@ -66,10 +66,15 @@ def test_ask_prints_a_valid_response_with_the_fake_provider(settings: Settings) 
     assert body.answer_markdown.endswith("[1]")
 
 
-def test_ask_without_a_provider_adapter_fails_cleanly(settings: Settings) -> None:
+def test_ask_without_a_gemini_key_fails_cleanly(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Whatever the environment (a CI secret, a developer .env) says, this run has no key.
+    unset = settings.model_copy(update={"gemini_api_key": None, "gemini_model": None})
+    monkeypatch.setattr(grounded.cli, "get_settings", lambda: unset)
     result = runner.invoke(app, ["ask", "Where does the quokka sleep?"])
     assert result.exit_code == 1
-    assert "no adapter for provider 'gemini'" in result.output
+    assert "GEMINI_API_KEY must be set" in result.output
 
 
 def test_ask_rejects_a_question_that_is_too_short(settings: Settings) -> None:

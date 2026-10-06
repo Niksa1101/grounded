@@ -1,0 +1,14 @@
+{
+ "_synthetic": true,
+ "_note": "SYNTHETIC: hand-built from the google-genai 2.25.0 response/error types and the google.rpc error model, NOT recorded from the API. Re-record with `uv run python tests/fixtures/gemini/record_generate_fixture.py` (see that script) and delete this field.",
+ "status_code": 500,
+ "headers": {},
+ "body": {
+  "error": {
+   "code": 500,
+   "message": "An internal error has occurred. Please retry later.",
+   "status": "INTERNAL",
+   "details": []
+  }
+ }
+}

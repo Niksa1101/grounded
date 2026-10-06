@@ -159,7 +159,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [3.05](phase-3/3.05-ask-tracer.md) | Tracer bullet: `POST /v1/ask` end to end with the fake provider | Build | G | done | [#44](https://github.com/Niksa1101/grounded/pull/44) |
 | [3.06](phase-3/3.06-citations.md) | Citation validation, mapping and marker rewriting | Build | G | done | [#45](https://github.com/Niksa1101/grounded/pull/45) |
 | [3.07](phase-3/3.07-validation-retry.md) | Output validation with one retry and error feedback | Build | G | done | [#46](https://github.com/Niksa1101/grounded/pull/46) |
-| [3.08](phase-3/3.08-gemini-provider.md) | `GeminiProvider` adapter | Build | G | todo | |
+| [3.08](phase-3/3.08-gemini-provider.md) | `GeminiProvider` adapter | Build | G | done | [#47](https://github.com/Niksa1101/grounded/pull/47) |
 | [3.09](phase-3/3.09-confidence-spec.md) | Confidence heuristic — spec | Spec | G | todo | |
 | [3.10](phase-3/3.10-confidence.md) | Confidence heuristic — implementation and wiring | Author | A (+G wiring) | todo | |
 | [3.11](phase-3/3.11-refusal-no-rag.md) | Refusal handling and `no_rag` mode | Build | G | todo | |

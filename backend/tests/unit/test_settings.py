@@ -18,6 +18,16 @@ def test_defaults_match_tech_md() -> None:
     assert s.allow_direct_api is False
 
 
+def test_gemini_thinking_level_defaults_to_minimal_and_is_typed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    assert make_settings().gemini_thinking_level == "minimal"
+    assert make_settings(gemini_thinking_level="high").gemini_thinking_level == "high"
+    with pytest.raises(ValidationError):
+        make_settings(gemini_thinking_level="0")
+
+
 def test_pinned_corpus_and_embedding_defaults_match_tech_md(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
