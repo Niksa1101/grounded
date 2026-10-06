@@ -165,7 +165,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [3.11](phase-3/3.11-refusal-no-rag.md) | Refusal handling and `no_rag` mode | Build | G | done | [#50](https://github.com/Niksa1101/grounded/pull/50) |
 | [3.12](phase-3/3.12-request-logs.md) | Request logging, stage timing and shadow cost | Build | G (delegated) | done | [#51](https://github.com/Niksa1101/grounded/pull/51), [#52](https://github.com/Niksa1101/grounded/pull/52) |
 | [3.13](phase-3/3.13-answer-cache.md) | Answer cache (Postgres) | Build | G (delegated) | done | [#53](https://github.com/Niksa1101/grounded/pull/53) |
-| [3.14](phase-3/3.14-closeout.md) | Phase 3 closeout: the golden set through `/ask` | Closeout | A+G | todo | |
+| [3.14](phase-3/3.14-closeout.md) | Phase 3 closeout: the golden set through `/ask` | Closeout | A+G | in-progress: batch tool done; waiting for the Author's real-provider golden-set run | [#54](https://github.com/Niksa1101/grounded/pull/54) |
 | **4** | **[Generation eval + CI quality gate](phase-4/README.md)** | | | | |
 | [4.01](phase-4/4.01-decision-groq-promptfoo.md) | Decision: Groq and judge models, promptfoo version and test loading | Decision | D | todo | |
 | [4.02](phase-4/4.02-groq-provider.md) | `GroqProvider` adapter | Build | G | todo | |

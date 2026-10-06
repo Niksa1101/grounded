@@ -2,7 +2,7 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phases 0–2 done (foundations; ingestion, golden set, dense baseline; hybrid retrieval and the CI retrieval gate); Phase 3 (`/ask` with structured output) next.** Everything below describes the target system. Sections marked
+> 🚧 **Status: Phases 0–2 done (foundations; ingestion, golden set, dense baseline; hybrid retrieval and the CI retrieval gate); Phase 3 (`/ask` with structured output) is implemented and merged, but not closed: it waits for the Author's run of the golden set with the real Gemini provider (ticket 3.14).** Everything below describes the target system. Sections marked
 > _TBD_ are filled in only from committed eval results and real measurements, never by hand.
 
 | | |
@@ -229,7 +229,7 @@ npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 | 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | ✅ done |
 | 1 | Ingestion, golden set, dense baseline | ✅ done |
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ✅ done |
-| 3 | `/v1/ask` with structured output, citations, confidence | ⬜ |
+| 3 | `/v1/ask` with structured output, citations, confidence | 🟨 implemented; closeout pending the real-provider golden-set run ([3.14](tickets/phase-3/3.14-closeout.md)) |
 | 4 | promptfoo generation eval + CI quality gate | ⬜ |
 | 5 | UI, abuse protection, deployment. **MVP** | ⬜ |
 | 6 | Re-ranking with measured lift | ⬜ |

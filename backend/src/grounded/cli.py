@@ -22,6 +22,17 @@ import uvicorn
 from psycopg.conninfo import conninfo_to_dict
 from pydantic import ValidationError
 
+from grounded.evals.ask_batch import (
+    DEFAULT_POLICY,
+    QuestionResult,
+    RetryPolicy,
+    ask_results_path,
+    is_complete,
+    render_summary,
+    run_batch,
+    summarize,
+    write_ask_batch,
+)
 from grounded.evals.gate import evaluate_gate, exit_code, render_markdown
 from grounded.evals.golden import (
     GOLDEN_DIR,
@@ -80,10 +91,12 @@ from grounded.ingest.pipeline import (
 from grounded.ingest.pipeline import ingest as run_ingest
 from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
+from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalConfig, RetrievalMode
 from grounded.retrieval.index import NoActiveIndexError
 from grounded.runtime import ProviderConfigError, open_runtime
-from grounded.schemas.api import AskRequest
+from grounded.schemas.api import AskRequest, AskResponse
+from grounded.schemas.eval import GoldenItem
 from grounded.settings import Settings, get_settings
 
 app = typer.Typer(no_args_is_help=True, help="Grounded command-line tools.")
@@ -132,7 +145,10 @@ def serve(
 
 @app.command()
 def ask(
-    question: Annotated[str, typer.Argument(help="The question, 3 to 500 characters.")],
+    question: Annotated[
+        str | None,
+        typer.Argument(help="The question, 3 to 500 characters.", show_default=False),
+    ] = None,
     fake: Annotated[
         bool,
         typer.Option(help="Answer with the stub provider instead of a model (no generator key)."),
@@ -144,14 +160,64 @@ def ask(
             "no_rag: the model alone, no retrieval and no sources (the eval baseline; CLI only)."
         ),
     ] = AskMode.HYBRID,
+    golden: Annotated[
+        Path | None,
+        typer.Option(
+            help="Batch: ask every question of this golden-set file, one at a time, instead of "
+            "QUESTION. Prints a summary and writes the answers to --out.",
+            show_default=False,
+        ),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            help="Batch results file. Default: eval/results/<UTC timestamp>-ask.json (gitignored).",
+            show_default=False,
+        ),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option(min=1, help="Batch: only the first N questions (a cheap trial run)."),
+    ] = None,
+    max_rate_limit_retries: Annotated[
+        int, typer.Option(min=0, help="Batch: waits on a 429 per question before stopping.")
+    ] = DEFAULT_POLICY.max_rate_limit_retries,
+    max_wait_s: Annotated[
+        float,
+        typer.Option(help="Batch: a Retry-After longer than this stops the run (seconds)."),
+    ] = DEFAULT_POLICY.max_wait_s,
+    default_wait_s: Annotated[
+        float, typer.Option(help="Batch: wait when a 429 gives no Retry-After (seconds).")
+    ] = DEFAULT_POLICY.default_wait_s,
+    max_consecutive_failures: Annotated[
+        int,
+        typer.Option(min=1, help="Batch: provider-side failures in a row that stop the run."),
+    ] = DEFAULT_POLICY.max_consecutive_failures,
 ) -> None:
     """Ask one question through the same pipeline as POST /v1/ask and print the AskResponse JSON.
 
     In hybrid mode the question is still embedded for real, from the cache or with GEMINI_API_KEY.
     The no_rag mode embeds nothing and does not touch the database.
+
+    With --golden the whole golden set goes through the pipeline instead (Phase 3 closeout):
+    sequentially, honoring Retry-After, stopping on a daily quota. It prints question ids, never
+    question text.
     """
     settings = get_settings()
     configure_logging(settings.log_level)
+    if golden is not None:
+        if question is not None:
+            raise _fail("Give either QUESTION or --golden, not both.")
+        policy = RetryPolicy(
+            max_rate_limit_retries=max_rate_limit_retries,
+            default_wait_s=default_wait_s,
+            max_wait_s=max_wait_s,
+            max_consecutive_failures=max_consecutive_failures,
+        )
+        _ask_golden(settings, golden, out, limit=limit, fake=fake, mode=mode, policy=policy)
+        return
+    if question is None:
+        raise _fail("Give a QUESTION, or --golden <file> to ask the whole golden set.")
     try:
         request = AskRequest(question=question)
     except ValidationError as exc:
@@ -174,6 +240,72 @@ def ask(
         raise _fail(f"Provider failed ({type(exc).__name__}): {exc}") from exc
     except psycopg.Error as exc:
         raise _fail(f"Database error: {exc}") from exc
+
+
+def _ask_golden(
+    settings: Settings,
+    golden: Path,
+    out: Path | None,
+    *,
+    limit: int | None,
+    fake: bool,
+    mode: AskMode,
+    policy: RetryPolicy,
+) -> None:
+    """``grounded ask --golden``: see ``evals/ask_batch.py``. The golden file is only read."""
+    try:
+        version = golden_set_version(golden)
+        digest = golden_set_digest(golden)
+        items = load_golden_set(golden)
+    except (RetrievalEvalError, GoldenSetError, OSError) as exc:
+        raise _fail(f"Invalid golden set: {exc}") from exc
+    items = items[:limit]
+    now = datetime.now(UTC)
+    path = out or ask_results_path(now)
+    if path.resolve() == golden.resolve():
+        raise _fail("--out must not be the golden-set file.")
+
+    results: list[QuestionResult] = []
+
+    def record(result: QuestionResult) -> None:
+        results.append(result)
+        typer.echo(f"{result.id} {result.status if result.outcome == 'ok' else 'FAILED'}")
+
+    async def run() -> str | None:
+        async with open_runtime(settings, provider=StubLLMProvider() if fake else None) as runtime:
+
+            async def ask_one(item: GoldenItem, trace: RequestTrace) -> AskResponse:
+                return await runtime.pipeline.ask(
+                    item.question, trace.request_id, mode=mode, trace=trace
+                )
+
+            return await run_batch(items, ask_one, policy=policy, on_result=record)
+
+    typer.echo(f"Golden set {version}: {len(items)} questions, {mode.value} mode")
+    aborted: str | None = None
+    try:
+        aborted = _run_async(run())
+    except ProviderConfigError as exc:
+        raise _fail(str(exc)) from exc
+    finally:
+        # Also after Ctrl-C or an unexpected error: what was answered is not thrown away.
+        if results:
+            summary = summarize(results, total=len(items), aborted=aborted)
+            write_ask_batch(
+                path,
+                summary,
+                results,
+                started_at=now,
+                golden_set_version=version,
+                golden_set_sha256=digest,
+                mode=mode.value,
+                fake=fake,
+            )
+            typer.echo(f"Results: {path}")
+    summary = summarize(results, total=len(items), aborted=aborted)
+    typer.echo(render_summary(summary))
+    if not is_complete(summary):
+        raise typer.Exit(code=1)
 
 
 def _describe_target(conninfo: str) -> str:

@@ -109,7 +109,7 @@ The point is to show the mechanics.
 │   │   │   ├── citations.py       # validation, mapping, marker rewrite
 │   │   │   ├── confidence.py      # heuristic [A]
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
-│   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), golden.py, retrieval_runner.py, gate.py [A], report.py, judge.py
+│   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), golden.py, retrieval_runner.py, ask_batch.py, gate.py [A], report.py, judge.py
 │   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, gemini_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
 │   │   └── observability/         # request_log.py, cost.py
 │   └── tests/                     # unit/, integration/, conftest.py (fixtures), support.py (helpers), fixtures/
@@ -676,6 +676,12 @@ Fallback off · temperature 0 · answer cache off · rate limit and budget off �
 - `retrieval.json` today (`schemas/eval.py:RetrievalBaselineEntry`): per config `metrics`, `thresholds`, `n`, `k`, `golden_set_version`, `index_config_hash`, `retrieval_config_hash`, `fastapi_ref`/`fastapi_sha`, `embedding_model`/`embedding_dim`, `git_sha`, `git_dirty`, `golden_set_sha256`, `date`. `golden_set_sha256` and `git_dirty` are **required** (since 2.09): a row without them fails to load, and the gate exits 2. `retrieval_config_hash` is still optional (no gate rule uses it). `thresholds` (optional, default none) is the one hand-written part of a row: it maps a metric name (a key of `metrics`) to `{"tolerance": t}` with `t >= 0`. `--write-baseline` keeps a refreshed row's thresholds, and refuses a run without git state (`git_dirty` unknown). Adding thresholds to the committed file is a baseline PR.
 - Updated only by an explicit PR titled `eval: update baseline (<reason>)`, with the before/after table in the description.
 - Runs on `main` also insert into production `eval_runs` (owner connection via CI secret) for the dashboard.
+
+### 15.8 Golden set through `/ask` (Phase 3 closeout, `ask_batch.py`)
+`uv run grounded ask --golden <golden_set.vN.jsonl> [--out <file>] [--limit N] [--fake] [--mode hybrid|no_rag]` asks every golden question through the same `AskPipeline` as `POST /v1/ask`. It is CLI tooling for the closeout and for manual smoke runs, **not an eval**: no metric is computed, the summary is informational and never a baseline.
+- **Sequential, concurrency 1.** The pipeline never sleeps (§9.5, §10); the waiting lives in the CLI layer (`evals/ask_batch.py`). A per-minute 429 is waited out for exactly the advertised `Retry-After` (60 s if absent) and the same question is asked again, at most `--max-rate-limit-retries` times (default 3) per question. A daily quota, a `Retry-After` over `--max-wait-s` (default 120), a rejected request (bad key), a missing or mismatched index, a database error, or `--max-consecutive-failures` (default 3) provider-side failures in a row **stop the run**; what was answered so far is written and the reason is printed. A question whose answer fails validation twice is a recorded failure, not a stop.
+- **Output.** The summary on stdout (status counts, schema-valid count over the file's questions, validation retries, invalid citations removed, dropped claims, cache hits, rate-limit waits, shadow cost of the successful attempts, failures with reasons) and a JSON file, default `eval/results/<UTC timestamp>-ask.json` (gitignored), with the golden-set version and hash, the mode, `fake_provider`, the summary and one result per question, including its full `AskResponse`. "Schema-valid" means the response the pipeline built round-trips through `AskResponse`. Only question ids are printed or written, never the text (AGENTS.md §6.13). The golden file is read-only, and `--out` refuses to be it.
+- It does not write `request_logs` rows: it reads the pipeline's `RequestTrace` for the retry and citation counts instead. The answer cache stays on in `APP_ENV=dev`, so a re-run reports cache hits; use `APP_ENV=eval` to measure generation instead of the cache.
 
 ## 16. Testing strategy
 
