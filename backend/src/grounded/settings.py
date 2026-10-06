@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     gemini_thinking_budget: int = Field(default=0, ge=0)
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_max_output_tokens: int = Field(default=800, gt=0)
+    llm_timeout_s: float = Field(default=12.0, gt=0)  # each generation attempt (Tech.md §6)
 
     rerank_provider: RerankProvider = "none"
     rerank_model: str | None = None
@@ -93,8 +94,12 @@ class Settings(BaseSettings):
     k_dense: int = Field(default=20, gt=0)
     k_fts: int = Field(default=20, gt=0)
     k_fused: int = Field(default=40, gt=0)
-    k_context: int = Field(default=5, gt=0)
+    k_context: int = Field(default=5, gt=0, le=9)  # c1..c9: the citation grammar's limit
     rrf_k: int = Field(default=60, gt=0)
+    # Not part of RetrievalConfig: they change how fast the request path reacts, not what a query
+    # returns, so tuning them must not change retrieval_config_hash.
+    active_index_ttl_s: float = Field(default=300.0, gt=0)  # DB.md §7.3
+    query_embedding_cache_size: int = Field(default=256, gt=0)  # in-memory LRU, prod (Tech.md §11)
 
     # --- Protection ----------------------------------------------------------------------------
     rate_limit_per_min: int = Field(default=5, gt=0)

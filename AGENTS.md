@@ -154,6 +154,10 @@ uv run grounded serve --reload --port 8000
 ```
 
 ```bash
+uv run grounded ask "<question>" --fake
+```
+
+```bash
 uv run grounded ingest --dry-run
 ```
 

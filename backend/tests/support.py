@@ -11,6 +11,9 @@ import httpx
 import psycopg
 from pgvector import Vector
 
+from grounded.generation.providers.base import LLMProvider
+from grounded.generation.providers.fake import StubLLMProvider
+from grounded.ingest.embed import Embedder, FakeEmbedder
 from grounded.main import create_app
 from grounded.settings import Settings
 
@@ -27,11 +30,26 @@ def make_settings(**overrides: Any) -> Settings:
 
 
 @asynccontextmanager
-async def app_client(settings: Settings) -> AsyncGenerator[httpx.AsyncClient]:
-    """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client."""
-    app = create_app(settings)
+async def app_client(
+    settings: Settings,
+    *,
+    embedder: Embedder | None = None,
+    provider: LLMProvider | None = None,
+    raise_app_exceptions: bool = True,
+) -> AsyncGenerator[httpx.AsyncClient]:
+    """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client.
+
+    The embedder and provider default to fakes, so no test builds a real one. A real server turns an
+    unhandled error into a 500 response; pass ``raise_app_exceptions=False`` to see that here
+    instead of having the exception re-raised in the test.
+    """
+    app = create_app(
+        settings,
+        embedder=embedder or FakeEmbedder(dim=settings.embedding_dim),
+        provider=provider or StubLLMProvider(),
+    )
     async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
+        transport = httpx.ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             yield client
 
