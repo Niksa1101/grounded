@@ -302,7 +302,7 @@ sequenceDiagram
 ```
 
 Stage timeouts (defaults): embed 3 s · retrieval 2 s · rerank 3 s · each LLM attempt 12 s · overall deadline `REQUEST_DEADLINE_S` = 25 s.
-Every stage is wrapped in a `timing.stage("name")` context manager that fills the latency fields.
+Every stage is wrapped in `StageTimer.stage("name")` (`infra/timing.py`, §14) that fills the latency fields.
 
 ## 7. Retrieval
 
@@ -503,7 +503,7 @@ Requirements:
 | Rerank | SQLite `.cache/rerank.sqlite` | sha256(model \| query \| candidate hashes) | dev/CI/eval | persistent |
 | Eval LLM responses | SQLite `.cache/llm_eval.sqlite` | sha256(provider \| model \| temperature \| system \| user \| schema hash) | eval only | persistent |
 
-Question normalization: Unicode NFKC → lowercase → collapse whitespace → strip trailing punctuation.
+Question normalization: Unicode NFKC → lowercase → collapse whitespace → strip trailing sentence punctuation (`. , ; : ! ? … 。`, not every symbol: `C#` stays distinct from `C`). One function, `infra/hashing.py:normalize_question`, shared by the answer cache key and `request_logs.question_hash`.
 The eval LLM cache is keyed by the *full prompt*. Any prompt or context change misses the cache, so regressions are still detected, while identical cases are free and deterministic on re-runs.
 
 ## 12. Abuse protection and API security
@@ -550,7 +550,7 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
 
 - **Structured logs:** JSON lines via stdlib `logging` with a JSON formatter. Every line has `request_id`. Question text is never logged to stdout (only `question_hash`).
 - **Request log row:** one per `/v1/ask` (all outcomes), fields in DB.md §4 `request_logs`.
-- **Stage timing:** `timing.stage()` context manager on the monotonic clock. Totals include cache lookup and logging.
+- **Stage timing:** `infra/timing.py:StageTimer` on the monotonic clock (injected in tests). `stage("embed" | "retrieval" | "rerank" | "llm")` accumulates time, also when the block raises; a stage that never ran reports `None` (NULL in the row), not 0. `total_ms` counts from the timer's creation. Totals include cache lookup and logging, up to the moment the row is written (the insert cannot be inside the number it stores).
 - **Shadow cost:** `backend/pricing.toml`:
   ```toml
   as_of = "YYYY-MM-DD"          # date prices were checked
@@ -560,7 +560,7 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
   [embeddings."<embedding id>"] input_per_mtok = 0.0
   [rerank."<rerank id>"]        per_1k_searches = 0.0
   ```
-  `cost = in_tok/1e6·in_price + out_tok/1e6·out_price + embed_tok/1e6·embed_price + rerank_calls/1000·rerank_price`.
+  `cost = in_tok/1e6·in_price + out_tok/1e6·out_price + embed_tok/1e6·embed_price + rerank_calls/1000·rerank_price`, in `Decimal`, rounded half up to the 8 places of `shadow_cost_usd` (`observability/cost.py`, validated by Pydantic). A model that is missing from the file **or marked `unverified`** is a `PricingError` (`Pricing.require_generator` / `require_embedding`, called at pipeline construction in 3.12, so a startup error; decided in 3.12 because `meta.shadow_cost_usd` is a plain number). The `fake` provider is exempt (no billable call, true cost 0).
   Prices are **never typed from memory**. They are copied from the provider pricing page with the date. Thinking tokens count as output tokens.
   Two rules from the 3.01 decision. (1) A price that comes from somewhere other than today's pricing page (e.g. a launch announcement) carries its own `price_source` and `price_as_of` on the row. (2) A price that can't be verified at all is left out and marked `status = "unverified"`; the cost code reports it as unknown, never as `0`.
 - **Dashboard (Phase 8):** `/v1/metrics/summary` reads the DB views (DB.md §8) + latest `eval_runs` per config → Next.js `/metrics` (revalidate 60 s).
