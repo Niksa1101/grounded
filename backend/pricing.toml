@@ -1,0 +1,23 @@
+# List prices used for shadow cost (Tech.md §14, PRD D27). The demo itself runs on free tiers.
+# Prices are copied from the provider pricing pages, never typed from memory. USD per 1M tokens.
+# Free-tier prices are 0, so these are the PAID-tier list prices, i.e. "what this traffic would cost".
+as_of = "2026-10-06"  # the day the pages were read; the pricing page itself says "Last updated 2026-10-01"
+source = "https://ai.google.dev/gemini-api/docs/pricing, https://ai.google.dev/gemini-api/docs/deprecations"
+
+# Gemini API, Standard tier. "Output price (including thinking tokens)": thinking tokens are billed as output.
+# The page lists a later price that starts on 2027-01-01; the cost code picks the row by request date.
+[models."gemini-3.6-flash"]
+input_per_mtok = 0.75
+output_per_mtok = 3.75
+valid_until = "2026-12-31"
+
+[models."gemini-3.6-flash".next]
+valid_from = "2027-01-01"
+input_per_mtok = 1.50
+output_per_mtok = 7.50
+
+# The model Grounded embeds with. The pricing page lists only gemini-embedding-2 ($0.20 per 1M text
+# tokens), which is a different model, so no price is invented for this one. The cost code reports
+# the embedding part of shadow cost as unknown until the Author verifies a price and fills it in.
+[embeddings."gemini-embedding-001"]
+status = "unverified"

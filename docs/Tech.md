@@ -145,8 +145,8 @@ or with `ALLOW_DIRECT_API=true`.
 | `EMBEDDING_MAX_RETRIES`, `EMBEDDING_TIMEOUT_S` | `5`, `30.0` | per batch, on 429 / 5xx / timeout |
 | `EMBEDDING_MAX_RETRY_WAIT_S` | `60` | a server-given `Retry-After` above this stops the run instead of waiting (§5.6) |
 | `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list (eval: `gemini`) |
-| `GEMINI_MODEL`, `GROQ_MODEL`, `JUDGE_MODEL` | pinned IDs, verified at implementation time | no floating aliases |
-| `GEMINI_THINKING_BUDGET` | `0` (or minimal) | thinking adds latency and billed output tokens |
+| `GEMINI_MODEL`, `GROQ_MODEL`, `JUDGE_MODEL` | pinned IDs, verified at implementation time | no floating aliases. `GEMINI_MODEL` is `gemini-3.6-flash` (D46, verified 2026-10-06) |
+| `GEMINI_THINKING_BUDGET` → `GEMINI_THINKING_LEVEL` | `minimal` (D46) | thinking adds latency and billed output tokens. Gemini 3.x models are controlled by a level, not a token budget, and the docs don't say that budget `0` still turns thinking off. The setting is renamed in ticket 3.08 (it changes `Settings` and `.env.example`); until then the budget field is unused |
 | `LLM_TEMPERATURE` | `0` | same in prod and eval |
 | `LLM_MAX_OUTPUT_TOKENS` | `800` | answer length cap |
 | `RERANK_PROVIDER` | `none` \| `cohere` | feature flag |
@@ -542,6 +542,7 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
   ```
   `cost = in_tok/1e6·in_price + out_tok/1e6·out_price + embed_tok/1e6·embed_price + rerank_calls/1000·rerank_price`.
   Prices are **never typed from memory**. They are copied from the provider pricing page with the date. Thinking tokens count as output tokens.
+  Two additions from the 3.01 decision. (1) A model whose list price changes on a known date has a `valid_until` on its row and a `[models."<id>".next]` table with `valid_from` and the later price; the cost code (3.12) picks the row by the request date. (2) A price that can't be verified from the pricing page is left out and marked `status = "unverified"`; the cost code reports it as unknown, never as `0`.
 - **Dashboard (Phase 8):** `/v1/metrics/summary` reads the DB views (DB.md §8) + latest `eval_runs` per config → Next.js `/metrics` (revalidate 60 s).
 
 ## 15. Evaluation architecture
