@@ -369,8 +369,9 @@ RETURNING du.llm_calls;
 Token totals are added after the call with a plain `UPDATE`. `rerank_calls` uses the same pattern with its own cap.
 
 ### 7.2 Answer cache
-- Read: `SELECT response FROM answer_cache WHERE cache_key = %s AND expires_at > now()`. On hit: `UPDATE … SET hit_count = hit_count + 1, last_hit_at = now()`.
-- Write: `INSERT … ON CONFLICT (cache_key) DO NOTHING`.
+- Read: `SELECT response FROM answer_cache WHERE cache_key = %s AND expires_at > now()`. On hit: `UPDATE … SET hit_count = hit_count + 1, last_hit_at = now()`. The runtime does both as one statement, `UPDATE … WHERE cache_key = %s AND expires_at > now() RETURNING response`: one round trip, and the row cannot expire between the read and the update.
+- Write: `INSERT … ON CONFLICT (cache_key) DO NOTHING`, except that an **expired** row is replaced (`DO UPDATE … WHERE answer_cache.expires_at <= now()`, resetting `hit_count`, `created_at`, `last_hit_at` and `expires_at`). Expired rows stay until the retention job deletes them, and a plain `DO NOTHING` would leave their question uncacheable until then. A live row is never overwritten.
+- The `cache_key` column comment above lists five parts; the key also includes a sixth, the hash of the confidence config (Tech.md §11). It changes only the hash input, not the column, so no migration is needed.
 - Only schema-valid responses with outcome `answered | partial | insufficient_context` are cached. Errors are never cached.
 - The cache is disabled in eval mode.
 

@@ -497,13 +497,22 @@ Requirements:
 
 | Cache | Store | Key | Used in | TTL |
 |---|---|---|---|---|
-| Answer cache | Postgres `answer_cache` | sha256(normalized question \| prompt_version \| index_version_id \| retrieval_config_hash \| generator_model) | prod/dev (off in eval) | 30 days |
+| Answer cache | Postgres `answer_cache` | sha256(normalized question \| prompt_version \| index_version_id \| retrieval_config_hash \| generator_model \| confidence_config_hash) | prod/dev (off in eval and in `no_rag`) | `ANSWER_CACHE_TTL_DAYS` (≤ 30 days) |
 | Query embedding | in-memory LRU (prod), SQLite (dev/CI/eval) | (model, dim, RETRIEVAL_QUERY, sha256(question)) | all | process lifetime / persistent |
 | Chunk embedding | SQLite `.cache/embeddings.sqlite` | (model, dim, RETRIEVAL_DOCUMENT, content_hash) | ingest | persistent |
 | Rerank | SQLite `.cache/rerank.sqlite` | sha256(model \| query \| candidate hashes) | dev/CI/eval | persistent |
 | Eval LLM responses | SQLite `.cache/llm_eval.sqlite` | sha256(provider \| model \| temperature \| system \| user \| schema hash) | eval only | persistent |
 
 Question normalization: Unicode NFKC → lowercase → collapse whitespace → strip trailing sentence punctuation (`. , ; : ! ? … 。`, not every symbol: `C#` stays distinct from `C`). One function, `infra/hashing.py:normalize_question`, shared by the answer cache key and `request_logs.question_hash`.
+
+Answer cache details (`infra/answer_cache.py`, 3.13):
+- The stored `response` is the `AskResponse` **without `meta`**. On a hit the pipeline rebuilds `meta`: a new `request_id`, `cache_hit=true`, the real latency of the hit, zero tokens and zero shadow cost.
+- `confidence_config_hash` is a hash of the `CONFIDENCE_*` weights and the uncited cap (`ConfidenceConfig`). The stored answer carries server-computed confidence, so changing a weight must miss instead of serving stale numbers for up to 30 days. It is the sixth part of the key and has no column of its own (the key is the primary key). The parts are hashed as a JSON array, so a `|` in a question cannot shift a field.
+- The lookup comes right after the active index is known and before the embedding, so a hit costs no embedding, retrieval or LLM call, and the budget reservation (5.05) must come after it: a hit never consumes budget. The lookup is skipped when `APP_ENV=eval` and in `no_rag` mode, which neither read nor write the cache.
+- Only a built, valid response is stored (`answered`, `partial`, `insufficient_context`); every failure raises first, so errors are never cached. A database error on the cache is a logged miss or a skipped write, never a failed request.
+- `expires_at = created_at + ANSWER_CACHE_TTL_DAYS`, and `Settings` and the store both cap it at 30 days (question retention).
+- Not in the key: `LLM_TEMPERATURE` and `LLM_MAX_OUTPUT_TOKENS`. They change sampling, not what the question means, and the prompt, index, retrieval and model already do. Changing either does not invalidate stored answers.
+
 The eval LLM cache is keyed by the *full prompt*. Any prompt or context change misses the cache, so regressions are still detected, while identical cases are free and deterministic on re-runs.
 
 ## 12. Abuse protection and API security

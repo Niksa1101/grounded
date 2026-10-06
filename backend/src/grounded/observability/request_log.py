@@ -97,6 +97,7 @@ class RequestTrace:
     input_tokens: int | None = None  # None until a generation attempt reported usage
     output_tokens: int | None = None
     validation_retries: int = 0
+    cache_hit: bool = False  # answered from the answer cache (3.13): no embedding, no LLM call
     citation_count: int | None = None
     invalid_citation_count: int | None = None
     dropped_claim_count: int | None = None
@@ -223,7 +224,7 @@ class RequestLogger:
             "question_hash": trace.digest(),
             "http_status": http_status,
             "outcome": outcome,
-            "cache_hit": False,  # 3.13
+            "cache_hit": trace.cache_hit,
             "provider": trace.provider,
             "model": trace.model,
             "fallback_used": False,  # Phase 7
