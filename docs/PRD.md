@@ -5,9 +5,9 @@
 
 | | |
 |---|---|
-| Status | Phases 0–1 done; Phase 2 (Hybrid retrieval) next |
+| Status | Phases 0–2 done; Phase 3 (`/ask` with structured output) next |
 | Owner / Author | probniprobic4@gmail.com |
-| Last updated | 2026-10-01 |
+| Last updated | 2026-10-06 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
 
 ---

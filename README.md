@@ -2,7 +2,7 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phases 0–1 done (foundations; ingestion, golden set, dense baseline); Phase 2 (hybrid retrieval) next.** Everything below describes the target system. Sections marked
+> 🚧 **Status: Phases 0–2 done (foundations; ingestion, golden set, dense baseline; hybrid retrieval and the CI retrieval gate); Phase 3 (`/ask` with structured output) next.** Everything below describes the target system. Sections marked
 > _TBD_ are filled in only from committed eval results and real measurements, never by hand.
 
 | | |
@@ -106,7 +106,12 @@ n = 25, so differences under one question (0.04) are not claims either way.
 - **PRs labeled `run-eval` and `main`:** full promptfoo generation eval, a PR comment with a diff table, and a blocking gate.
 - Runs dominated by free-tier quota errors are reported as **inconclusive**, not as failures.
 
-_Screenshot of a blocked PR: TBD (Phase 2 / Phase 4)._
+A deliberately broken fusion (the dense term dropped from the RRF score) blocked by the retrieval gate
+([run](https://github.com/Niksa1101/grounded/actions/runs/37453667731), closed PR
+[#37](https://github.com/Niksa1101/grounded/pull/37)): hybrid Recall@5 0.74 → 0.58, MRR 0.66 → 0.44, nDCG@5 0.66 → 0.47,
+n = 25.
+
+![The retrieval-eval job fails on a PR that breaks fusion](docs/images/gate-blocked-pr.png)
 
 ## Cost and latency
 
@@ -198,7 +203,7 @@ npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 |---|---|---|
 | 0 | Foundations: monorepo, tooling, DB schema, CI skeleton | ✅ done |
 | 1 | Ingestion, golden set, dense baseline | ✅ done |
-| 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ⬜ |
+| 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ✅ done |
 | 3 | `/v1/ask` with structured output, citations, confidence | ⬜ |
 | 4 | promptfoo generation eval + CI quality gate | ⬜ |
 | 5 | UI, abuse protection, deployment. **MVP** | ⬜ |
