@@ -104,6 +104,19 @@ class Settings(BaseSettings):
     active_index_ttl_s: float = Field(default=300.0, gt=0)  # DB.md §7.3
     query_embedding_cache_size: int = Field(default=256, gt=0)  # in-memory LRU, prod (Tech.md §11)
 
+    # --- Confidence (generation/confidence.py, Tech §9.8; the Author may rename them in 3.10) ----
+    # Relative importance of each signal. The defaults sum to 1.0 so they read as shares; whether
+    # they are normalised is the heuristic's business. ``w_rerank`` is 0 until Phase 6 measures
+    # whether rerank scores help (it is also moot whenever rerank is off).
+    confidence_w_retrieval: float = Field(default=0.40, ge=0.0, le=1.0)
+    confidence_w_agreement: float = Field(default=0.25, ge=0.0, le=1.0)
+    confidence_w_citations: float = Field(default=0.20, ge=0.0, le=1.0)
+    confidence_w_self: float = Field(default=0.15, ge=0.0, le=0.6)  # self-report: Tech §9.8 ceiling
+    confidence_w_rerank: float = Field(default=0.0, ge=0.0, le=1.0)
+    # The most a claim with no valid citation can score. Tech §9.8 fixes 0.2 as the ceiling, so a
+    # config can lower the cap but never raise it past the documented invariant.
+    confidence_uncited_cap: float = Field(default=0.2, ge=0.0, le=0.2)
+
     # --- Protection ----------------------------------------------------------------------------
     rate_limit_per_min: int = Field(default=5, gt=0)
     rate_limit_per_day: int = Field(default=30, gt=0)

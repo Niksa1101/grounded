@@ -157,6 +157,8 @@ or with `ALLOW_DIRECT_API=true`.
 | `TOKENIZER_ENCODING` | `o200k_base` | tiktoken encoding for chunk sizing (approximate counts) |
 | `K_DENSE`, `K_FTS`, `K_FUSED`, `K_CONTEXT`, `RRF_K` | `20`, `20`, `40`, `5`, `60` | retrieval config; `K_CONTEXT` ≤ 9 (the labels `c1..c9`) |
 | `ACTIVE_INDEX_TTL_S` | `300.0` | how long the request path caches the active index version (DB.md §7.3); not part of `RetrievalConfig` |
+| `CONFIDENCE_W_RETRIEVAL`, `CONFIDENCE_W_AGREEMENT`, `CONFIDENCE_W_CITATIONS`, `CONFIDENCE_W_SELF`, `CONFIDENCE_W_RERANK` | `0.40`, `0.25`, `0.20`, `0.15`, `0.0` | relative weights of the confidence signals (§9.8), each in `[0, 1]`; `W_SELF` at most `0.6`; `W_RERANK` stays `0` until Phase 6 measures the rerank lift. Proposed in 3.09, the Author may rename them in 3.10 |
+| `CONFIDENCE_UNCITED_CAP` | `0.2` | most a claim without a valid citation can score; at most `0.2` (§9.8 invariant) |
 | `QUERY_EMBEDDING_CACHE_SIZE` | `256` | prod only: size of the in-memory LRU of question vectors (§11); dev/CI/eval use SQLite |
 | `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `30` | per IP hash |
 | `DAILY_LLM_BUDGET` | below provider free RPD | global cap; optional until Phase 5 |
@@ -457,13 +459,14 @@ class AskResponse(BaseModel):
 - There is no retrieval-score threshold short-circuit in MVP. It is a possible later optimization, and eval data will show whether it helps.
 
 ### 9.8 Confidence heuristic [A]
-Contract for `score_claims(claims, label_map, retrieved) -> list[ClaimScore]`:
-- Output per claim: `confidence ∈ [0,1]` plus `components: dict[str, float]` (returned in the API for transparency).
+Contract for `score_claims(claims, label_map, retrieved, *, config) -> list[ClaimScore]` (`generation/confidence.py`; the full contract is the module docstring, the spec tests are `tests/unit/test_confidence.py`):
+- Inputs: the model's `LLMClaim`s (labels and `self_confidence`), this request's label map (`BuiltContext.labels`), the fused list as `hybrid_search` returned it (every labelled chunk is in it) and a frozen `ConfidenceConfig` built from `Settings` (`ConfidenceConfig.from_settings`), so the function stays pure. A *valid* citation is a label of the claim that is in the label map; repeated labels count once; unknown labels are ignored here (they are counted in §9.6).
+- Output: one `ClaimScore(confidence, components)` per claim, same order; `confidence ∈ [0,1]`. `components` (returned in the API for transparency) always has the keys `retrieval`, `agreement`, `citations`, `self_confidence`, `rerank` (`COMPONENT_KEYS`), each a finite float in `[0,1]` (`rerank` is `0.0` when rerank is off). How they combine is the Author's decision (3.10).
 - Available signals: rerank relevance score of cited chunks (when rerank on), RRF score and ranks (dense/FTS agreement), number of valid citations, LLM `self_confidence`, and optionally lexical overlap between claim and cited chunk text.
-- Invariants: deterministic; monotonic non-decreasing in retrieval support; **a claim with no valid citation is capped at 0.2**; `self_confidence` alone can't push a claim above 0.6 (weight it low, since self-reports are poorly calibrated).
+- Invariants: deterministic and pure; monotonic non-decreasing in retrieval support (a better rank, both lists instead of one, a higher RRF score or lexical score, a smaller dense distance, a higher rerank score, and one more distinct valid citation **even to a weaker chunk**, so a plain average over the cited chunks is not allowed); **a claim with no valid citation is capped at 0.2** (`CONFIDENCE_UNCITED_CAP`, never above 0.2); `self_confidence` alone can't push a claim above 0.6 (weight it low, since self-reports are poorly calibrated; `CONFIDENCE_W_SELF` is bounded by 0.6); `rerank_score is None` is a normal input.
 - Weights live in settings (not magic numbers), documented in the README.
 - Calibration (Phase 8): bucket claims (low < 0.5, mid 0.5–0.8, high > 0.8) and compare with the judge's "supported" rate per bucket. A useful heuristic is monotonic across buckets. Report the table even if it isn't.
-- `min_confidence` (answer level) = min over claims. The UI flags claims below 0.5.
+- `min_confidence` (answer level) = min over claims (`None` without claims). The UI flags claims below 0.5.
 
 ## 10. Provider router, fallback and circuit breaker [A]
 
