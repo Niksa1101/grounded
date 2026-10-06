@@ -29,11 +29,16 @@ class ProviderTimeout(ProviderError):
 
 
 class ProviderBadOutput(ProviderError):
-    """The provider answered, but the answer is unusable (wrong shape, dimension, count)."""
+    """The provider answered, but the answer is unusable (wrong shape, dimension, count).
 
-    def __init__(self, message: str, *, raw: str = "") -> None:
+    ``validation_error`` is the Pydantic message for an LLM answer that failed its schema. The retry
+    (Tech §9.5) quotes it back to the model, so it is kept apart from the short ``message``.
+    """
+
+    def __init__(self, message: str, *, raw: str = "", validation_error: str = "") -> None:
         super().__init__(message)
         self.raw = raw
+        self.validation_error = validation_error
 
 
 class ProviderRequestRejected(ProviderError):
