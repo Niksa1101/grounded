@@ -7,9 +7,11 @@ import pytest
 from grounded.generation.prompts import (
     ANSWER_PLACEHOLDERS,
     ANSWER_RETRY_PLACEHOLDERS,
+    NO_RAG_PLACEHOLDERS,
     PromptLoadError,
     PromptRenderError,
     load_answer_prompt,
+    load_no_rag_prompt,
     load_prompt,
     parse_prompt,
     prompt_version,
@@ -260,3 +262,24 @@ def test_the_answer_prompt_states_every_rule_and_the_marker_grammar() -> None:
         "fenced code block",
     ):
         assert needle in system
+
+
+def test_the_committed_no_rag_prompt_loads_without_sources() -> None:
+    prompt = load_no_rag_prompt()
+    assert prompt.name == "answer_no_rag_v1"
+    assert prompt.version.startswith("answer_no_rag_v1@")
+    assert prompt.placeholders == NO_RAG_PLACEHOLDERS == frozenset({"question"})
+    assert prompt.retry_placeholders == ANSWER_RETRY_PLACEHOLDERS
+    assert prompt.version != load_answer_prompt().version
+    rendered = prompt.render_user(question="How do I run a background task?")
+    assert "How do I run a background task?" in rendered
+    assert "source" not in rendered.lower()
+    # Same family: the same schema vocabulary and the same retry sentence as answer_v1.
+    assert "insufficient_context" in prompt.system
+    assert prompt.retry_template == load_answer_prompt().retry_template
+
+
+def test_the_no_rag_prompt_asks_for_no_citation_markers() -> None:
+    system = load_no_rag_prompt().system
+    assert "no citation markers" in system.lower()
+    assert "{{" not in system

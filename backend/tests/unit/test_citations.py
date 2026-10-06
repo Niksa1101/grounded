@@ -294,3 +294,54 @@ def test_an_unbroken_run_longer_than_the_limit_is_hard_cut() -> None:
 def test_a_snippet_prefers_a_newline_boundary_too() -> None:
     content = "line one\n" + "y" * (SNIPPET_CHARS)
     assert make_snippet(content) == "line one"
+
+
+# --- refusal is citation-free; no_rag has nothing to cite (3.11) ------------------------------
+
+
+def test_a_refusal_has_no_markers_and_no_citations_and_counts_only_the_invalid_ones() -> None:
+    # c1 is a real source, c9 is not: both markers go, but only c9 is an error of the model's.
+    result = mapped(
+        "The docs do not cover this. [c1] Not at all. [c9][c2, c3]",
+        claim("A", "c1"),
+        status="insufficient_context",
+    )
+    assert result.answer_markdown == "The docs do not cover this.  Not at all. "
+    assert result.citations == ()
+    assert result.claims == ()
+    assert result.dropped_claim_count == 1
+    assert result.invalid_citation_count == 2  # [c9] and the multi-label pair
+    assert result.bad_output is None
+
+
+def test_markers_in_fenced_code_of_a_refusal_are_still_left_alone() -> None:
+    result = mapped("No.\n```\nx = [c1]\n```\n", status="insufficient_context")
+    assert result.answer_markdown == "No.\n```\nx = [c1]\n```\n"
+    assert result.citations == ()
+
+
+def test_without_required_citations_an_uncited_answer_passes() -> None:
+    result = map_citations(
+        answer("Quokkas sleep.", claim("Quokkas sleep.")), {}, {}, require_citations=False
+    )
+    assert result.bad_output is None
+    assert result.citations == ()
+    assert [c.citations for c in result.claims] == [()]
+
+
+def test_without_required_citations_stray_markers_are_removed_and_counted() -> None:
+    result = map_citations(
+        answer("Quokkas sleep. [c1]", claim("Quokkas sleep.", "c1")),
+        {},
+        {},
+        require_citations=False,
+    )
+    assert result.bad_output is None
+    assert result.answer_markdown == "Quokkas sleep. "
+    assert result.citations == ()
+    assert [c.citations for c in result.claims] == [()]
+    assert result.invalid_citation_count == 2  # the marker and the claim's label
+
+
+def test_citations_are_required_by_default() -> None:
+    assert map_citations(answer("No markers."), {}, {}).bad_output is not None

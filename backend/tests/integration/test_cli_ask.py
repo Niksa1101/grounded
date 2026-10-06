@@ -81,3 +81,30 @@ def test_ask_rejects_a_question_that_is_too_short(settings: Settings) -> None:
     result = runner.invoke(app, ["ask", "hi", "--fake"])
     assert result.exit_code == 1
     assert "Invalid question" in result.output
+
+
+def test_ask_no_rag_needs_no_embedding_and_cites_nothing(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no_rag must not build an embedder")
+
+    monkeypatch.setattr(grounded.retrieval.query_embedding, "GeminiEmbedder", fail)
+    result = runner.invoke(
+        app, ["ask", "Where does the quokka sleep?", "--fake", "--mode", "no_rag"]
+    )
+    assert result.exit_code == 0, result.output
+    body = AskResponse.model_validate(json.loads(result.stdout))
+    assert body.status == "answered"
+    assert body.citations == []
+    assert all(claim.citations == [] for claim in body.claims)
+    assert body.meta.prompt_version.startswith("answer_no_rag_v1@")
+    assert body.meta.index_version == "none"
+    assert "[c1]" not in body.answer_markdown
+
+
+def test_ask_rejects_an_unknown_mode(settings: Settings) -> None:
+    result = runner.invoke(
+        app, ["ask", "Where does the quokka sleep?", "--fake", "--mode", "dense"]
+    )
+    assert result.exit_code != 0

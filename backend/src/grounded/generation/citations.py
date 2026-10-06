@@ -32,8 +32,15 @@ counts twice). Labels of claims that are dropped as a whole (below) are not coun
 - ``answered`` / ``partial`` with zero valid citations is bad output: ``MappedAnswer.bad_output``
   holds a reason written to be quoted back to the model.
 - ``insufficient_context`` must have no claims: they are dropped and counted
-  (``dropped_claim_count``). Markers in its text are mapped like any other; keeping a refusal free
-  of citations is the refusal ticket's concern (3.11).
+  (``dropped_claim_count``).
+- ``require_citations=False`` (the ``no_rag`` mode, 3.11) turns the zero-valid-citations check off:
+  there are no sources, so ``labels`` is empty and nothing can be cited. Markers the model writes
+  anyway are removed and counted as invalid, as for any label that is not in ``labels``.
+
+**A refusal is citation-free** (Tech §9.7, 3.11). In an ``insufficient_context`` answer every marker
+is removed from the text, whether its label is valid or not, and the answer has no ``citations``.
+Only the markers with an invalid label are counted in ``invalid_citation_count``; a valid label
+there is not an error of the model's, it just has no place in a refusal.
 
 Snippets are the first ``SNIPPET_CHARS`` characters of the chunk, cut back to a word boundary
 (see ``make_snippet``).
@@ -75,12 +82,18 @@ class MappedAnswer:
 
 
 def map_citations(
-    answer: LLMAnswer, labels: Mapping[str, RetrievedChunk], titles: Mapping[int, str]
+    answer: LLMAnswer,
+    labels: Mapping[str, RetrievedChunk],
+    titles: Mapping[int, str],
+    *,
+    require_citations: bool = True,
 ) -> MappedAnswer:
     """Validate the labels of ``answer`` against this request's ``labels`` and build the citations.
 
     ``titles`` maps ``chunk_id`` to the page title for every chunk behind ``labels``.
+    ``require_citations=False`` skips the zero-valid-citations check (``no_rag``, see above).
     """
+    refusal = answer.status == "insufficient_context"
     numbers: dict[str, int] = {}  # label -> display number, in order of first use
     invalid = 0
 
@@ -93,13 +106,15 @@ def map_citations(
         if label is None or label not in labels:
             invalid += 1
             return ""
+        if refusal:
+            return ""  # a valid label, but a refusal cites nothing
         return f"[{number(label)}]"
 
     markdown = rewrite_markers(answer.answer_markdown, rewrite)
 
     claims: list[MappedClaim] = []
     dropped = 0
-    if answer.status == "insufficient_context":
+    if refusal:
         dropped = len(answer.claims)
     else:
         for claim in answer.claims:
@@ -113,7 +128,7 @@ def map_citations(
 
     citations = tuple(_citation(n, labels[label], titles) for label, n in numbers.items())
     bad_output = None
-    if answer.status != "insufficient_context" and not citations:
+    if require_citations and not refusal and not citations:
         bad_output = (
             f"the status is '{answer.status}' but the answer cites no valid source label; "
             "cite the sources you used with markers such as [c1], using only the labels given"

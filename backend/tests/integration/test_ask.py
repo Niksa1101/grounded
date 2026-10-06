@@ -372,3 +372,49 @@ async def test_a_rate_limit_on_the_retry_is_a_503_with_retry_after(
     assert response.status_code == 503
     assert response.headers["Retry-After"] == "3"
     assert len(provider.calls) == 2
+
+
+# --- refusal (3.11, Tech §9.7) ------------------------------------------------------------------
+
+
+async def test_a_refusal_is_citation_free_keeps_its_follow_ups_and_is_not_retried(
+    test_database_url: str, index: Index
+) -> None:
+    # A refusal that nevertheless carries a valid marker (c1), an unknown one (c9) and a claim.
+    provider = FakeLLMProvider(
+        [
+            LLMAnswer(
+                status="insufficient_context",
+                answer_markdown="The documentation does not cover Django. [c1][c9]",
+                claims=[claim("Django is covered.", "c1")],
+                follow_up_questions=["How do I add middleware in FastAPI?"],
+            ),
+            good_answer(),
+        ]
+    )
+    response = await ask(test_database_url, provider)
+
+    assert response.status_code == 200
+    body = AskResponse.model_validate(response.json())
+    assert body.status == "insufficient_context"
+    assert body.answer_markdown == "The documentation does not cover Django. "
+    assert (body.claims, body.citations, body.min_confidence) == ([], [], None)
+    assert body.follow_up_questions == ["How do I add middleware in FastAPI?"]
+    assert len(provider.calls) == 1  # a refusal with no citation is not bad output
+    assert provider.remaining == 1
+
+
+async def test_the_http_api_has_no_no_rag_mode(test_database_url: str, index: Index) -> None:
+    provider = FakeLLMProvider([good_answer()])
+    async with app_client(
+        make_settings(database_url=test_database_url),
+        embedder=FakeEmbedder(dim=EMBEDDING_DIM),
+        provider=provider,
+    ) as client:
+        response = await client.post("/v1/ask", json={"question": QUESTION, "mode": "no_rag"})
+
+    assert response.status_code == 200
+    body = AskResponse.model_validate(response.json())
+    assert body.meta.prompt_version.startswith("answer_v1@")  # still the retrieval prompt
+    [call] = provider.calls
+    assert "<source" in call.user

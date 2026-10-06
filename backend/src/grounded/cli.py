@@ -50,6 +50,7 @@ from grounded.evals.retrieval_runner import (
     update_baseline,
     write_run,
 )
+from grounded.generation.pipeline import AskMode
 from grounded.generation.providers.fake import StubLLMProvider
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
@@ -136,10 +137,18 @@ def ask(
         bool,
         typer.Option(help="Answer with the stub provider instead of a model (no generator key)."),
     ] = False,
+    mode: Annotated[
+        AskMode,
+        typer.Option(
+            help="hybrid: retrieve, then answer from the sources (the API's behavior). "
+            "no_rag: the model alone, no retrieval and no sources (the eval baseline; CLI only)."
+        ),
+    ] = AskMode.HYBRID,
 ) -> None:
     """Ask one question through the same pipeline as POST /v1/ask and print the AskResponse JSON.
 
-    The question is still embedded for real, from the cache or with GEMINI_API_KEY.
+    In hybrid mode the question is still embedded for real, from the cache or with GEMINI_API_KEY.
+    The no_rag mode embeds nothing and does not touch the database.
     """
     settings = get_settings()
     configure_logging(settings.log_level)
@@ -150,7 +159,7 @@ def ask(
 
     async def run() -> str:
         async with open_runtime(settings, provider=StubLLMProvider() if fake else None) as runtime:
-            response = await runtime.pipeline.ask(request.question, uuid4())
+            response = await runtime.pipeline.ask(request.question, uuid4(), mode=mode)
         return json.dumps(response.model_dump(mode="json"), indent=2)  # ASCII-escaped: any console
 
     try:

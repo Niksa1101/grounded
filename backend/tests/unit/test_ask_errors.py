@@ -28,7 +28,9 @@ async def test_question_length_is_a_422_bad_request(question: str) -> None:
     body = response.json()
     assert_error(body, "bad_request")
     assert body["error"]["message"].startswith("Invalid request. question: ")
-    assert question not in response.text  # the rejected input is not echoed back
+    # The rejected input is not echoed back. The random request_id is left out of the search: a
+    # UUID can contain a short question such as "ab" by chance.
+    assert question not in response.text.replace(body["request_id"], "")
 
 
 async def test_missing_question_is_a_422_bad_request() -> None:
