@@ -16,8 +16,11 @@ valid_from = "2027-01-01"
 input_per_mtok = 1.50
 output_per_mtok = 7.50
 
-# The model Grounded embeds with. The pricing page lists only gemini-embedding-2 ($0.20 per 1M text
-# tokens), which is a different model, so no price is invented for this one. The cost code reports
-# the embedding part of shadow cost as unknown until the Author verifies a price and fills it in.
+# The model Grounded embeds with. The current pricing page lists only gemini-embedding-2 ($0.20 per 1M
+# text tokens), a different model. The 0.15 below is the price Google announced when this model became
+# generally available (developers.googleblog.com, 2025-07-14: "priced at $0.15 per 1M input tokens"),
+# so it is a dated announcement, not a row of today's pricing page. Re-check it if the page lists it again.
 [embeddings."gemini-embedding-001"]
-status = "unverified"
+input_per_mtok = 0.15
+price_source = "https://developers.googleblog.com/gemini-embedding-available-gemini-api/"
+price_as_of = "2025-07-14"  # date of the announcement; not confirmed on the pricing page on 2026-10-06
