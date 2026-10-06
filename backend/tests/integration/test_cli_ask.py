@@ -12,12 +12,18 @@ from typer.testing import CliRunner
 
 import grounded.cli
 import grounded.retrieval.query_embedding
+import grounded.runtime
 from grounded.cli import app
 from grounded.ingest.embed import FakeEmbedder, TokenCounter
 from grounded.schemas.api import AskResponse
 from grounded.settings import Settings
 from tests.hybrid_corpus import CORPUS, insert_page
-from tests.support import EMBEDDING_DIM, insert_index_version, make_settings
+from tests.support import (
+    EMBEDDING_DIM,
+    insert_index_version,
+    make_settings,
+    pricing_for_fake_embedder,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -52,6 +58,7 @@ def settings(
     )
     monkeypatch.setattr(grounded.cli, "get_settings", lambda: settings)
     monkeypatch.setattr(grounded.retrieval.query_embedding, "GeminiEmbedder", StubGemini)
+    monkeypatch.setattr(grounded.runtime, "load_pricing", pricing_for_fake_embedder)
     yield settings
     wipe()
 

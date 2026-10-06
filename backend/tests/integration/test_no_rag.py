@@ -20,7 +20,9 @@ from grounded.generation.pipeline import (
 )
 from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.infra.provider_errors import ProviderBadOutput
+from grounded.infra.timing import StageTimer
 from grounded.ingest.embed import FakeEmbedder
+from grounded.observability.request_log import RequestTrace
 from grounded.runtime import open_runtime
 from grounded.schemas.api import AskResponse
 from grounded.schemas.llm import LLMAnswer, LLMClaim
@@ -79,6 +81,28 @@ async def test_no_rag_makes_no_embedding_and_no_retrieval_call(test_database_url
     )
     assert (meta.latency_ms["embed"], meta.latency_ms["retrieval"]) == (0, 0)
     assert meta.rerank_used is False
+
+
+async def test_no_rag_leaves_the_trace_without_an_index_or_an_embedding(
+    test_database_url: str,
+) -> None:
+    # The request log row of such a request would have a NULL index_version_id (DB.md §4) and
+    # cost nothing: nothing was embedded, and the fake provider is free.
+    provider = FakeLLMProvider([uncited()])
+    settings = make_settings(database_url=test_database_url)
+    request_id = uuid4()
+    trace = RequestTrace(request_id=request_id, timer=StageTimer())
+    async with open_runtime(
+        settings, embedder=FakeEmbedder(dim=EMBEDDING_DIM), provider=provider
+    ) as runtime:
+        body = await runtime.pipeline.ask(QUESTION, request_id, mode=AskMode.NO_RAG, trace=trace)
+
+    assert trace.index_version_id is None
+    assert trace.retrieval_config_hash == NO_RAG_RETRIEVAL_CONFIG_HASH
+    assert trace.embedding_model is None
+    assert (trace.timer.stage_ms("embed"), trace.timer.stage_ms("retrieval")) == (None, None)
+    assert trace.timer.stage_ms("llm") is not None
+    assert body.meta.shadow_cost_usd == 0.0
 
 
 async def test_no_rag_claims_have_no_citation_so_their_confidence_is_capped(

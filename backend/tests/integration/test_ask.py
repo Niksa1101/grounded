@@ -113,6 +113,8 @@ async def test_ask_returns_a_schema_valid_response(test_database_url: str, index
     expected_hash = RetrievalConfig.from_settings(settings, "hybrid").config_hash
     assert meta.retrieval_config_hash == expected_hash
     assert meta.tokens == {"input": 100, "output": 50}
+    # The fake provider is free; the 28-character question is embedded: 28 * 0.15 / 1e6.
+    assert meta.shadow_cost_usd == pytest.approx(4.2e-06)
     assert set(meta.latency_ms) >= {"total", "embed", "retrieval", "llm"}
     assert call.temperature == settings.llm_temperature
     assert call.max_output_tokens == settings.llm_max_output_tokens
