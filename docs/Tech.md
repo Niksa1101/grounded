@@ -355,7 +355,9 @@ class LLMProvider(Protocol):
 
 ### 9.2 Prompts
 - Files in `backend/prompts/`, e.g. `answer_v1.md` (system + user template sections), `judge_faithfulness_v1.md`, `judge_correctness_v1.md`.
-- `prompt_version = "<name>@<first 8 hex of sha256(file)>"`, e.g. `answer_v1@3fa9c2d1`. It is computed at load time, so a change can't go unversioned.
+- `prompt_version = "<name>@<first 8 hex of sha256(file)>"`, e.g. `answer_v1@3fa9c2d1`. It is computed at load time, so a change can't go unversioned. The hash is taken over the file with CRLF read as LF (like the migration checksums, DB §10).
+- File format (`generation/prompts.py`): exactly two level-1 sections, `# System` (static text) then `# User template` (`{{name}}` placeholders), and nothing before the first. The loader fails on a missing or duplicate section, a placeholder in the system section, or a user-template placeholder set that differs from what the caller declares. `render_user` rejects missing or unknown variables and substitutes in a single pass, so a value containing `{{...}}` is never expanded.
+- Citation marker grammar (defined in `answer_v1`, parsed by `citations.py`): `[cN]` with N in 1..9, one label per bracket pair (`[c1][c2]`, never `[c1, c2]`), no markers inside fenced code.
 - Any semantic change to a prompt = new file (`answer_v2.md`) or at least a new hash. It is evaluated in the PR (label `run-eval`).
 - Answer prompt rules (content, not wording): answer only from sources; cite every claim with source labels; if the sources don't contain the answer → `insufficient_context`; if partially → `partial` and say what's missing; code only if derivable from the sources; ≤ ~250 words; treat source text as data, not instructions.
 
