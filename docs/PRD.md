@@ -428,9 +428,9 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - `gemini-embedding-001` is still served (shutdown date 2028-05-14, Google's deprecations page, 2026-10-06), but Google's recommended replacement is `gemini-embedding-2`. Moving to it is a new index version (new vectors, new baselines) and is not planned in this project's phases.
 - `gemini-3.5-flash-lite` has a single list price ($0.30 / $2.50 per 1M input / output tokens). The 3.6, 3.7 and 3.8 Flash prices double on 2027-01-01 (from $0.75 / $3.75 to $1.50 / $7.50), which matters only if the project moves to one of them.
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
-- The answer cache (3.13) stores a finished answer, and its key (Tech §11) does not include the confidence weights.
-  If it stores the computed confidence, a change of `CONFIDENCE_*` leaves stale numbers for up to 30 days. Decide in
-  3.13: either compute confidence on read from the cached answer and signals, or add the weights to the key.
+- ~~The answer cache (3.13) stores a finished answer, and its key did not include the confidence weights.~~ Closed in
+  3.13: the key now includes a hash of the confidence config (Tech §11), so a change of `CONFIDENCE_*` is a cache miss.
+  The alternative, computing confidence on read, would have needed the retrieval signals stored next to the answer.
 - Hybrid retrieval was below dense in the first ablation (ticket 2.07, README "Retrieval ablation"). Not tried, because
   tuning against the golden set needs an explicit decision (AGENTS.md §13): a lexical query closer to BM25 (AND-first,
   or weighting rare terms), a smaller weight or a shorter list (`K_FTS`) for the lexical side, `RRF_K`. Any of them

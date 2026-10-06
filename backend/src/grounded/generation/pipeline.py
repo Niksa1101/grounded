@@ -23,6 +23,11 @@ today is marked below.
   the sibling prompt ``answer_no_rag_v1`` and no zero-citations check (there is nothing to cite, so
   the check would send every answer to the retry). It is reachable from ``grounded ask --mode
   no_rag`` and from the eval harness, never from the HTTP API: the route does not pass a mode.
+- The answer cache (3.13, ``infra/answer_cache.py``) is looked up right after the active index is
+  known and before the query is embedded, so a hit costs no embedding, retrieval or LLM call. The
+  daily budget reservation (5.05) must go **after** that lookup: a hit does not consume budget.
+  ``no_rag`` and ``APP_ENV=eval`` never read or write the cache. Only a response that was built
+  successfully is stored; every failure raises before that point, so errors are never cached.
 """
 
 from __future__ import annotations
@@ -35,12 +40,14 @@ from enum import StrEnum
 from uuid import UUID
 
 from psycopg_pool import AsyncConnectionPool
+from pydantic import ValidationError
 
 from grounded.generation.citations import MappedAnswer, map_citations
 from grounded.generation.confidence import ConfidenceConfig, score_claims
 from grounded.generation.context import build_context
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider
+from grounded.infra.answer_cache import AnswerCache, CacheKey, from_stored
 from grounded.infra.provider_errors import ProviderBadOutput
 from grounded.infra.timing import Clock, StageTimer
 from grounded.ingest.embed import Embedder
@@ -109,6 +116,12 @@ class AskPipeline:
         self._confidence_cfg = ConfidenceConfig.from_settings(settings)
         self._pricing = pricing
         self._clock = clock
+        # Off in eval mode (Tech §11): eval runs must measure the pipeline, not the cache.
+        self._cache = (
+            None
+            if settings.app_env == "eval"
+            else AnswerCache(pool, ttl_days=settings.answer_cache_ttl_days)
+        )
         # An unpriced model stops the service here, at startup, instead of turning into a silent
         # cost of 0 (Tech §14). The embedder is built from ``settings.embedding_model``, so that
         # is the model whose price the shadow cost uses.
@@ -131,6 +144,7 @@ class AskPipeline:
         timer = trace.timer
         trace.provider = self._provider.name
         trace.model = self._provider.model
+        cache_key: CacheKey | None = None  # set only when this request may use the answer cache
 
         if mode is AskMode.NO_RAG:
             # No embedding and no database access at all: the index is not even looked up, so this
@@ -154,6 +168,19 @@ class AskPipeline:
             trace.index_version_id = index.id
             self._check_embedder(index)
             index_version = index.label
+
+            if self._cache is not None:
+                cache_key = CacheKey.build(
+                    question,
+                    prompt_version=prompt.version,
+                    index_version_id=index.id,
+                    retrieval_config_hash=config_hash,
+                    generator_model=self._provider.model,
+                    confidence=self._confidence_cfg,
+                )
+                cached = await self._cached_response(cache_key, request_id, trace, index_version)
+                if cached is not None:
+                    return cached
 
             # Recorded before the call: a failed call may still have been billed.
             trace.embedding_model = self._settings.embedding_model
@@ -207,7 +234,7 @@ class AskPipeline:
         trace.latency_total_ms = timer.total_ms()  # frozen: the response and the row agree
         shadow_cost = trace.shadow_cost(self._pricing)
 
-        return AskResponse(
+        response = AskResponse(
             status=result.parsed.status,
             answer_markdown=mapped.answer_markdown,
             claims=claims,
@@ -229,6 +256,51 @@ class AskPipeline:
                 shadow_cost_usd=float(shadow_cost),
             ),
         )
+        if self._cache is not None and cache_key is not None:
+            await self._cache.put(cache_key, response)
+        return response
+
+    async def _cached_response(
+        self, key: CacheKey, request_id: UUID, trace: RequestTrace, index_version: str
+    ) -> AskResponse | None:
+        """The cached answer with a ``meta`` of its own, or ``None`` on a miss.
+
+        The hit did none of the work, so it reports zero tokens and zero cost, and the real latency
+        of this request (index lookup and cache lookup). ``provider`` and ``model`` are the current
+        generator's, which is what the key's ``generator_model`` pins.
+        """
+        assert self._cache is not None
+        stored = await self._cache.get(key)
+        if stored is None:
+            return None
+        trace.latency_total_ms = trace.timer.total_ms()  # frozen: the response and the row agree
+        meta = Meta(
+            request_id=request_id,
+            provider=self._provider.name,
+            model=self._provider.model,
+            fallback_used=False,
+            cache_hit=True,
+            rerank_used=False,
+            prompt_version=key.prompt_version,
+            index_version=index_version,
+            retrieval_config_hash=key.retrieval_config_hash,
+            latency_ms=trace.latency_ms(),
+            tokens={"input": 0, "output": 0},
+            shadow_cost_usd=0.0,
+        )
+        try:
+            response = from_stored(stored, meta)
+        except ValidationError:
+            # A row that no longer fits the schema (written before a schema change): serve a fresh
+            # answer instead of an error. Logged without the row, which holds the question.
+            logger.warning("cached answer no longer matches AskResponse, treating as a miss")
+            trace.latency_total_ms = None
+            return None
+        trace.cache_hit = True
+        trace.status = response.status
+        trace.citation_count = len(response.citations)
+        trace.min_claim_confidence = response.min_confidence
+        return response
 
     async def _generate_validated(
         self,

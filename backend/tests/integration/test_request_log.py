@@ -375,7 +375,12 @@ async def test_every_request_writes_exactly_one_row(env: Env) -> None:
     async with app_client(
         settings, embedder=TimedEmbedder(env.clock), provider=llm, clock=env.clock
     ) as client:
-        for payload in ({"question": QUESTION}, {"question": QUESTION}, {"question": "ab"}):
+        # Two different questions: the same one twice would be answered from the cache (3.13).
+        for payload in (
+            {"question": QUESTION},
+            {"question": "Where does the wombat sleep?"},
+            {"question": "ab"},
+        ):
             await client.post("/v1/ask", json=payload)
     assert [r["outcome"] for r in rows(env)] == ["answered", "provider_unavailable", "bad_request"]
 
