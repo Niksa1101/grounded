@@ -27,13 +27,13 @@ Tech §10 ("No sleeping inside the request path") and the embed stage timeout of
 - Out of scope: the retrieval stage timeout and the overall `REQUEST_DEADLINE_S` (the timeout chain of 5.02).
 
 **Acceptance criteria**
-- [ ] `test_embed.py`: with `max_retries=0`, a 429 with `retryDelay` raises `ProviderRateLimited` without any `sleep`
+- [x] `test_embed.py`: with `max_retries=0`, a 429 with `retryDelay` raises `ProviderRateLimited` without any `sleep`
       call (an injected `sleep` that fails the test); a full RPM window with `paced=False` sends at once.
-- [ ] `test_embed.py`: `for_request_path` builds an embedder with 0 retries, no pacing and the new timeout.
-- [ ] `test_query_embedding.py`: `build_query_embedder` uses the request-path settings (prod and non-prod).
-- [ ] `tests/integration/test_ask.py`: an embedder that raises `ProviderRateLimited(retry_after_s=50)` gives 503 with
+- [x] `test_embed.py`: `for_request_path` builds an embedder with 0 retries, no pacing and the new timeout.
+- [x] `test_query_embedding.py`: `build_query_embedder` uses the request-path settings (prod and non-prod).
+- [x] `tests/integration/test_ask.py`: an embedder that raises `ProviderRateLimited(retry_after_s=50)` gives 503 with
       `Retry-After: 50` and a `provider_unavailable` row, without waiting.
-- [ ] Ingest tests unchanged and green (pacing and retries still on there).
+- [x] Ingest tests unchanged and green (pacing and retries still on there).
 
 **Verify:** standard checks.
 

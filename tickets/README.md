@@ -170,7 +170,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [3.13](phase-3/3.13-answer-cache.md) | Answer cache (Postgres) | Build | G (delegated) | done | [#53](https://github.com/Niksa1101/grounded/pull/53) |
 | [3.14](phase-3/3.14-closeout.md) | Phase 3 closeout: the golden set through `/ask` | Closeout | A+G | done | [#54](https://github.com/Niksa1101/grounded/pull/54) |
 | [R.09](phase-3/README.md#review-follow-ups) | Phase 3 review follow-ups: tickets and decisions (D47) | Build | G | done | [#57](https://github.com/Niksa1101/grounded/pull/57) |
-| [R.10](phase-3/R.10-query-embed-fail-fast.md) | Request-path query embedding fails fast | Build | G | todo | |
+| [R.10](phase-3/R.10-query-embed-fail-fast.md) | Request-path query embedding fails fast | Build | G | done | [#58](https://github.com/Niksa1101/grounded/pull/58) |
 | [R.11](phase-3/R.11-answer-cache-fixes.md) | Answer cache: replace a stale row, key on the generation parameters | Build | G | todo | |
 | [R.12](phase-3/R.12-confidence-weight-guard.md) | Settings guard for confidence invariant 4 | Build | G (A reviews) | todo | |
 | [R.13](phase-3/R.13-retry-feedback.md) | Compact retry feedback and the tokens of failed attempts | Build | G | todo | |

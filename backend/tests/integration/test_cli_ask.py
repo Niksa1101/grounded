@@ -34,10 +34,10 @@ runner = CliRunner()
 
 
 class StubGemini(FakeEmbedder):
-    """Stands in for GeminiEmbedder, so no key and no network are needed."""
+    """Stands in for the request-path GeminiEmbedder, so no key and no network are needed."""
 
     @classmethod
-    def from_settings(cls, settings: Settings, count_tokens: TokenCounter) -> StubGemini:
+    def for_request_path(cls, settings: Settings, count_tokens: TokenCounter) -> StubGemini:
         return cls(model=settings.embedding_model, dim=settings.embedding_dim)
 
 

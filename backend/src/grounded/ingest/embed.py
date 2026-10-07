@@ -12,8 +12,9 @@ batch call. The limits count **texts**, not HTTP calls: one 3-text batch showed 
 1 API request but 3 "Embedding Requests" for the model. So RPM caps texts per minute, and a full
 ingest (~1-1.5K texts) needs two days of RPD; the cache lets the second day resume.
 
-This is offline tooling, so the retry loop may sleep; the request path (Phase 3) embeds a single
-question per request and never waits out a rate limit.
+Ingest is offline tooling, so its retry loop may sleep. The request path embeds one question per
+request with ``GeminiEmbedder.for_request_path``: no pacing, no retry and the short embed stage
+timeout, so a rate limit or an outage fails the request at once and never sleeps (Tech §6, §10).
 """
 
 from __future__ import annotations
@@ -141,6 +142,9 @@ class GeminiEmbedder:
     with backoff. A daily-quota 429 is raised at once: waiting hours inside a CLI run helps
     nobody, and the cache keeps what was done.
 
+    Two ways to build one: ``from_settings`` for ingest and the evals (paced, retried), and
+    ``for_request_path`` for ``/v1/ask`` (``paced=False``, no retry, the embed stage timeout).
+
     Token counts are tiktoken *estimates* (``count_tokens``); Gemini's tokenizer differs. The
     Gemini API has no ``auto_truncate`` switch (the SDK allows it on Vertex only), so the length
     check before the call is the only guard: keep real inputs well under the limit.
@@ -160,6 +164,7 @@ class GeminiEmbedder:
         max_retries: int,
         max_retry_wait_s: float,
         timeout_s: float,
+        paced: bool = True,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         clock: Callable[[], float] = time.monotonic,
         rng: random.Random | None = None,
@@ -177,6 +182,7 @@ class GeminiEmbedder:
         self._max_retries = max_retries
         self._max_retry_wait_s = max_retry_wait_s
         self._timeout_s = timeout_s
+        self._paced = paced
         self._sleep = sleep
         self._rng = rng or random.Random()
         self._window = _RateWindow(rpm, tpm, clock)
@@ -184,6 +190,42 @@ class GeminiEmbedder:
 
     @classmethod
     def from_settings(cls, settings: Settings, count_tokens: TokenCounter) -> GeminiEmbedder:
+        """Ingest and the evals: paced to the RPM/TPM window and retried (Tech §5.6)."""
+        return cls._build(
+            settings,
+            count_tokens,
+            max_retries=settings.embedding_max_retries,
+            timeout_s=settings.embedding_timeout_s,
+            paced=True,
+        )
+
+    @classmethod
+    def for_request_path(cls, settings: Settings, count_tokens: TokenCounter) -> GeminiEmbedder:
+        """``/v1/ask`` and ``grounded ask``: one attempt within ``QUERY_EMBEDDING_TIMEOUT_S``.
+
+        No retry and no pacing, because both would sleep inside a request (Tech §10). A 429, 5xx
+        or timeout is raised at once as the typed provider error, which the API turns into a 503
+        with ``Retry-After``; whoever can afford to wait (the golden batch) waits outside. The
+        pacing window is per process anyway, so it could not protect a quota shared by instances.
+        """
+        return cls._build(
+            settings,
+            count_tokens,
+            max_retries=0,
+            timeout_s=settings.query_embedding_timeout_s,
+            paced=False,
+        )
+
+    @classmethod
+    def _build(
+        cls,
+        settings: Settings,
+        count_tokens: TokenCounter,
+        *,
+        max_retries: int,
+        timeout_s: float,
+        paced: bool,
+    ) -> GeminiEmbedder:
         # A blank value counts as unset: a CI secret that was never added (or isn't passed to a
         # fork's PR) reaches the process as an empty string, not as a missing variable.
         key = settings.gemini_api_key.get_secret_value().strip() if settings.gemini_api_key else ""
@@ -199,9 +241,10 @@ class GeminiEmbedder:
             rpm=settings.embedding_rpm,
             tpm=settings.embedding_tpm,
             max_input_tokens=settings.embedding_max_input_tokens,
-            max_retries=settings.embedding_max_retries,
+            max_retries=max_retries,
             max_retry_wait_s=settings.embedding_max_retry_wait_s,
-            timeout_s=settings.embedding_timeout_s,
+            timeout_s=timeout_s,
+            paced=paced,
         )
 
     @property
@@ -239,9 +282,11 @@ class GeminiEmbedder:
     ) -> list[Vector]:
         attempt = 0
         while True:
-            if (wait := self._window.wait_s(len(batch), tokens)) > 0:
-                await self._sleep(wait)
-            self._window.record(len(batch), tokens)  # a rejected call still counts toward limits
+            if self._paced:
+                if (wait := self._window.wait_s(len(batch), tokens)) > 0:
+                    await self._sleep(wait)
+                # A rejected call still counts toward the limits.
+                self._window.record(len(batch), tokens)
             self.api_calls += 1
             try:
                 return await self._call(batch, task_type)

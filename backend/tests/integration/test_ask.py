@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from typing import NamedTuple
 
 import httpx
@@ -13,7 +13,7 @@ import pytest
 from grounded.generation.confidence import COMPONENT_KEYS
 from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.infra.provider_errors import ProviderBadOutput, ProviderRateLimited
-from grounded.ingest.embed import FakeEmbedder
+from grounded.ingest.embed import FakeEmbedder, TaskType, Vector
 from grounded.retrieval.config import RetrievalConfig
 from grounded.schemas.api import AskResponse
 from grounded.schemas.llm import LLMAnswer, LLMClaim
@@ -209,6 +209,34 @@ async def test_rate_limited_provider_is_a_503_with_retry_after(
     error_body = response.json()["error"]
     assert (error_body["code"], error_body["retry_after_s"]) == ("provider_unavailable", 7)
     assert len(provider.calls) == 1  # a rate limit is not bad output: no retry
+
+
+class _RateLimitedEmbedder(FakeEmbedder):
+    """What the request-path embedder does on a per-minute 429: raise at once, never wait."""
+
+    async def embed(self, texts: Sequence[str], task_type: TaskType) -> list[Vector]:
+        raise ProviderRateLimited("embedding quota per minute", retry_after_s=50.0, is_quota=False)
+
+
+async def test_a_rate_limited_embedding_is_a_503_at_once_and_is_logged(
+    test_database_url: str, index: Index
+) -> None:
+    settings = make_settings(database_url=test_database_url)
+    provider = FakeLLMProvider([])
+    async with app_client(
+        settings, embedder=_RateLimitedEmbedder(dim=EMBEDDING_DIM), provider=provider
+    ) as client:
+        response = await client.post("/v1/ask", json={"question": QUESTION})
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "50"
+    assert response.json()["error"]["code"] == "provider_unavailable"
+    assert provider.calls == []  # no generation without a query vector
+    with psycopg.connect(test_database_url) as conn:
+        row = conn.execute(
+            "SELECT outcome, http_status FROM request_logs WHERE id = %s",
+            (response.json()["request_id"],),
+        ).fetchone()
+    assert row == ("provider_unavailable", 503)
 
 
 async def test_embedder_that_built_another_index_is_refused(
