@@ -34,6 +34,10 @@ _LOCAL_TEST_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/ground
 # not the working directory, so no stray .env above the repo can leak in. In a deployed install the
 # path doesn't exist and is ignored: Vercel and CI use real env vars.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Confidence invariant 4 (Tech §9.8): a claim whose only strong signal is the model's self-report,
+# backed by the weakest retrieval support, must not score above this. See ``_check_confidence``.
+SELF_CARRY_CEILING = 0.6
 _ENV_FILE = _REPO_ROOT / ".env"
 
 
@@ -113,7 +117,8 @@ class Settings(BaseSettings):
     confidence_w_retrieval: float = Field(default=0.40, ge=0.0, le=1.0)
     confidence_w_agreement: float = Field(default=0.25, ge=0.0, le=1.0)
     confidence_w_citations: float = Field(default=0.20, ge=0.0, le=1.0)
-    confidence_w_self: float = Field(default=0.15, ge=0.0, le=0.6)  # self-report: Tech §9.8 ceiling
+    # A first fence only; the real guard is the share check in ``_check_confidence``.
+    confidence_w_self: float = Field(default=0.15, ge=0.0, le=0.6)
     confidence_w_rerank: float = Field(default=0.0, ge=0.0, le=1.0)
     # The most a claim with no valid citation can score. Tech §9.8 fixes 0.2 as the ceiling, so a
     # config can lower the cap but never raise it past the documented invariant.
@@ -165,9 +170,43 @@ class Settings(BaseSettings):
             raise ValueError("CHUNK_MIN_TOKENS must be < CHUNK_MAX_TOKENS")
         if not self.chunk_overlap_tokens < self.chunk_max_tokens:
             raise ValueError("CHUNK_OVERLAP_TOKENS must be < CHUNK_MAX_TOKENS")
+        self._check_confidence()
         if self.app_env == "prod":
             self._check_prod()
         return self
+
+    def _check_confidence(self) -> None:
+        """Keep confidence invariant 4 true for *this* config, not only for the defaults.
+
+        The heuristic is a weighted mean divided by the sum of the weights (``score_claims`` in
+        ``generation/confidence.py``), so a cap on ``w_self`` alone guarantees nothing: what counts
+        is its share. This is the worst case the docstring of ``score_claims`` proves the bound
+        for: ``self_confidence = 1``; one valid citation, so ``citations = 1/2``; a chunk found by
+        one list only, so ``agreement = 0`` and ``retrieval <= 2/3`` (the missing list's slot is
+        0); rerank off, so ``rerank = 0``. The bound uses the best values that one list could
+        have, so it covers every weaker support too.
+        """
+        weights = (
+            self.confidence_w_retrieval,
+            self.confidence_w_agreement,
+            self.confidence_w_citations,
+            self.confidence_w_self,
+            self.confidence_w_rerank,
+        )
+        total = sum(weights)
+        if total <= 0.0:
+            raise ValueError("CONFIDENCE_W_* must not all be zero: every claim would score 0")
+        worst = (
+            self.confidence_w_self
+            + self.confidence_w_retrieval * 2 / 3
+            + self.confidence_w_citations / 2
+        ) / total
+        if worst > SELF_CARRY_CEILING:
+            raise ValueError(
+                f"CONFIDENCE_W_* let the self-report carry a weakly supported claim to "
+                f"{worst:.3f}, over the {SELF_CARRY_CEILING} ceiling (Tech §9.8 invariant 4): "
+                "lower CONFIDENCE_W_SELF or raise CONFIDENCE_W_AGREEMENT"
+            )
 
     def _check_prod(self) -> None:
         """Fail fast on a misconfigured deploy instead of serving with dev defaults."""

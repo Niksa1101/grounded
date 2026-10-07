@@ -25,9 +25,9 @@ the worst-case bound; the Agent writes it, the Author reviews.
   to describe the new check. No change to the heuristic. The Author reviews the wording.
 
 **Acceptance criteria**
-- [ ] `test_settings.py`: the review's example is rejected; all-zero weights are rejected; the defaults pass; a
+- [x] `test_settings.py`: the review's example is rejected; all-zero weights are rejected; the defaults pass; a
       non-default config at the bound passes.
-- [ ] `test_confidence.py`: the invariant 4 test is parametrized over the defaults and one non-default config the
+- [x] `test_confidence.py`: the invariant 4 test is parametrized over the defaults and one non-default config the
       validator accepts, so the bound is shown to be enough, not only the defaults.
 
 **Verify:** standard checks.
