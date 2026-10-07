@@ -7,15 +7,22 @@ the pipeline rebuilds it on a hit (``from_stored``).
 
 **The key** is the sha256 of everything that can change the stored answer: the normalized question
 (``infra/hashing.py``, the same function as ``request_logs.question_hash``), the prompt version,
-the index version id, the retrieval config hash, the generator model, and a hash of the confidence
-config (``confidence_config_hash``). The last one is not in the DB.md column comment: the stored
-response carries server-computed confidence, so a changed ``CONFIDENCE_*`` weight must miss instead
-of serving up to 30 days of stale numbers (PRD §12, closed in 3.13). The parts are serialized as a
+the index version id, the retrieval config hash, the generator model, a hash of the confidence
+config (``confidence_config_hash``) and a hash of the generation parameters
+(``GenerationParams.config_hash``: provider, temperature, max output tokens, thinking level). The
+stored response carries server-computed confidence, so a changed ``CONFIDENCE_*`` weight must miss
+instead of serving up to 30 days of stale numbers (PRD §12, closed in 3.13), and the same holds for
+a changed generation parameter (PRD D47). Neither hash is a column. The parts are serialized as a
 JSON array, not joined with ``|``, so a ``|`` inside a question can never shift a field.
 
+**A row that no longer fits** ``AskResponse`` (written before a schema change that left the key
+alone) is deleted on the lookup that finds it (``discard``), so the fresh answer of that request can
+take its place. ``put`` only overwrites an *expired* row, so without the delete the question would
+stay a miss until the row expired.
+
 **Failure policy.** The cache is an optimization, so a database error on a lookup is a miss and on a
-write is a skipped write. Both are logged (error type and SQLSTATE only: a Postgres message can
-carry the failing row, i.e. the question, AGENTS.md §6.13) and never silent.
+write (or a delete) is a skipped write. Both are logged (error type and SQLSTATE only: a Postgres
+message can carry the failing row, i.e. the question, AGENTS.md §6.13) and never silent.
 
 **What may be stored** is decided by the caller: only a valid ``AskResponse`` ever reaches ``put``
 (``answered``, ``partial`` or ``insufficient_context``); a failed request raises before there is
@@ -36,6 +43,7 @@ from psycopg.types.json import Jsonb
 from psycopg_pool import AsyncConnectionPool
 
 from grounded.generation.confidence import ConfidenceConfig
+from grounded.generation.params import GenerationParams
 from grounded.infra.hashing import normalize_question
 from grounded.schemas.api import AskResponse, Meta
 
@@ -74,6 +82,8 @@ ON CONFLICT (cache_key) DO UPDATE SET
 WHERE answer_cache.expires_at <= now()
 """
 
+_DISCARD = "DELETE FROM answer_cache WHERE cache_key = %s"
+
 
 @dataclass(frozen=True, slots=True)
 class CacheKey:
@@ -86,6 +96,7 @@ class CacheKey:
     retrieval_config_hash: str
     generator_model: str
     confidence_hash: str
+    generation_hash: str
 
     @classmethod
     def build(
@@ -97,6 +108,7 @@ class CacheKey:
         retrieval_config_hash: str,
         generator_model: str,
         confidence: ConfidenceConfig,
+        generation: GenerationParams,
     ) -> CacheKey:
         return cls(
             question=normalize_question(question),
@@ -105,6 +117,7 @@ class CacheKey:
             retrieval_config_hash=retrieval_config_hash,
             generator_model=generator_model,
             confidence_hash=confidence_config_hash(confidence),
+            generation_hash=generation.config_hash,
         )
 
     @property
@@ -117,6 +130,7 @@ class CacheKey:
                 self.retrieval_config_hash,
                 self.generator_model,
                 self.confidence_hash,
+                self.generation_hash,
             ],
             ensure_ascii=False,
         )
@@ -179,6 +193,15 @@ class AnswerCache:
                 await conn.execute(_PUT, params)
         except psycopg.Error as exc:
             _log_failure("answer cache write failed", exc)
+
+    async def discard(self, key: CacheKey) -> None:
+        """Delete the row of ``key`` (one that no longer fits ``AskResponse``). Never raises on a
+        database error (logged): the row then stays a miss until it expires."""
+        try:
+            async with self._pool.connection() as conn:
+                await conn.execute(_DISCARD, (key.digest,))
+        except psycopg.Error as exc:
+            _log_failure("answer cache delete failed", exc)
 
 
 def _log_failure(message: str, exc: psycopg.Error) -> None:

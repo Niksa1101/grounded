@@ -16,6 +16,7 @@ from psycopg.rows import dict_row
 
 import grounded.runtime
 from grounded.generation.confidence import ConfidenceConfig
+from grounded.generation.params import GenerationParams
 from grounded.generation.pipeline import AskMode
 from grounded.generation.prompts import load_answer_prompt
 from grounded.generation.providers.fake import FakeLLMProvider
@@ -250,6 +251,7 @@ async def test_a_live_row_is_not_overwritten_by_a_concurrent_writer(env: Env) ->
         retrieval_config_hash=before["retrieval_config_hash"],
         generator_model=before["generator_model"],
         confidence=ConfidenceConfig.from_settings(make_settings()),
+        generation=GenerationParams.from_settings(make_settings(), "fake"),
     )
     assert key.digest == before["cache_key"]  # the test rebuilt the very key the pipeline used
     rival = body_of(first).model_copy(update={"answer_markdown": "A rival answer."})
@@ -334,7 +336,7 @@ async def test_changed_confidence_weights_are_a_miss_not_stale_numbers(env: Env)
     )  # recomputed with the new weights, not served from the old row
 
 
-async def test_a_row_that_no_longer_fits_the_schema_is_a_miss(env: Env) -> None:
+async def test_a_row_that_no_longer_fits_the_schema_is_a_miss_and_is_replaced(env: Env) -> None:
     llm = FakeLLMProvider([good(), good()])
     await post(env, llm)
     with psycopg.connect(env.url, autocommit=True) as conn:
@@ -345,6 +347,37 @@ async def test_a_row_that_no_longer_fits_the_schema_is_a_miss(env: Env) -> None:
     assert not body_of(again).meta.cache_hit
     assert len(llm.calls) == 2
     assert [r["cache_hit"] for r in logs(env)] == [False, False]
+    # The stale row was deleted and the fresh answer took its place (``put`` alone could not
+    # overwrite a live row), so the next request is a hit again.
+    [row] = cached(env)
+    assert row["hit_count"] == 0
+    AskResponse.model_validate({**row["response"], "meta": body_of(again).meta})
+    [third] = await post(env, llm)
+    assert body_of(third).meta.cache_hit
+    assert len(llm.calls) == 2
+    [row] = cached(env)
+    assert row["hit_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"llm_temperature": 0.5},
+        {"llm_max_output_tokens": 900},
+        {"gemini_thinking_level": "low"},
+    ],
+    ids=["temperature", "max output tokens", "thinking level"],
+)
+async def test_changed_generation_params_are_a_miss(env: Env, change: dict[str, Any]) -> None:
+    # PRD D47: an answer made with other generation settings is not served.
+    llm = FakeLLMProvider([good(), good()])
+    await post(env, llm)
+
+    [other] = await post(env, llm, **change)
+
+    assert not body_of(other).meta.cache_hit
+    assert len(llm.calls) == 2
+    assert len(cached(env)) == 2
 
 
 # --- where the cache is off -------------------------------------------------------------------
