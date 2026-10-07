@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from grounded.generation.providers.base import LLMProvider, Usage
 from grounded.generation.providers.fake import FakeLLMProvider
@@ -8,6 +9,7 @@ from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderRateLimited,
     ProviderTimeout,
+    compact_validation_error,
 )
 from grounded.schemas.llm import LLMAnswer
 
@@ -78,7 +80,32 @@ async def test_text_that_fails_validation_is_bad_output(raw: str) -> None:
     with pytest.raises(ProviderBadOutput) as info:
         await _generate(fake)
     assert info.value.raw == raw
-    assert info.value.validation_error  # the text the retry quotes back to the model
+    # The text the retry quotes back to the model: compact, like the real adapter's.
+    assert info.value.validation_error
+    assert "input_value" not in info.value.validation_error
+    assert "errors.pydantic.dev" not in info.value.validation_error
+    # A bad reply was billed like a good one (the fake's default usage).
+    assert (info.value.input_tokens, info.value.output_tokens) == (100, 50)
+
+
+def test_compact_validation_error_names_each_field_and_rule_without_the_input() -> None:
+    raw = (
+        '{"status": "maybe", "answer_markdown": "SECRET-INPUT", "claims":'
+        ' [{"text": "t", "citation_ids": ["c12"], "self_confidence": 2}]}'
+    )
+    with pytest.raises(ValidationError) as info:
+        LLMAnswer.model_validate_json(raw)
+    assert compact_validation_error(info.value) == (
+        "status: Input should be 'answered', 'partial' or 'insufficient_context'; "
+        "claims.0.citation_ids.0: String should match pattern '^c[1-9]$'; "
+        "claims.0.self_confidence: Input should be less than or equal to 1"
+    )
+
+
+def test_compact_validation_error_reports_broken_json_against_the_output() -> None:
+    with pytest.raises(ValidationError) as info:
+        LLMAnswer.model_validate_json('{"status": "answ')
+    assert compact_validation_error(info.value).startswith("output: Invalid JSON: ")
 
 
 async def test_bad_output_then_good_output_models_the_retry() -> None:

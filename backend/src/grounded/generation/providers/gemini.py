@@ -20,6 +20,11 @@ Facts verified on 2026-10-06 against the installed ``google-genai`` 2.25.0 and G
   candidates + tool_use + thoughts``, and thinking is billed as output. So ``output_tokens`` is
   ``candidates + thoughts`` and ``thinking_tokens`` is ``thoughts``. ``max_output_tokens`` is a
   limit on candidates *and* thoughts together.
+
+A reply that fails validation was still billed, so ``ProviderBadOutput`` carries its usage. Its
+``validation_error`` is written for the retry (``compact_validation_error``); a reply cut off at
+``max_output_tokens`` (``finish_reason=MAX_TOKENS``) gets ``TRUNCATED_FEEDBACK`` instead, because
+the JSON error alone would not tell the model that the answer was too long.
 """
 
 from __future__ import annotations
@@ -42,10 +47,17 @@ from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderTimeout,
     ProviderUnavailable,
+    compact_validation_error,
 )
 from grounded.settings import GeminiThinkingLevel
 
 logger = logging.getLogger(__name__)
+
+# The retry feedback for a reply cut off at the output limit (it fills the prompt's ``{{error}}``).
+TRUNCATED_FEEDBACK = (
+    "the answer was cut off at the output token limit before the JSON was complete; "
+    "write a shorter answer with fewer, shorter claims"
+)
 
 # The JSON Schema keywords Gemini documents for ``response_json_schema`` (see the module docstring).
 _SUPPORTED_KEYWORDS = frozenset(
@@ -161,25 +173,28 @@ class GeminiProvider:
             raise ProviderUnavailable(f"generation transport error: {exc}") from exc
         latency_ms = round((self._clock() - started) * 1000)
 
-        raw = _response_text(response)
-        parsed = _validate(raw, schema, _finish_reason(response))
+        usage = _usage(response)  # read first: a reply that fails below was billed all the same
+        raw = _response_text(response, usage)
+        parsed = _validate(raw, schema, _finish_reason(response), usage)
         return GenerationResult(
             parsed=parsed,
             raw_text=raw,
-            usage=_usage(response),
+            usage=usage,
             provider=self.name,
             model=self.model,
             latency_ms=latency_ms,
         )
 
 
-def _response_text(response: genai_types.GenerateContentResponse) -> str:
+def _response_text(response: genai_types.GenerateContentResponse, usage: Usage) -> str:
     """The reply text, or ``ProviderBadOutput`` when there is none (blocked, or no candidate)."""
     if not response.candidates:
         feedback = response.prompt_feedback
         reason = feedback.block_reason if feedback else None
         raise ProviderBadOutput(
-            f"Gemini returned no candidate (prompt block reason: {reason or 'none'})"
+            f"Gemini returned no candidate (prompt block reason: {reason or 'none'})",
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
         )
     parts = response.candidates[0].content.parts if response.candidates[0].content else None
     # Thought parts (if any) are not part of the answer; ``include_thoughts`` is never set.
@@ -192,15 +207,18 @@ def _finish_reason(response: genai_types.GenerateContentResponse) -> str:
     return reason.name if reason else "unknown"
 
 
-def _validate[T: BaseModel](raw: str, schema: type[T], finish_reason: str) -> T:
+def _validate[T: BaseModel](raw: str, schema: type[T], finish_reason: str, usage: Usage) -> T:
     try:
         return schema.model_validate_json(raw)
     except ValidationError as exc:
         # A MAX_TOKENS cut shows up here as invalid JSON; the finish reason says why.
+        truncated = finish_reason == genai_types.FinishReason.MAX_TOKENS.name
         raise ProviderBadOutput(
             f"output does not match {schema.__name__} (finish_reason={finish_reason})",
             raw=raw,
-            validation_error=str(exc),
+            validation_error=TRUNCATED_FEEDBACK if truncated else compact_validation_error(exc),
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
         ) from exc
 
 

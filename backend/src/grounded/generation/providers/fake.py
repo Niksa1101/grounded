@@ -4,7 +4,8 @@ Each ``generate`` call consumes the next scripted step, in order:
 
 - a ``BaseModel`` instance or a ``str``: the provider's "raw output". It goes through
   ``schema.model_validate_json`` exactly like a real adapter's would, so a ``str`` that isn't valid
-  JSON (or fails a constraint) surfaces as ``ProviderBadOutput``, never as a half-parsed object;
+  JSON (or fails a constraint) surfaces as ``ProviderBadOutput``, never as a half-parsed object.
+  Like a real reply, a bad one carries its usage and the compact feedback of the real adapter;
 - a ``ProviderError`` instance: raised as is (rate limit, timeout, ...).
 
 Every call is recorded, including the ones that raise, so a test can assert what the retry sent.
@@ -19,7 +20,11 @@ from dataclasses import dataclass
 from pydantic import BaseModel, ValidationError
 
 from grounded.generation.providers.base import GenerationResult, Usage
-from grounded.infra.provider_errors import ProviderBadOutput, ProviderError
+from grounded.infra.provider_errors import (
+    ProviderBadOutput,
+    ProviderError,
+    compact_validation_error,
+)
 from grounded.schemas.llm import LLMAnswer, LLMClaim
 
 ScriptStep = BaseModel | str | ProviderError
@@ -83,7 +88,9 @@ class FakeLLMProvider:
             raise ProviderBadOutput(
                 f"output does not match {schema.__name__}",
                 raw=raw,
-                validation_error=str(exc),
+                validation_error=compact_validation_error(exc),
+                input_tokens=self._usage.input_tokens,
+                output_tokens=self._usage.output_tokens,
             ) from exc
         return GenerationResult(
             parsed=parsed,

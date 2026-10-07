@@ -6,6 +6,8 @@ the LLM router in Phase 7) decide what to do from the type alone and never impor
 
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 
 class ProviderError(Exception):
     """Base class: something went wrong talking to an external provider."""
@@ -31,14 +33,45 @@ class ProviderTimeout(ProviderError):
 class ProviderBadOutput(ProviderError):
     """The provider answered, but the answer is unusable (wrong shape, dimension, count).
 
-    ``validation_error`` is the Pydantic message for an LLM answer that failed its schema. The retry
-    (Tech §9.5) quotes it back to the model, so it is kept apart from the short ``message``.
+    ``validation_error`` is what the retry (Tech §9.5) quotes back to the model, so it is kept apart
+    from the short ``message`` and written for the model (``compact_validation_error``).
+
+    ``input_tokens`` / ``output_tokens`` are the usage of the call that produced the bad output:
+    the provider billed it, so the request's shadow cost counts it (Tech §14). They are plain ints,
+    not ``Usage``, so this module does not depend on the generation package; 0 means "not
+    reported" (an embedding error, or an error raised by our own checks after the usage was
+    already counted).
     """
 
-    def __init__(self, message: str, *, raw: str = "", validation_error: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        raw: str = "",
+        validation_error: str = "",
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+    ) -> None:
         super().__init__(message)
         self.raw = raw
         self.validation_error = validation_error
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+
+
+def compact_validation_error(exc: ValidationError) -> str:
+    """The Pydantic errors as ``"<field path>: <message>"``, joined with ``"; "``.
+
+    This is the reason the retry gives the model (Tech §9.5). ``str(ValidationError)`` would also
+    carry every rejected ``input_value`` (up to the whole bad output again) and an
+    ``errors.pydantic.dev`` link per error, which is noise for the model and contradicts the
+    prompt's "do not write URLs". An error about the whole output (invalid JSON) has no field path
+    and is reported against ``output``.
+    """
+    return "; ".join(
+        f"{'.'.join(str(part) for part in error['loc']) or 'output'}: {error['msg']}"
+        for error in exc.errors(include_url=False, include_input=False)
+    )
 
 
 class ProviderRequestRejected(ProviderError):
