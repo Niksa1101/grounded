@@ -30,4 +30,30 @@ Ticket 7.04 moves it into the router. Keep that step small and isolated so the m
 - [3.13 — Answer cache (Postgres)](3.13-answer-cache.md)
 - [3.14 — Phase 3 closeout: the golden set through `/ask`](3.14-closeout.md)
 
+## Review follow-ups
+
+The code review of Phase 3 (PRs #40–#55, 2026-10-07) left 1 🔴, 6 🟡 and several 🟢 items. The 🔴 breaks an
+architecture invariant (the query embedder sleeps and retries in the request path), so the follow-ups run as small
+PRs **before 4.01**. That is also the cheap moment for the quality-affecting ones: there is no generation baseline
+until 4.09. Decisions of 2026-10-07:
+
+- #3: the answer-cache key gets a `generation_config_hash` (provider, temperature, max output tokens, thinking level)
+  (PRD D47, R.11).
+- #4: a `Settings` validator checks the worst-case bound of confidence invariant 4; the Agent writes it, the Author
+  reviews (R.12).
+- #5: the retry feedback is compact (no input values, no Pydantic links) and says so plainly when the answer was cut
+  off at the token limit; the limit itself does not change (R.13).
+- #7: links and URLs in `answer_markdown` are removed and counted in the stdout summary line, no migration (R.14).
+- #9 (lowercase normalization of the cache key) and #10 (a client disconnect writes no row) are open items in PRD §12.
+
+The Author runs the real-provider golden set once after R.14 (~35 calls of quota); its summary goes into the R.14 PR
+with `n=30`, compared with the 2026-10-07 run, as information and not a baseline.
+
+- [R.10 — Request-path query embedding fails fast](R.10-query-embed-fail-fast.md)
+- [R.11 — Answer cache: replace a stale row, key on the generation parameters](R.11-answer-cache-fixes.md)
+- [R.12 — Settings guard for confidence invariant 4](R.12-confidence-weight-guard.md)
+- [R.13 — Compact retry feedback and the tokens of failed attempts](R.13-retry-feedback.md)
+- [R.14 — URLs in the answer, and the question escaped in the prompt](R.14-answer-text-safety.md)
+- [R.15 — Small hardening and documentation drift](R.15-review-polish.md)
+
 Rules for working a ticket: [../README.md](../README.md).

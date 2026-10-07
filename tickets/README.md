@@ -97,6 +97,9 @@ Phase 2 starts only after **Phase 1 is closed** (handled outside these tickets):
 Phase 1 is closed, but the code review of Phases 0 and 1 left follow-ups (R.00–R.08, B.01 in the index). Ticket 2.01
 waited for R.07 (the chunker fix changes the index), and the baseline is regenerated once, in B.01.
 
+Phase 3 is closed too; its code review left follow-ups R.09–R.15 ([phase 3 README](phase-3/README.md#review-follow-ups)).
+Ticket 4.01 waits for R.15.
+
 ## Cross-cutting rules (short form)
 
 These come from AGENTS.md §6–§9 and apply to every ticket. They are repeated here because they are the ones most
@@ -166,6 +169,13 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [3.12](phase-3/3.12-request-logs.md) | Request logging, stage timing and shadow cost | Build | G (delegated) | done | [#51](https://github.com/Niksa1101/grounded/pull/51), [#52](https://github.com/Niksa1101/grounded/pull/52) |
 | [3.13](phase-3/3.13-answer-cache.md) | Answer cache (Postgres) | Build | G (delegated) | done | [#53](https://github.com/Niksa1101/grounded/pull/53) |
 | [3.14](phase-3/3.14-closeout.md) | Phase 3 closeout: the golden set through `/ask` | Closeout | A+G | done | [#54](https://github.com/Niksa1101/grounded/pull/54) |
+| [R.09](phase-3/README.md#review-follow-ups) | Phase 3 review follow-ups: tickets and decisions (D47) | Build | G | done | [#57](https://github.com/Niksa1101/grounded/pull/57) |
+| [R.10](phase-3/R.10-query-embed-fail-fast.md) | Request-path query embedding fails fast | Build | G | todo | |
+| [R.11](phase-3/R.11-answer-cache-fixes.md) | Answer cache: replace a stale row, key on the generation parameters | Build | G | todo | |
+| [R.12](phase-3/R.12-confidence-weight-guard.md) | Settings guard for confidence invariant 4 | Build | G (A reviews) | todo | |
+| [R.13](phase-3/R.13-retry-feedback.md) | Compact retry feedback and the tokens of failed attempts | Build | G | todo | |
+| [R.14](phase-3/R.14-answer-text-safety.md) | URLs in the answer, and the question escaped in the prompt | Build | G | todo | |
+| [R.15](phase-3/R.15-review-polish.md) | Small hardening and documentation drift | Build | G | todo | |
 | **4** | **[Generation eval + CI quality gate](phase-4/README.md)** | | | | |
 | [4.01](phase-4/4.01-decision-groq-promptfoo.md) | Decision: Groq and judge models, promptfoo version and test loading | Decision | D | todo | |
 | [4.02](phase-4/4.02-groq-provider.md) | `GroqProvider` adapter | Build | G | todo | |
