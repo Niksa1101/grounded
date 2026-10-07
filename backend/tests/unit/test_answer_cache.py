@@ -14,6 +14,7 @@ import pytest
 from psycopg_pool import AsyncConnectionPool
 
 from grounded.generation.confidence import ConfidenceConfig
+from grounded.generation.params import GenerationParams
 from grounded.infra.answer_cache import (
     MAX_TTL_DAYS,
     AnswerCache,
@@ -27,6 +28,7 @@ from grounded.schemas.api import AskResponse, Meta
 from tests.support import make_settings
 
 CONFIDENCE = ConfidenceConfig.from_settings(make_settings())
+GENERATION = GenerationParams.from_settings(make_settings(), "gemini")
 
 
 def key(question: str = "How do I run a task?", **overrides: Any) -> CacheKey:
@@ -36,6 +38,7 @@ def key(question: str = "How do I run a task?", **overrides: Any) -> CacheKey:
         "retrieval_config_hash": "r" * 64,
         "generator_model": "model-a",
         "confidence": CONFIDENCE,
+        "generation": GENERATION,
     }
     return CacheKey.build(question, **{**parts, **overrides})
 
@@ -79,8 +82,23 @@ def test_the_key_uses_the_shared_normalization() -> None:
         {"generator_model": "model-b"},
         {"confidence": dataclasses.replace(CONFIDENCE, w_self=0.3)},
         {"confidence": dataclasses.replace(CONFIDENCE, uncited_cap=0.1)},
+        {"generation": dataclasses.replace(GENERATION, provider="groq")},
+        {"generation": dataclasses.replace(GENERATION, temperature=0.7)},
+        {"generation": dataclasses.replace(GENERATION, max_output_tokens=900)},
+        {"generation": dataclasses.replace(GENERATION, thinking_level="low")},
     ],
-    ids=["prompt", "index", "retrieval", "model", "confidence weight", "confidence cap"],
+    ids=[
+        "prompt",
+        "index",
+        "retrieval",
+        "model",
+        "confidence weight",
+        "confidence cap",
+        "provider",
+        "temperature",
+        "max output tokens",
+        "thinking level",
+    ],
 )
 def test_every_part_of_the_key_changes_it(change: dict[str, Any]) -> None:
     assert key(**change).digest != key().digest
@@ -100,6 +118,7 @@ def test_the_key_is_stable_and_is_a_sha256() -> None:
                     "r" * 64,
                     "model-a",
                     confidence_config_hash(CONFIDENCE),
+                    GENERATION.config_hash,
                 ]
             ).encode()
         ).hexdigest()
@@ -118,6 +137,15 @@ def test_the_confidence_hash_follows_the_values() -> None:
     assert confidence_config_hash(same) == confidence_config_hash(CONFIDENCE)
     other = ConfidenceConfig.from_settings(make_settings(confidence_w_retrieval=0.5))
     assert confidence_config_hash(other) != confidence_config_hash(CONFIDENCE)
+
+
+def test_the_generation_hash_follows_the_settings() -> None:
+    same = GenerationParams.from_settings(make_settings(), "gemini")
+    assert same == GENERATION
+    assert same.config_hash == GENERATION.config_hash
+    assert len(same.config_hash) == 64
+    other = GenerationParams.from_settings(make_settings(gemini_thinking_level="high"), "gemini")
+    assert other.config_hash != GENERATION.config_hash
 
 
 def response() -> AskResponse:
@@ -188,4 +216,14 @@ async def test_a_database_error_on_write_is_logged_and_does_not_raise(
     with caplog.at_level(logging.WARNING):
         await cache.put(key("zebra-secret-question"), response())
     assert "answer cache write failed" in caplog.text
+    assert "zebra" not in caplog.text
+
+
+async def test_a_database_error_on_discard_is_logged_and_does_not_raise(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    cache = AnswerCache(cast(AsyncConnectionPool, _DownPool()), ttl_days=30)
+    with caplog.at_level(logging.WARNING):
+        await cache.discard(key("zebra-secret-question"))
+    assert "answer cache delete failed" in caplog.text
     assert "zebra" not in caplog.text

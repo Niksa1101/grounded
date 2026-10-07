@@ -45,6 +45,7 @@ from pydantic import ValidationError
 from grounded.generation.citations import MappedAnswer, map_citations
 from grounded.generation.confidence import ConfidenceConfig, score_claims
 from grounded.generation.context import build_context
+from grounded.generation.params import GenerationParams
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider
 from grounded.infra.answer_cache import AnswerCache, CacheKey, from_stored
@@ -114,6 +115,8 @@ class AskPipeline:
         self._no_rag_prompt = no_rag_prompt
         self._cfg = RetrievalConfig.from_settings(settings, "hybrid")
         self._confidence_cfg = ConfidenceConfig.from_settings(settings)
+        # One reading of the generation settings for the call and the cache key alike (D47).
+        self._generation = GenerationParams.from_settings(settings, provider.name)
         self._pricing = pricing
         self._clock = clock
         # Off in eval mode (Tech §11): eval runs must measure the pipeline, not the cache.
@@ -177,6 +180,7 @@ class AskPipeline:
                     retrieval_config_hash=config_hash,
                     generator_model=self._provider.model,
                     confidence=self._confidence_cfg,
+                    generation=self._generation,
                 )
                 cached = await self._cached_response(cache_key, request_id, trace, index_version)
                 if cached is not None:
@@ -292,8 +296,10 @@ class AskPipeline:
             response = from_stored(stored, meta)
         except ValidationError:
             # A row that no longer fits the schema (written before a schema change): serve a fresh
-            # answer instead of an error. Logged without the row, which holds the question.
+            # answer instead of an error, and delete the row so that answer can replace it (``put``
+            # only overwrites expired rows). Logged without the row, which holds the question.
             logger.warning("cached answer no longer matches AskResponse, treating as a miss")
+            await self._cache.discard(key)
             trace.latency_total_ms = None
             return None
         trace.cache_hit = True
@@ -365,8 +371,8 @@ class AskPipeline:
             system=prompt.system,
             user=user,
             schema=LLMAnswer,
-            temperature=self._settings.llm_temperature,
-            max_output_tokens=self._settings.llm_max_output_tokens,
+            temperature=self._generation.temperature,
+            max_output_tokens=self._generation.max_output_tokens,
             timeout_s=self._settings.llm_timeout_s,
         )
 

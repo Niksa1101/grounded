@@ -29,12 +29,12 @@
 - Every existing row becomes a miss once (the key changes). There is no production data yet.
 
 **Acceptance criteria**
-- [ ] `test_a_row_that_no_longer_fits_the_schema_is_a_miss` is extended: the stale row is gone after the miss, the
+- [x] `test_a_row_that_no_longer_fits_the_schema_is_a_miss` is extended: the stale row is gone after the miss, the
       third request is a hit, and the new row's `hit_count` is 1.
-- [ ] New `test_changed_generation_params_are_a_miss` (temperature, max output tokens, thinking level, each alone).
-- [ ] Unit tests: `GenerationParams.config_hash` is stable across instances and changes with every field;
+- [x] New `test_changed_generation_params_are_a_miss` (temperature, max output tokens, thinking level, each alone).
+- [x] Unit tests: `GenerationParams.config_hash` is stable across instances and changes with every field;
       `discard` swallows and logs a database error.
-- [ ] `test_a_live_row_is_not_overwritten_by_a_concurrent_writer` still passes.
+- [x] `test_a_live_row_is_not_overwritten_by_a_concurrent_writer` still passes.
 
 **Verify:** standard checks.
 

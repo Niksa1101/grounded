@@ -108,6 +108,7 @@ The point is to show the mechanics.
 │   │   │   ├── context.py         # c1..c5 labeling, source blocks
 │   │   │   ├── citations.py       # validation, mapping, marker rewrite
 │   │   │   ├── confidence.py      # heuristic [A]
+│   │   │   ├── params.py          # GenerationParams: the settings that change an answer (call + cache key)
 │   │   │   └── pipeline.py        # orchestrates the /ask flow
 │   │   ├── evals/                 # metrics.py [A] (Recall@k, MRR, nDCG@k), golden.py, retrieval_runner.py, ask_batch.py, gate.py [A], report.py, judge.py
 │   │   ├── infra/                 # db.py, migrations.py (runner), kvcache.py (SQLite), provider_errors.py, gemini_errors.py, answer_cache.py, ratelimit.py, budget.py, timing.py, hashing.py, logging.py
@@ -501,7 +502,7 @@ Requirements:
 
 | Cache | Store | Key | Used in | TTL |
 |---|---|---|---|---|
-| Answer cache | Postgres `answer_cache` | sha256(normalized question \| prompt_version \| index_version_id \| retrieval_config_hash \| generator_model \| confidence_config_hash) | prod/dev (off in eval and in `no_rag`) | `ANSWER_CACHE_TTL_DAYS` (≤ 30 days) |
+| Answer cache | Postgres `answer_cache` | sha256(normalized question \| prompt_version \| index_version_id \| retrieval_config_hash \| generator_model \| confidence_config_hash \| generation_config_hash) | prod/dev (off in eval and in `no_rag`) | `ANSWER_CACHE_TTL_DAYS` (≤ 30 days) |
 | Query embedding | in-memory LRU (prod), SQLite (dev/CI/eval), in front of the request-path embedder (§6: one attempt, no sleep) | (model, dim, RETRIEVAL_QUERY, sha256(question)) | all | process lifetime / persistent |
 | Chunk embedding | SQLite `.cache/embeddings.sqlite` | (model, dim, RETRIEVAL_DOCUMENT, content_hash) | ingest | persistent |
 | Rerank | SQLite `.cache/rerank.sqlite` | sha256(model \| query \| candidate hashes) | dev/CI/eval | persistent |
@@ -512,6 +513,8 @@ Question normalization: Unicode NFKC → lowercase → collapse whitespace → s
 Answer cache details (`infra/answer_cache.py`, 3.13):
 - The stored `response` is the `AskResponse` **without `meta`**. On a hit the pipeline rebuilds `meta`: a new `request_id`, `cache_hit=true`, the real latency of the hit, zero tokens and zero shadow cost.
 - `confidence_config_hash` is a hash of the `CONFIDENCE_*` weights and the uncited cap (`ConfidenceConfig`). The stored answer carries server-computed confidence, so changing a weight must miss instead of serving stale numbers for up to 30 days. It is the sixth part of the key and has no column of its own (the key is the primary key). The parts are hashed as a JSON array, so a `|` in a question cannot shift a field.
+- `generation_config_hash` (the seventh part, PRD D47) is `GenerationParams.config_hash` (`generation/params.py`): the provider name, `LLM_TEMPERATURE`, `LLM_MAX_OUTPUT_TOKENS` and `GEMINI_THINKING_LEVEL`. Changing any of them is a miss, not 30 days of answers made with the old values. The pipeline reads the same `GenerationParams` for every call, so the key and the call cannot disagree. No column either.
+- A row that no longer fits `AskResponse` (written before a schema change that left the key alone) is treated as a miss **and deleted** (`AnswerCache.discard`), so the fresh answer of that request replaces it; the write path only overwrites expired rows (DB.md §7.2).
 - The lookup comes right after the active index is known and before the embedding, so a hit costs no embedding, retrieval or LLM call, and the budget reservation (5.05) must come after it: a hit never consumes budget. The lookup is skipped when `APP_ENV=eval` and in `no_rag` mode, which neither read nor write the cache.
 - Only a built, valid response is stored (`answered`, `partial`, `insufficient_context`); every failure raises first, so errors are never cached. A database error on the cache is a logged miss or a skipped write, never a failed request.
 - `expires_at = created_at + ANSWER_CACHE_TTL_DAYS`, and `Settings` and the store both cap it at 30 days (question retention).
