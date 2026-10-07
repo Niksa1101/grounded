@@ -27,6 +27,17 @@ from grounded.schemas.llm import LLMClaim
 from tests.support import make_settings
 
 CONFIG = ConfidenceConfig.from_settings(make_settings())
+# A non-default config that ``Settings`` accepts, close to its invariant-4 ceiling (0.594 of 0.6):
+# the bound must hold for every accepted config, not only the defaults (Phase 3 review #4).
+NEAR_CEILING = ConfidenceConfig.from_settings(
+    make_settings(
+        confidence_w_self=0.3,
+        confidence_w_retrieval=0.3,
+        confidence_w_agreement=0.21,
+        confidence_w_citations=0.2,
+        confidence_w_rerank=0.0,
+    )
+)
 
 # --- Builders ------------------------------------------------------------------------------------
 
@@ -277,9 +288,14 @@ def test_a_claim_without_a_valid_citation_is_capped(
     ],
     ids=["no_signals", "dense_last", "fts_last", "extreme_low"],
 )
-def test_self_confidence_alone_cannot_pass_point_six(weakest: dict[str, Any]) -> None:
+@pytest.mark.parametrize("config", [CONFIG, NEAR_CEILING], ids=["defaults", "near-ceiling"])
+def test_self_confidence_alone_cannot_pass_point_six(
+    weakest: dict[str, Any], config: ConfidenceConfig
+) -> None:
     # One citation to a chunk at the bottom of the list, one list only, no rerank.
-    result = one(("c1",), {"c1": chunk(1, **weakest)}, self_confidence=1.0, bottom=True)
+    result = one(
+        ("c1",), {"c1": chunk(1, **weakest)}, self_confidence=1.0, bottom=True, config=config
+    )
     assert result.confidence <= 0.6
 
 
@@ -427,10 +443,11 @@ def test_improving_any_one_signal_never_lowers_confidence_in_any_context(
         assert values == sorted(values), (key, base, values)
 
 
+@pytest.mark.parametrize("config", [CONFIG, NEAR_CEILING], ids=["defaults", "near-ceiling"])
 @pytest.mark.parametrize("bottom", [False, True])
 @pytest.mark.parametrize("found_by", ["dense", "fts"])
 def test_a_chunk_found_by_one_list_cannot_pass_point_six_even_with_perfect_signals(
-    found_by: str, bottom: bool
+    found_by: str, bottom: bool, config: ConfidenceConfig
 ) -> None:
     # The self-report bound must not depend on the signals being weak: one list alone cannot
     # corroborate the chunk, so even its best values stay under the line.
@@ -439,7 +456,9 @@ def test_a_chunk_found_by_one_list_cannot_pass_point_six_even_with_perfect_signa
         if found_by == "dense"
         else {"fts_rank": 1, "fts_score": 12.0, "rrf_score": 1.0}
     )
-    result = one(("c1",), {"c1": chunk(1, **perfect)}, self_confidence=1.0, bottom=bottom)
+    result = one(
+        ("c1",), {"c1": chunk(1, **perfect)}, self_confidence=1.0, bottom=bottom, config=config
+    )
     assert result.confidence <= 0.6
     assert result.components["agreement"] == 0.0
 

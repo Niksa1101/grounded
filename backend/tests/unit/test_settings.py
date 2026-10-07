@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from grounded.settings import Settings
+from grounded.settings import SELF_CARRY_CEILING, Settings
 from tests.support import make_settings
 
 
@@ -208,6 +208,54 @@ def test_request_path_defaults_match_tech_md() -> None:
         300.0,
         256,
     )
+
+
+def test_confidence_weights_that_let_the_self_report_carry_a_claim_are_rejected() -> None:
+    # Phase 3 review #4: W_SELF passes its own field cap (0.6), but the weights are relative, so
+    # its share is what counts: (0.6 + 0.1*2/3 + 0.1/2) / 0.9 = 0.796.
+    with pytest.raises(ValidationError, match=r"0\.796, over the 0\.6 ceiling"):
+        make_settings(
+            confidence_w_self=0.6,
+            confidence_w_retrieval=0.1,
+            confidence_w_agreement=0.1,
+            confidence_w_citations=0.1,
+            confidence_w_rerank=0.0,
+        )
+
+
+def test_confidence_weights_cannot_all_be_zero() -> None:
+    zero = {f"confidence_w_{name}": 0.0 for name in ("retrieval", "agreement", "citations")}
+    with pytest.raises(ValidationError, match="must not all be zero"):
+        make_settings(**zero, confidence_w_self=0.0, confidence_w_rerank=0.0)
+
+
+@pytest.mark.parametrize(
+    "weights",
+    [
+        {},  # the defaults: (0.15 + 0.40*2/3 + 0.20/2) / 1.0 = 0.517
+        {  # close to the ceiling: (0.3 + 0.3*2/3 + 0.2/2) / 1.01 = 0.594
+            "confidence_w_self": 0.3,
+            "confidence_w_retrieval": 0.3,
+            "confidence_w_agreement": 0.21,
+            "confidence_w_citations": 0.2,
+            "confidence_w_rerank": 0.0,
+        },
+    ],
+    ids=["defaults", "near-ceiling"],
+)
+def test_confidence_weights_under_the_ceiling_are_accepted(weights: dict[str, float]) -> None:
+    s = make_settings(**weights)
+    total = (
+        s.confidence_w_retrieval
+        + s.confidence_w_agreement
+        + s.confidence_w_citations
+        + s.confidence_w_self
+        + s.confidence_w_rerank
+    )
+    worst = (
+        s.confidence_w_self + s.confidence_w_retrieval * 2 / 3 + s.confidence_w_citations / 2
+    ) / total
+    assert worst <= SELF_CARRY_CEILING
 
 
 def test_k_context_is_limited_to_the_nine_labels_the_citation_grammar_has() -> None:

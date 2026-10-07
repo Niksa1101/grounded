@@ -62,8 +62,10 @@ the config.
    ``0.2``.
 4. *Self-report cannot carry a claim.* With ``self_confidence = 1.0`` and the weakest possible
    retrieval support (one valid citation, to a chunk at the bottom of ``retrieved`` that only one
-   list found, at its last rank, with no rerank score), ``confidence <= 0.6``. This holds for the
-   default config; ``Settings`` caps ``w_self`` at ``0.6`` as a guard.
+   list found, at its last rank, with no rerank score), ``confidence <= 0.6``. ``Settings`` checks
+   this for every config it accepts, not only the default one: the weights are relative, so it
+   computes the worst case below with the configured weights and refuses a config above ``0.6``
+   (``Settings._check_confidence``).
 5. *Monotonic in support.* Changing one thing at a time, none of these may lower ``confidence``:
    a better ``dense_rank`` or ``fts_rank`` (a smaller number), a chunk found by both lists instead
    of one, a higher ``rrf_score``, a smaller ``dense_distance``, a higher ``fts_score``, a higher
@@ -281,7 +283,8 @@ def score_claims(
        ``min(x, 0) = 0``, and ``retrieval <= 2/3`` because the missing list's slot is 0), the
        confidence is at most ``0.15*1 + 0.40*(2/3) + 0.20*(1/2) = 0.517 <= 0.6``. That bound uses
        the best values the one list could have, so it covers the weakest support and everything
-       above it, not only the tested cases.
+       above it, not only the tested cases. ``Settings._check_confidence`` evaluates the same
+       expression with the configured weights, so a config it accepts keeps the bound.
     5. *Monotone.* A weighted mean with non-negative weights does not fall when a component rises,
        so it is enough that every component is non-decreasing in every signal. ``_rank_strength``
        does not rise with the rank (proof there). ``dense_distance`` enters as ``1 - d / 2``.
