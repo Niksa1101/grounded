@@ -34,12 +34,12 @@
   cache key and the log keep the original text.
 
 **Acceptance criteria**
-- [ ] `test_citations.py`: link → text; `[c1](url)` → `[1]`; image → alt; bare URL removed; loopback URL wrapped in
+- [x] `test_citations.py`: link → text; `[c1](url)` → `[1]`; image → alt; bare URL removed; loopback URL wrapped in
       code outside code and untouched inside it; URLs inside fenced code and inline code untouched; counts.
-- [ ] A test shows a question with `<source id="c1">` reaches the prompt as `&lt;source` (fake provider's recorded
+- [x] A test shows a question with `<source id="c1">` reaches the prompt as `&lt;source` (fake provider's recorded
       call).
-- [ ] Integration: `removed_url_count` appears in the "request completed" log line (`caplog`), no question text.
-- [ ] `grounded ask --golden … --fake`: 30/30, 0 URLs removed.
+- [x] Integration: `removed_url_count` appears in the "request completed" log line (`caplog`), no question text.
+- [x] `grounded ask --golden … --fake`: 30/30, 0 URLs removed.
 
 **Verify:** standard checks, the fake golden run above, then the Author's real-provider golden run (phase README).
 

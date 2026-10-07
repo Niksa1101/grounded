@@ -42,6 +42,14 @@ is removed from the text, whether its label is valid or not, and the answer has 
 Only the markers with an invalid label are counted in ``invalid_citation_count``; a valid label
 there is not an error of the model's, it just has no place in a refusal.
 
+**No URLs from the model** (AGENTS.md §6.3, PRD D47). The prompt forbids them, and this module
+enforces it on ``answer_markdown`` (``strip_urls``, before the markers are rewritten): a Markdown
+link or image keeps only its text, an autolink or a bare URL is removed, and every removal is
+counted (``removed_url_count``). The URLs a reader can click are the DB-sourced ``citations``.
+Loopback URLs (``http://127.0.0.1:8000/docs``) are kept but wrapped in inline code: the FastAPI
+docs tell readers to open them, and in code they cannot become links. Fenced code and inline code
+spans are left alone, as for markers. Removing a URL is not bad output and causes no retry.
+
 Snippets are the first ``SNIPPET_CHARS`` characters of the chunk, cut back to a word boundary
 (see ``make_snippet``).
 """
@@ -51,6 +59,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 from grounded.retrieval.types import RetrievedChunk
 from grounded.schemas.api import Citation
@@ -61,6 +70,17 @@ SNIPPET_CHARS = 300
 # Group 1 is the label of a well-formed marker; it is None for a bracket pair with several labels.
 _MARKER = re.compile(r"\[(c\d+)\]|\[c\d+(?:\s*[,;]\s*c\d+)+\]")
 _FENCE = re.compile(r"[ \t]*(`{3,}|~{3,})(.*)")
+
+# An inline code span: a run of backticks, then the shortest text up to a run of the same length.
+_CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
+# ``[text](target)`` or ``![alt](target)``, with an optional title. Group 1 is the text.
+_LINK = re.compile(r"!?\[([^\]\n]*)\]\(\s*<?[^)\s>]*>?(?:\s+\"[^\"]*\")?\s*\)")
+# ``<http://…>`` autolinks and bare ``http(s)://…`` / ``www.…`` URLs, with one space before them so
+# the removal does not leave a double space. Group 1 is the space, group 2 the URL.
+_URL = re.compile(r"( ?)<?((?:https?://|www\.)[^\s<>()\[\]`]+)>?")
+_MARKER_LABEL = re.compile(r"c\d+")
+_TRAILING_PUNCTUATION = ".,;:!?"
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,11 +93,12 @@ class MappedClaim:
 
 @dataclass(frozen=True, slots=True)
 class MappedAnswer:
-    answer_markdown: str  # markers rewritten to [n], invalid ones removed
+    answer_markdown: str  # markers rewritten to [n], invalid ones removed, URLs removed
     claims: tuple[MappedClaim, ...]
     citations: tuple[Citation, ...]  # ordered by n
     invalid_citation_count: int
     dropped_claim_count: int
+    removed_url_count: int  # links and URLs the model wrote (strip_urls)
     bad_output: str | None  # why the answer is unusable, or None when it passed the checks
 
 
@@ -110,7 +131,8 @@ def map_citations(
             return ""  # a valid label, but a refusal cites nothing
         return f"[{number(label)}]"
 
-    markdown = rewrite_markers(answer.answer_markdown, rewrite)
+    stripped, removed_urls = strip_urls(answer.answer_markdown)
+    markdown = rewrite_markers(stripped, rewrite)
 
     claims: list[MappedClaim] = []
     dropped = 0
@@ -139,12 +161,72 @@ def map_citations(
         citations=citations,
         invalid_citation_count=invalid,
         dropped_claim_count=dropped,
+        removed_url_count=removed_urls,
         bad_output=bad_output,
     )
 
 
 def rewrite_markers(markdown: str, replace: Callable[[re.Match[str]], str]) -> str:
     """Apply ``replace`` to every citation marker outside fenced code, in text order."""
+    return _outside_fences(markdown, lambda line: _MARKER.sub(replace, line))
+
+
+def strip_urls(markdown: str) -> tuple[str, int]:
+    """Remove the links and URLs of ``markdown`` outside code; return the text and how many.
+
+    A link or image becomes its text (a marker text such as ``c1`` stays ``[c1]``, so it is still
+    a citation); an autolink or a bare URL is removed together with the space before it; a
+    loopback URL is wrapped in inline code instead and is not counted. Sentence punctuation right
+    after a bare URL stays in the text. Inline code spans are matched per line.
+    """
+    removed = 0
+
+    def link(match: re.Match[str]) -> str:
+        nonlocal removed
+        removed += 1
+        text = match[1]
+        return f"[{text}]" if _MARKER_LABEL.fullmatch(text) else text
+
+    def url(match: re.Match[str]) -> str:
+        nonlocal removed
+        space, target = match[1], match[2]
+        kept = ""
+        while target and target[-1] in _TRAILING_PUNCTUATION:
+            target, kept = target[:-1], target[-1] + kept
+        if _is_loopback(target):
+            return f"{space}`{target}`{kept}"
+        removed += 1
+        return kept
+
+    def text(part: str) -> str:
+        return _URL.sub(url, _LINK.sub(link, part))
+
+    stripped = _outside_fences(markdown, lambda line: _outside_code_spans(line, text))
+    return stripped, removed
+
+
+def _is_loopback(url: str) -> bool:
+    try:
+        host = urlsplit(url if "://" in url else f"http://{url}").hostname
+    except ValueError:  # a malformed URL (e.g. an unclosed IPv6 bracket) is not loopback
+        return False
+    return host in _LOOPBACK_HOSTS
+
+
+def _outside_code_spans(line: str, transform: Callable[[str], str]) -> str:
+    """Apply ``transform`` to the parts of ``line`` that are not inline code spans."""
+    out: list[str] = []
+    start = 0
+    for span in _CODE_SPAN.finditer(line):
+        out.append(transform(line[start : span.start()]))
+        out.append(span[0])
+        start = span.end()
+    out.append(transform(line[start:]))
+    return "".join(out)
+
+
+def _outside_fences(markdown: str, transform: Callable[[str], str]) -> str:
+    """Apply ``transform`` to every line outside fenced code, in text order."""
     out: list[str] = []
     fence: tuple[str, int] | None = None  # (character, length) of the open fence
     for line in markdown.splitlines(keepends=True):
@@ -154,7 +236,7 @@ def rewrite_markers(markdown: str, replace: Callable[[re.Match[str]], str]) -> s
                 fence = (opening[1][0], len(opening[1]))
                 out.append(line)
             else:
-                out.append(_MARKER.sub(replace, line))
+                out.append(transform(line))
         else:
             if (
                 opening

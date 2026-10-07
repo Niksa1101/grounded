@@ -7,6 +7,7 @@ from grounded.generation.citations import (
     MappedAnswer,
     make_snippet,
     map_citations,
+    strip_urls,
 )
 from grounded.retrieval.types import RetrievedChunk
 from grounded.schemas.llm import LLMAnswer, LLMClaim
@@ -133,10 +134,87 @@ def test_several_labels_in_one_bracket_pair_are_removed_and_counted_once(group: 
 
 
 def test_other_bracketed_text_is_prose_and_left_alone() -> None:
-    text = "See [1], [cat], [c], [c1x] and a[c1]b? [link](http://x) [c1]"
+    text = "See [1], [cat], [c], [c1x] and a[c1]b? [c1]"
     result = mapped(text, claim("A", "c1"))
-    assert result.answer_markdown == "See [1], [cat], [c], [c1x] and a[1]b? [link](http://x) [1]"
+    assert result.answer_markdown == "See [1], [cat], [c], [c1x] and a[1]b? [1]"
     assert result.invalid_citation_count == 0
+
+
+# --- URLs the model wrote (PRD D47, AGENTS.md §6.3) -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "removed"),
+    [
+        ("See [the guide](https://example.com/guide).", "See the guide.", 1),
+        ('A [titled](https://example.com "Title") link.', "A titled link.", 1),
+        ("A [relative](../tutorial/) link.", "A relative link.", 1),
+        ("An image ![diagram](https://example.com/d.png) here.", "An image diagram here.", 1),
+        ("Read https://fastapi.tiangolo.com/tutorial/ for more.", "Read for more.", 1),
+        ("Read <https://fastapi.tiangolo.com/> now.", "Read now.", 1),
+        ("At the end: https://example.com/x.", "At the end:.", 1),
+        ("Also www.example.com/page, then more.", "Also, then more.", 1),
+        ("Two: https://a.example and https://b.example", "Two: and", 2),
+        ("No URL here, just [c1] and text.", "No URL here, just [c1] and text.", 0),
+    ],
+)
+def test_links_and_urls_are_removed_and_counted(text: str, expected: str, removed: int) -> None:
+    assert strip_urls(text) == (expected, removed)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Open http://127.0.0.1:8000/docs in your browser.",
+            "Open `http://127.0.0.1:8000/docs` in your browser.",
+        ),
+        ("Go to http://localhost:8000/items/5.", "Go to `http://localhost:8000/items/5`."),
+        ("Bind <http://0.0.0.0:80> here.", "Bind `http://0.0.0.0:80` here."),
+    ],
+)
+def test_loopback_urls_are_kept_as_code_and_not_counted(text: str, expected: str) -> None:
+    # The FastAPI docs tell the reader to open these; in code they cannot become links.
+    assert strip_urls(text) == (expected, 0)
+
+
+def test_urls_inside_code_are_left_alone() -> None:
+    text = (
+        "Call `requests.get('https://api.example.com')` first.\n"
+        "```bash\n"
+        "curl https://api.example.com/items\n"
+        "```\n"
+        "Then https://api.example.com is gone."
+    )
+    stripped, removed = strip_urls(text)
+    assert stripped == (
+        "Call `requests.get('https://api.example.com')` first.\n"
+        "```bash\n"
+        "curl https://api.example.com/items\n"
+        "```\n"
+        "Then is gone."
+    )
+    assert removed == 1
+
+
+def test_a_link_around_a_marker_keeps_the_citation() -> None:
+    result = mapped("Use it. [c1](https://example.com/c1) [c2]", claim("Use it.", "c1", "c2"))
+    assert result.answer_markdown == "Use it. [1] [2]"
+    assert result.removed_url_count == 1
+    assert result.invalid_citation_count == 0
+    # The URLs a reader can click come from the DB rows behind the labels, never from the model.
+    assert [str(c.url) for c in result.citations] == [
+        f"{BASE_URL}#section-101",
+        f"{BASE_URL}#section-102",
+    ]
+
+
+def test_url_removal_is_not_bad_output_and_applies_to_refusals_too() -> None:
+    answered = mapped("See [docs](https://x.example). [c1]", claim("A", "c1"))
+    assert (answered.bad_output, answered.removed_url_count) == (None, 1)
+    refusal = mapped("Not covered; try https://x.example.", status="insufficient_context")
+    assert refusal.answer_markdown == "Not covered; try."
+    assert refusal.removed_url_count == 1
 
 
 # --- fenced code ------------------------------------------------------------------------------
