@@ -173,7 +173,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.10](phase-3/R.10-query-embed-fail-fast.md) | Request-path query embedding fails fast | Build | G | done | [#58](https://github.com/Niksa1101/grounded/pull/58) |
 | [R.11](phase-3/R.11-answer-cache-fixes.md) | Answer cache: replace a stale row, key on the generation parameters | Build | G | done | [#59](https://github.com/Niksa1101/grounded/pull/59) |
 | [R.12](phase-3/R.12-confidence-weight-guard.md) | Settings guard for confidence invariant 4 | Build | G (A reviews) | done | [#60](https://github.com/Niksa1101/grounded/pull/60) |
-| [R.13](phase-3/R.13-retry-feedback.md) | Compact retry feedback and the tokens of failed attempts | Build | G | done | |
+| [R.13](phase-3/R.13-retry-feedback.md) | Compact retry feedback and the tokens of failed attempts | Build | G | done | [#61](https://github.com/Niksa1101/grounded/pull/61) |
 | [R.14](phase-3/R.14-answer-text-safety.md) | URLs in the answer, and the question escaped in the prompt | Build | G | todo | |
 | [R.15](phase-3/R.15-review-polish.md) | Small hardening and documentation drift | Build | G | todo | |
 | **4** | **[Generation eval + CI quality gate](phase-4/README.md)** | | | | |
