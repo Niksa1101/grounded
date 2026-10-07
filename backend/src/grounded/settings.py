@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     # returns, so tuning them must not change retrieval_config_hash.
     active_index_ttl_s: float = Field(default=300.0, gt=0)  # DB.md §7.3
     query_embedding_cache_size: int = Field(default=256, gt=0)  # in-memory LRU, prod (Tech.md §11)
+    # The embed stage timeout of /v1/ask (Tech.md §6): one attempt, no retry, no sleep (§10).
+    query_embedding_timeout_s: float = Field(default=3.0, gt=0)
 
     # --- Confidence (generation/confidence.py, Tech §9.8) -------------------------------------
     # Relative importance of each signal. The defaults sum to 1.0 so they read as shares; the

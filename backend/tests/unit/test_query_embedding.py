@@ -2,12 +2,21 @@
 
 from __future__ import annotations
 
+from contextlib import AsyncExitStack
+from pathlib import Path
+
 import pytest
 
 from grounded.generation.providers.fake import StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
-from grounded.ingest.embed import FakeEmbedder
-from grounded.retrieval.query_embedding import LRUEmbedder
+from grounded.ingest.embed import (
+    CachedEmbedder,
+    Embedder,
+    FakeEmbedder,
+    GeminiEmbedder,
+    LazyEmbedder,
+)
+from grounded.retrieval.query_embedding import LRUEmbedder, build_query_embedder
 from grounded.runtime import ProviderConfigError, build_provider
 from tests.support import make_settings
 
@@ -48,6 +57,39 @@ async def test_least_recently_used_entry_is_evicted() -> None:
     await embedder.embed(["a"], "RETRIEVAL_QUERY")  # still cached
     await embedder.embed(["b"], "RETRIEVAL_QUERY")  # embedded again
     assert [texts for texts, _ in inner.calls] == [["a"], ["b"], ["c"], ["b"]]
+
+
+_PROD = {
+    "app_env": "prod",
+    "database_url": "postgresql://app@db/grounded",
+    "proxy_shared_secret": "x" * 32,
+    "ip_hash_secret": "y" * 32,
+}
+
+
+def _gemini_behind(embedder: Embedder) -> GeminiEmbedder:
+    """Unwrap the cache and the lazy wrapper, building the Gemini embedder (no network)."""
+    assert isinstance(embedder, LRUEmbedder | CachedEmbedder)
+    lazy = embedder._inner  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(lazy, LazyEmbedder)
+    built = lazy._factory()  # pyright: ignore[reportPrivateUsage]
+    assert isinstance(built, GeminiEmbedder)
+    return built
+
+
+@pytest.mark.parametrize("env", ["dev", "prod"])
+async def test_the_request_path_embedder_never_retries_or_paces(env: str, tmp_path: Path) -> None:
+    overrides = _PROD if env == "prod" else {"app_env": env}
+    settings = make_settings(
+        gemini_api_key="k", query_embedding_timeout_s=2.5, cache_dir=tmp_path, **overrides
+    )
+    async with AsyncExitStack() as stack:
+        gemini = _gemini_behind(build_query_embedder(settings, stack))
+    assert (
+        gemini._max_retries,  # pyright: ignore[reportPrivateUsage]
+        gemini._timeout_s,  # pyright: ignore[reportPrivateUsage]
+        gemini._paced,  # pyright: ignore[reportPrivateUsage]
+    ) == (0, 2.5, False)
 
 
 def test_the_fake_provider_is_available_outside_prod() -> None:

@@ -65,14 +65,19 @@ class LRUEmbedder:
 
 def build_query_embedder(settings: Settings, stack: AsyncExitStack) -> Embedder:
     """The embedder the request path uses: Gemini, built lazily so no key is needed while every
-    question is cached, behind the cache Tech §11 names for this environment."""
+    question is cached, behind the cache Tech §11 names for this environment.
+
+    It is the request-path variant (``GeminiEmbedder.for_request_path``): one attempt, no pacing,
+    no sleep. A rate limit reaches the caller at once; ``grounded ask --golden`` waits it out in the
+    CLI layer (``evals/ask_batch.py``), never in here.
+    """
     gemini = LazyEmbedder(
         settings.embedding_model,
         settings.embedding_dim,
         # Characters stand in for tokens: a question is at most 500 characters (AskRequest), so the
         # estimate only has to stay under the limits, and loading tiktoken (a file read, possibly a
         # download) inside the request path is not worth the precision.
-        lambda: GeminiEmbedder.from_settings(settings, len),
+        lambda: GeminiEmbedder.for_request_path(settings, len),
     )
     if settings.app_env == "prod":
         return LRUEmbedder(gemini, max_size=settings.query_embedding_cache_size)

@@ -160,6 +160,7 @@ or with `ALLOW_DIRECT_API=true`.
 | `CONFIDENCE_W_RETRIEVAL`, `CONFIDENCE_W_AGREEMENT`, `CONFIDENCE_W_CITATIONS`, `CONFIDENCE_W_SELF`, `CONFIDENCE_W_RERANK` | `0.40`, `0.25`, `0.20`, `0.15`, `0.0` | relative weights of the confidence signals (§9.8), each in `[0, 1]`; `W_SELF` at most `0.6`; `W_RERANK` stays `0` until Phase 6 measures the rerank lift. Proposed in 3.09, kept in 3.10 |
 | `CONFIDENCE_UNCITED_CAP` | `0.2` | most a claim without a valid citation can score; at most `0.2` (§9.8 invariant) |
 | `QUERY_EMBEDDING_CACHE_SIZE` | `256` | prod only: size of the in-memory LRU of question vectors (§11); dev/CI/eval use SQLite |
+| `QUERY_EMBEDDING_TIMEOUT_S` | `3.0` | the embed stage of `/v1/ask` (§6): one attempt, no retry, no pacing; the `EMBEDDING_*` retry settings apply to ingest and the evals only |
 | `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `30` | per IP hash |
 | `DAILY_LLM_BUDGET` | below provider free RPD | global cap; optional until Phase 5 |
 | `ANSWER_CACHE_TTL_DAYS` | `30` | ≤ retention |
@@ -302,6 +303,9 @@ sequenceDiagram
 ```
 
 Stage timeouts (defaults): embed 3 s · retrieval 2 s · rerank 3 s · each LLM attempt 12 s · overall deadline `REQUEST_DEADLINE_S` = 25 s.
+The query embedding is one attempt within `QUERY_EMBEDDING_TIMEOUT_S` (`GeminiEmbedder.for_request_path`): no pacing window and
+no retry, because both sleep (§10). A 429, 5xx or timeout fails the request at once as a 503 `provider_unavailable`
+(with `Retry-After` for a 429). The golden batch (§15.8) waits out a per-minute 429 in the CLI layer instead.
 Every stage is wrapped in `StageTimer.stage("name")` (`infra/timing.py`, §14) that fills the latency fields.
 
 ## 7. Retrieval
@@ -498,7 +502,7 @@ Requirements:
 | Cache | Store | Key | Used in | TTL |
 |---|---|---|---|---|
 | Answer cache | Postgres `answer_cache` | sha256(normalized question \| prompt_version \| index_version_id \| retrieval_config_hash \| generator_model \| confidence_config_hash) | prod/dev (off in eval and in `no_rag`) | `ANSWER_CACHE_TTL_DAYS` (≤ 30 days) |
-| Query embedding | in-memory LRU (prod), SQLite (dev/CI/eval) | (model, dim, RETRIEVAL_QUERY, sha256(question)) | all | process lifetime / persistent |
+| Query embedding | in-memory LRU (prod), SQLite (dev/CI/eval), in front of the request-path embedder (§6: one attempt, no sleep) | (model, dim, RETRIEVAL_QUERY, sha256(question)) | all | process lifetime / persistent |
 | Chunk embedding | SQLite `.cache/embeddings.sqlite` | (model, dim, RETRIEVAL_DOCUMENT, content_hash) | ingest | persistent |
 | Rerank | SQLite `.cache/rerank.sqlite` | sha256(model \| query \| candidate hashes) | dev/CI/eval | persistent |
 | Eval LLM responses | SQLite `.cache/llm_eval.sqlite` | sha256(provider \| model \| temperature \| system \| user \| schema hash) | eval only | persistent |

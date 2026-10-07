@@ -468,6 +468,63 @@ async def test_rejected_requests_count_against_the_window() -> None:
     assert time.sleeps == [1.0, 59.0]
 
 
+# --- GeminiEmbedder: the request path (paced=False, no retry) ------------------------------------
+
+
+async def _must_not_sleep(seconds: float) -> None:
+    raise AssertionError(f"the request-path embedder slept {seconds}s")
+
+
+def _request_path_embedder(models: _FakeModels, **overrides: Any) -> GeminiEmbedder:
+    """What ``for_request_path`` builds, over the fake client, with a ``sleep`` that fails."""
+    options: dict[str, Any] = {"max_retries": 0, "paced": False, "sleep": _must_not_sleep}
+    return _embedder(models, **(options | overrides))
+
+
+async def test_the_request_path_raises_a_per_minute_rate_limit_without_sleeping() -> None:
+    models = _FakeModels([_rate_limited(retry_delay="50s", quota_id=_PER_MINUTE)])
+
+    with pytest.raises(ProviderRateLimited) as excinfo:
+        await _request_path_embedder(models).embed(["a"], "RETRIEVAL_QUERY")
+
+    assert excinfo.value.retry_after_s == 50.0  # passed on, so the API can send Retry-After
+    assert excinfo.value.is_quota is False
+    assert len(models.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        pytest.param(_api_error(503, "UNAVAILABLE"), ProviderUnavailable, id="5xx"),
+        pytest.param(httpx.ConnectError("reset"), ProviderUnavailable, id="transport"),
+        pytest.param(httpx.ReadTimeout("slow"), ProviderTimeout, id="timeout"),
+    ],
+)
+async def test_the_request_path_raises_retryable_errors_at_once(
+    error: BaseException, expected: type[Exception]
+) -> None:
+    models = _FakeModels([error])
+    with pytest.raises(expected):
+        await _request_path_embedder(models).embed(["a"], "RETRIEVAL_QUERY")
+    assert len(models.calls) == 1
+
+
+async def test_an_unpaced_embedder_sends_past_a_full_window() -> None:
+    models = _FakeModels([])
+    embedder = _request_path_embedder(models, rpm=1, batch_size=1)
+
+    await embedder.embed(["a"], "RETRIEVAL_QUERY")
+    await embedder.embed(["b"], "RETRIEVAL_QUERY")  # a paced embedder would wait 60 s here
+
+    assert len(models.calls) == 2
+
+
+async def test_the_request_path_timeout_cancels_a_hanging_call() -> None:
+    models = _FakeModels([_NeverReturns()])
+    with pytest.raises(ProviderTimeout):
+        await _request_path_embedder(models, timeout_s=0.01).embed(["a"], "RETRIEVAL_QUERY")
+
+
 # --- GeminiEmbedder: construction -----------------------------------------------------------------
 
 
@@ -500,6 +557,33 @@ def test_from_settings_builds_without_network() -> None:
     settings = make_settings(gemini_api_key="k", embedding_model="gemini-embedding-001")
     embedder = GeminiEmbedder.from_settings(settings, _words)
     assert (embedder.model, embedder.dim) == ("gemini-embedding-001", 768)
+
+
+def _retry_policy(embedder: GeminiEmbedder) -> tuple[int, float, bool]:
+    return (
+        embedder._max_retries,  # pyright: ignore[reportPrivateUsage]
+        embedder._timeout_s,  # pyright: ignore[reportPrivateUsage]
+        embedder._paced,  # pyright: ignore[reportPrivateUsage]
+    )
+
+
+def test_from_settings_paces_and_retries_for_ingest() -> None:
+    settings = make_settings(gemini_api_key="k", embedding_max_retries=4, embedding_timeout_s=20.0)
+    assert _retry_policy(GeminiEmbedder.from_settings(settings, _words)) == (4, 20.0, True)
+
+
+def test_for_request_path_makes_one_unpaced_attempt_within_the_stage_timeout() -> None:
+    settings = make_settings(
+        gemini_api_key="k", embedding_max_retries=4, query_embedding_timeout_s=1.5
+    )
+    embedder = GeminiEmbedder.for_request_path(settings, _words)
+    assert _retry_policy(embedder) == (0, 1.5, False)
+    assert (embedder.model, embedder.dim) == (settings.embedding_model, settings.embedding_dim)
+
+
+def test_for_request_path_requires_a_key() -> None:
+    with pytest.raises(EmbedderUnavailableError, match="GEMINI_API_KEY must be set"):
+        GeminiEmbedder.for_request_path(make_settings(gemini_api_key=""), _words)
 
 
 # --- FakeEmbedder ---------------------------------------------------------------------------------
