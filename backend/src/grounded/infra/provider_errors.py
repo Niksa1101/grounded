@@ -41,6 +41,10 @@ class ProviderBadOutput(ProviderError):
     not ``Usage``, so this module does not depend on the generation package; 0 means "not
     reported" (an embedding error, or an error raised by our own checks after the usage was
     already counted).
+
+    ``retryable`` is False when the same request would fail the same way (a prompt or an answer
+    blocked by the provider's content filter): the retry of Tech §9.5 is then skipped, since it
+    would only spend a request of the daily quota.
     """
 
     def __init__(
@@ -51,12 +55,14 @@ class ProviderBadOutput(ProviderError):
         validation_error: str = "",
         input_tokens: int = 0,
         output_tokens: int = 0,
+        retryable: bool = True,
     ) -> None:
         super().__init__(message)
         self.raw = raw
         self.validation_error = validation_error
         self.input_tokens = input_tokens
         self.output_tokens = output_tokens
+        self.retryable = retryable
 
 
 def compact_validation_error(exc: ValidationError) -> str:

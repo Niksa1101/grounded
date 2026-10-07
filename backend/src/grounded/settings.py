@@ -34,11 +34,11 @@ _LOCAL_TEST_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/ground
 # not the working directory, so no stray .env above the repo can leak in. In a deployed install the
 # path doesn't exist and is ignored: Vercel and CI use real env vars.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+_ENV_FILE = _REPO_ROOT / ".env"
 
 # Confidence invariant 4 (Tech §9.8): a claim whose only strong signal is the model's self-report,
 # backed by the weakest retrieval support, must not score above this. See ``_check_confidence``.
 SELF_CARRY_CEILING = 0.6
-_ENV_FILE = _REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):
@@ -175,8 +175,8 @@ class Settings(BaseSettings):
             self._check_prod()
         return self
 
-    def _check_confidence(self) -> None:
-        """Keep confidence invariant 4 true for *this* config, not only for the defaults.
+    def self_carry_worst_case(self) -> float:
+        """The highest confidence a claim carried by the self-report can reach with these weights.
 
         The heuristic is a weighted mean divided by the sum of the weights (``score_claims`` in
         ``generation/confidence.py``), so a cap on ``w_self`` alone guarantees nothing: what counts
@@ -184,8 +184,25 @@ class Settings(BaseSettings):
         for: ``self_confidence = 1``; one valid citation, so ``citations = 1/2``; a chunk found by
         one list only, so ``agreement = 0`` and ``retrieval <= 2/3`` (the missing list's slot is
         0); rerank off, so ``rerank = 0``. The bound uses the best values that one list could
-        have, so it covers every weaker support too.
+        have, so it covers every weaker support too, and it is reached (a list of one chunk, at
+        rank 1 with a perfect score). ``test_confidence.py`` pins it against ``score_claims``, so
+        this copy of the formula cannot drift from the heuristic unnoticed.
         """
+        total = (
+            self.confidence_w_retrieval
+            + self.confidence_w_agreement
+            + self.confidence_w_citations
+            + self.confidence_w_self
+            + self.confidence_w_rerank
+        )
+        return (
+            self.confidence_w_self
+            + self.confidence_w_retrieval * 2 / 3
+            + self.confidence_w_citations / 2
+        ) / total
+
+    def _check_confidence(self) -> None:
+        """Keep confidence invariant 4 true for *this* config, not only for the defaults."""
         weights = (
             self.confidence_w_retrieval,
             self.confidence_w_agreement,
@@ -193,14 +210,9 @@ class Settings(BaseSettings):
             self.confidence_w_self,
             self.confidence_w_rerank,
         )
-        total = sum(weights)
-        if total <= 0.0:
+        if sum(weights) <= 0.0:
             raise ValueError("CONFIDENCE_W_* must not all be zero: every claim would score 0")
-        worst = (
-            self.confidence_w_self
-            + self.confidence_w_retrieval * 2 / 3
-            + self.confidence_w_citations / 2
-        ) / total
+        worst = self.self_carry_worst_case()
         if worst > SELF_CARRY_CEILING:
             raise ValueError(
                 f"CONFIDENCE_W_* let the self-report carry a weakly supported claim to "

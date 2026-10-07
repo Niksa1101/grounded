@@ -24,7 +24,9 @@ Facts verified on 2026-10-06 against the installed ``google-genai`` 2.25.0 and G
 A reply that fails validation was still billed, so ``ProviderBadOutput`` carries its usage. Its
 ``validation_error`` is written for the retry (``compact_validation_error``); a reply cut off at
 ``max_output_tokens`` (``finish_reason=MAX_TOKENS``) gets ``TRUNCATED_FEEDBACK`` instead, because
-the JSON error alone would not tell the model that the answer was too long.
+the JSON error alone would not tell the model that the answer was too long. A prompt the content
+filter blocked (no candidate), or an answer it stopped (``_CONTENT_FILTER_REASONS``), is not
+retryable: the same request would be stopped again.
 """
 
 from __future__ import annotations
@@ -58,6 +60,10 @@ TRUNCATED_FEEDBACK = (
     "the answer was cut off at the output token limit before the JSON was complete; "
     "write a shorter answer with fewer, shorter claims"
 )
+
+# The finish reasons of a content filter (``google-genai`` 2.25.0 ``FinishReason``, checked on
+# 2026-10-07). ``RECITATION`` is left out: a resampled answer may quote less, so the retry can help.
+_CONTENT_FILTER_REASONS = frozenset({"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"})
 
 # The JSON Schema keywords Gemini documents for ``response_json_schema`` (see the module docstring).
 _SUPPORTED_KEYWORDS = frozenset(
@@ -195,6 +201,7 @@ def _response_text(response: genai_types.GenerateContentResponse, usage: Usage) 
             f"Gemini returned no candidate (prompt block reason: {reason or 'none'})",
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
+            retryable=False,
         )
     parts = response.candidates[0].content.parts if response.candidates[0].content else None
     # Thought parts (if any) are not part of the answer; ``include_thoughts`` is never set.
@@ -219,6 +226,7 @@ def _validate[T: BaseModel](raw: str, schema: type[T], finish_reason: str, usage
             validation_error=TRUNCATED_FEEDBACK if truncated else compact_validation_error(exc),
             input_tokens=usage.input_tokens,
             output_tokens=usage.output_tokens,
+            retryable=finish_reason not in _CONTENT_FILTER_REASONS,
         ) from exc
 
 

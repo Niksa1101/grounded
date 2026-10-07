@@ -263,6 +263,7 @@ async def test_a_truncated_answer_is_bad_output_and_names_the_finish_reason() ->
     with pytest.raises(ProviderBadOutput, match="MAX_TOKENS") as caught:
         await _generate(provider)
     assert caught.value.validation_error == TRUNCATED_FEEDBACK  # quoted back by the retry
+    assert caught.value.retryable  # a shorter answer can fit
 
 
 async def test_text_that_is_not_json_is_bad_output() -> None:
@@ -312,6 +313,22 @@ async def test_a_blocked_prompt_with_no_candidate_is_bad_output() -> None:
     with pytest.raises(ProviderBadOutput, match="SAFETY") as caught:
         await _generate(provider)
     assert (caught.value.input_tokens, caught.value.output_tokens) == (91, 0)
+    # The same prompt would be blocked again: a retry only spends a request of the daily quota.
+    assert not caught.value.retryable
+
+
+@pytest.mark.parametrize("reason", ["SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"])
+async def test_an_answer_stopped_by_a_content_filter_is_bad_output_without_a_retry(
+    reason: str,
+) -> None:
+    response = _response("success")
+    assert response.candidates
+    response.candidates[0].finish_reason = genai_types.FinishReason[reason]
+    response.candidates[0].content = genai_types.Content(parts=[])
+    provider, _, _ = _provider(response)
+    with pytest.raises(ProviderBadOutput, match=reason) as caught:
+        await _generate(provider)
+    assert not caught.value.retryable
 
 
 # --- Error mapping ------------------------------------------------------------------------------

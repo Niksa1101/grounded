@@ -326,9 +326,11 @@ class AskPipeline:
         Bad output is either a schema failure raised by the adapter or a semantic failure from the
         citation checks (Tech §9.5). The retry's user message is the original one plus the
         prompt's "Retry feedback" section with the reason filled in. A second failure propagates
-        as ``ProviderBadOutput`` (HTTP 502). Rate limits, 5xx and timeouts are not bad output and
-        propagate straight away, on the retry as well. There is no loop, no sleep, and no fallback
-        yet: 7.04 moves this whole step into the router, which then falls back instead of failing.
+        as ``ProviderBadOutput`` (HTTP 502), and so does a first one the adapter marks not
+        ``retryable`` (a content-filter block, which the same request would hit again). Rate
+        limits, 5xx and timeouts are not bad output and propagate straight away, on the retry as
+        well. There is no loop, no sleep, and no fallback yet: 7.04 moves this whole step into the
+        router, which then falls back instead of failing.
 
         ``require_citations=False`` (``no_rag``) turns the zero-valid-citations check off, so only a
         schema failure can cause the retry.
@@ -361,7 +363,7 @@ class AskPipeline:
                     trace.add_usage(
                         Usage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens)
                     )
-                if trace.validation_retries >= MAX_VALIDATION_RETRIES:
+                if not exc.retryable or trace.validation_retries >= MAX_VALIDATION_RETRIES:
                     raise
                 trace.validation_retries += 1
                 logger.info(
