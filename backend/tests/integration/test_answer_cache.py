@@ -23,7 +23,9 @@ from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.infra.answer_cache import AnswerCache, CacheKey
 from grounded.infra.db import create_pool
 from grounded.infra.provider_errors import ProviderBadOutput, ProviderRateLimited
+from grounded.infra.timing import StageTimer
 from grounded.ingest.embed import FakeEmbedder
+from grounded.observability.request_log import RequestTrace
 from grounded.runtime import open_runtime
 from grounded.schemas.api import AskResponse
 from grounded.schemas.llm import AnswerStatus, LLMAnswer, LLMClaim
@@ -357,6 +359,43 @@ async def test_a_row_that_no_longer_fits_the_schema_is_a_miss_and_is_replaced(en
     assert len(llm.calls) == 2
     [row] = cached(env)
     assert row["hit_count"] == 1
+
+
+async def test_a_row_that_is_not_a_json_object_is_a_miss_and_is_replaced(env: Env) -> None:
+    llm = FakeLLMProvider([good(), good()])
+    await post(env, llm)
+    with psycopg.connect(env.url, autocommit=True) as conn:
+        conn.execute("UPDATE answer_cache SET response = '[1, 2]'::jsonb")
+
+    [again] = await post(env, llm)
+
+    assert not body_of(again).meta.cache_hit
+    assert len(llm.calls) == 2
+    [row] = cached(env)
+    assert isinstance(row["response"], dict)  # replaced by the fresh answer
+    [third] = await post(env, llm)
+    assert body_of(third).meta.cache_hit
+
+
+async def test_the_cache_lookup_is_a_miss_when_the_cache_is_off(env: Env) -> None:
+    # Eval mode has no cache; the lookup helper must answer "miss", not fail (it used to assert).
+    settings = make_settings(database_url=env.url, app_env="eval")
+    async with open_runtime(
+        settings, embedder=FakeEmbedder(dim=EMBEDDING_DIM), provider=FakeLLMProvider([])
+    ) as runtime:
+        key = CacheKey.build(
+            QUESTION,
+            prompt_version="answer_v1@aaaaaaaa",
+            index_version_id=env.version_id,
+            retrieval_config_hash="r" * 64,
+            generator_model="fake-model",
+            confidence=ConfidenceConfig.from_settings(settings),
+            generation=GenerationParams.from_settings(settings, "fake"),
+        )
+        trace = RequestTrace(request_id=uuid4(), timer=StageTimer())
+        lookup = runtime.pipeline._cached_response  # pyright: ignore[reportPrivateUsage]
+        assert await lookup(key, trace.request_id, trace, "0.0.1@abcdef12") is None
+    assert cached(env) == []
 
 
 @pytest.mark.parametrize(

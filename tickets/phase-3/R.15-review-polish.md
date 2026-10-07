@@ -24,9 +24,9 @@
   goes with the deadline work of 5.02 (PRD §12).
 
 **Acceptance criteria**
-- [ ] No `assert` left in `api/`, `generation/pipeline.py` or `infra/answer_cache.py`; each replacement has a test.
-- [ ] The `ProviderRequestRejected` test above.
-- [ ] Docs updated as listed.
+- [x] No `assert` left in `api/`, `generation/pipeline.py` or `infra/answer_cache.py`; each replacement has a test.
+- [x] The `ProviderRequestRejected` test above.
+- [x] Docs updated as listed.
 
 **Verify:** standard checks.
 

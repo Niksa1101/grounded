@@ -29,7 +29,11 @@ class AskRoute(APIRoute):
             trace = request_logger.start(request_id_of(request))
             request.state.trace = trace
             response = await handle(request)  # a failure raises and is logged by its handler
-            assert trace.status is not None  # the pipeline sets it whenever it returns an answer
+            if trace.status is None:
+                # The pipeline sets it whenever it returns an answer, so this is a bug. Raised (not
+                # asserted, which ``python -O`` would strip) so the internal-error handler logs it
+                # and writes the row instead of a row with no outcome.
+                raise RuntimeError("the pipeline returned an answer without setting trace.status")
             await request_logger.write(
                 trace, outcome=trace.status, http_status=response.status_code
             )

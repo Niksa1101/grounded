@@ -72,7 +72,8 @@ async def _fail(
 
 
 async def _bad_request(request: Request, exc: Exception) -> JSONResponse:
-    assert isinstance(exc, RequestValidationError)
+    if not isinstance(exc, RequestValidationError):  # registered for that type only
+        return await _internal_error(request, exc)
     trace: RequestTrace | None = getattr(request.state, "trace", None)
     if trace is not None:
         # The rejected question is not stored, but its hash is: dedup stats see it all the same.

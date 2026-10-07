@@ -175,7 +175,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.12](phase-3/R.12-confidence-weight-guard.md) | Settings guard for confidence invariant 4 | Build | G (A reviews) | done | [#60](https://github.com/Niksa1101/grounded/pull/60) |
 | [R.13](phase-3/R.13-retry-feedback.md) | Compact retry feedback and the tokens of failed attempts | Build | G | done | [#61](https://github.com/Niksa1101/grounded/pull/61) |
 | [R.14](phase-3/R.14-answer-text-safety.md) | URLs in the answer, and the question escaped in the prompt | Build | G | in-progress (waits for the real golden run) | |
-| [R.15](phase-3/R.15-review-polish.md) | Small hardening and documentation drift | Build | G | todo | |
+| [R.15](phase-3/R.15-review-polish.md) | Small hardening and documentation drift | Build | G | done | |
 | **4** | **[Generation eval + CI quality gate](phase-4/README.md)** | | | | |
 | [4.01](phase-4/4.01-decision-groq-promptfoo.md) | Decision: Groq and judge models, promptfoo version and test loading | Decision | D | todo | |
 | [4.02](phase-4/4.02-groq-provider.md) | `GroqProvider` adapter | Build | G | todo | |
