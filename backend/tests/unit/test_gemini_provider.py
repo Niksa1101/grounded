@@ -1,9 +1,9 @@
 """``GeminiProvider`` against recorded-shape fixtures and a fake SDK client (no network).
 
-The ``generate_*.json`` fixtures are SYNTHETIC until the Author re-records them
-(``tests/fixtures/gemini/record_generate_fixture.py``); each carries ``"_synthetic": true``. The
-shapes come from the SDK's own response and error types, so the tests keep their meaning when the
-files are replaced by real recordings.
+``generate_success.json`` and ``generate_invalid_output.json`` are REAL recordings (2026-10-07,
+``tests/fixtures/gemini/record_generate_fixture.py``). The three error fixtures (429 per minute, 429
+daily quota, 500) are still SYNTHETIC (``"_synthetic": true``): those errors can't be produced on
+demand without hammering the quota. Their shapes come from the SDK's own error types.
 """
 
 from __future__ import annotations
@@ -144,20 +144,25 @@ async def test_a_valid_response_is_parsed_into_the_schema() -> None:
 
 
 async def test_usage_counts_thinking_tokens_as_output() -> None:
-    # Fixture: 1234 prompt, 210 candidates, 40 thoughts. Gemini keeps thoughts out of the
-    # candidates count but bills them as output, so output_tokens is their sum.
-    provider, _, _ = _provider(_response("success"))
+    # Recording: 91 prompt, 143 candidates. At level ``minimal`` Gemini reported no thoughts, so the
+    # 40 here is set on the response to exercise the rule: thoughts are kept out of the candidates
+    # count but billed as output, so output_tokens is their sum.
+    response = _response("success")
+    assert response.usage_metadata is not None
+    response.usage_metadata.thoughts_token_count = 40
+    provider, _, _ = _provider(response)
     usage = (await _generate(provider)).usage
-    assert (usage.input_tokens, usage.output_tokens, usage.thinking_tokens) == (1234, 250, 40)
+    assert (usage.input_tokens, usage.output_tokens, usage.thinking_tokens) == (91, 183, 40)
 
 
 async def test_missing_thoughts_count_means_no_thinking() -> None:
+    # The recording is exactly this case: at level ``minimal`` the usage has no thoughts count.
     response = _response("success")
     assert response.usage_metadata is not None
-    response.usage_metadata.thoughts_token_count = None
+    assert response.usage_metadata.thoughts_token_count is None
     provider, _, _ = _provider(response)
     usage = (await _generate(provider)).usage
-    assert (usage.output_tokens, usage.thinking_tokens) == (210, 0)
+    assert (usage.output_tokens, usage.thinking_tokens) == (143, 0)
 
 
 async def test_missing_usage_metadata_counts_zero_tokens() -> None:
@@ -210,12 +215,29 @@ async def test_aclose_closes_the_sdk_client() -> None:
 async def test_a_schema_valid_but_constraint_violating_answer_is_bad_output() -> None:
     # The citation label ``c12`` breaks a pattern Gemini never saw (it is not sent), so only the
     # Pydantic validation after the call can catch it (AGENTS.md §6.2).
-    provider, _, _ = _provider(_response("invalid_output"))
+    response = _response("success")
+    assert response.candidates
+    parts = response.candidates[0].content.parts if response.candidates[0].content else []
+    assert parts
+    parts[0].text = (
+        '{"status": "answered", "answer_markdown": "Use add_task [c12].", "claims": '
+        '[{"text": "Use add_task.", "citation_ids": ["c12"], "self_confidence": 1.0}], '
+        '"follow_up_questions": []}'
+    )
+    provider, _, _ = _provider(response)
     with pytest.raises(ProviderBadOutput) as caught:
         await _generate(provider)
     assert "c12" in caught.value.validation_error
     assert "citation_ids" in caught.value.validation_error
     assert caught.value.raw.startswith('{"status"')
+
+
+async def test_the_recorded_truncated_answer_is_bad_output() -> None:
+    # Real recording: ``max_output_tokens`` far too small, so the JSON is cut off mid-string.
+    provider, _, _ = _provider(_response("invalid_output"))
+    with pytest.raises(ProviderBadOutput, match="MAX_TOKENS") as caught:
+        await _generate(provider)
+    assert "json_invalid" in caught.value.validation_error
 
 
 async def test_a_truncated_answer_is_bad_output_and_names_the_finish_reason() -> None:
