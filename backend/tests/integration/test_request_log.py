@@ -20,13 +20,19 @@ from psycopg.rows import dict_row
 from pydantic import BaseModel
 
 import grounded.observability.request_log
+from grounded.generation.pipeline import AskMode, AskPipeline
 from grounded.generation.providers.base import GenerationResult, Usage
 from grounded.generation.providers.fake import FakeLLMProvider, ScriptStep
 from grounded.infra.hashing import question_hash
 from grounded.infra.logging import JsonFormatter
-from grounded.infra.provider_errors import ProviderBadOutput, ProviderRateLimited
+from grounded.infra.provider_errors import (
+    ProviderBadOutput,
+    ProviderRateLimited,
+    ProviderRequestRejected,
+)
 from grounded.ingest.embed import FakeEmbedder, TaskType, Vector
 from grounded.observability.cost import PricingError
+from grounded.observability.request_log import RequestTrace
 from grounded.runtime import open_runtime
 from grounded.schemas.api import AskResponse
 from grounded.schemas.llm import LLMAnswer, LLMClaim
@@ -386,6 +392,61 @@ async def test_an_internal_error_is_logged(env: Env) -> None:
     assert row["question"] == QUESTION
     assert row["index_version_id"] == env.version_id
     assert row["latency_embed_ms"] is None  # refused before the embedding
+
+
+async def test_a_rejected_provider_request_is_a_500_internal_error_without_details(
+    env: Env,
+) -> None:
+    # A 4xx other than 429 (a bad key, a bad request) is our fault and not retryable; until the
+    # router exists it is "anything else" in Tech §13: 500 internal_error, logged with request_id.
+    rejected = ProviderRequestRejected(
+        "Gemini API 400 INVALID_ARGUMENT: secret-detail", status_code=400
+    )
+    response, llm = await post(env, [rejected], raise_app_exceptions=False)
+
+    assert response.status_code == 500
+    body = response.json()
+    assert body["error"] == {
+        "code": "internal_error",
+        "message": "Internal error.",
+        "retry_after_s": None,
+    }
+    assert "secret-detail" not in response.text
+    assert len(llm.calls) == 1  # not bad output: no retry
+    row = one_row(env)
+    assert (row["outcome"], row["http_status"], row["error_code"]) == (
+        "internal_error",
+        500,
+        "internal_error",
+    )
+
+
+async def test_an_answer_without_a_status_on_the_trace_is_an_internal_error(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A pipeline bug: an answer is returned but the trace has no status. It used to be an assert
+    # (stripped under python -O); now it is raised, logged and written as an internal_error row.
+    original = AskPipeline.ask
+
+    async def forgetful(
+        self: AskPipeline,
+        question: str,
+        request_id: UUID,
+        *,
+        mode: AskMode = AskMode.HYBRID,
+        trace: RequestTrace | None = None,
+    ) -> AskResponse:
+        response = await original(self, question, request_id, mode=mode, trace=trace)
+        assert trace is not None
+        trace.status = None
+        return response
+
+    monkeypatch.setattr(AskPipeline, "ask", forgetful)
+    response, _ = await post(env, [good()], raise_app_exceptions=False)
+
+    assert response.status_code == 500
+    assert response.json()["error"]["code"] == "internal_error"
+    assert one_row(env)["outcome"] == "internal_error"
 
 
 async def test_no_active_index_is_logged_as_an_internal_error(env: Env) -> None:

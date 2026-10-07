@@ -36,7 +36,7 @@ import hashlib
 import json
 import logging
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 from psycopg.types.json import Jsonb
@@ -172,9 +172,14 @@ class AnswerCache:
             return None
         if row is None:
             return None
-        stored = row[0]
-        assert isinstance(stored, dict)  # jsonb written by ``put``: an object
-        return stored  # pyright: ignore[reportUnknownVariableType]
+        stored: object = row[0]
+        if not isinstance(stored, dict):
+            # ``put`` always writes an object, so the row was changed by hand: drop it like a row
+            # that no longer fits the schema (see ``discard``) and answer fresh.
+            logger.warning("answer cache row is not a JSON object, treating as a miss")
+            await self.discard(key)
+            return None
+        return cast("dict[str, Any]", stored)
 
     async def put(self, key: CacheKey, response: AskResponse) -> None:
         """Store a finished response. Never raises on a database error (logged)."""

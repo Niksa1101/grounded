@@ -6,7 +6,9 @@ from typing import Any
 from uuid import UUID
 
 import pytest
+from starlette.requests import Request
 
+from grounded.api.errors import _bad_request  # pyright: ignore[reportPrivateUsage]
 from tests.support import app_client, make_settings
 
 # Nothing listens on port 1; the connection is refused locally (no external network).
@@ -54,3 +56,12 @@ async def test_unhandled_error_is_a_500_with_a_request_id_and_no_stack_trace() -
     assert response.json()["error"]["message"] == "Internal error."
     assert "Traceback" not in response.text
     assert "psycopg" not in response.text
+
+
+async def test_the_bad_request_handler_given_another_error_answers_internal_error() -> None:
+    # It is registered for RequestValidationError only; anything else reaching it is a wiring bug,
+    # answered as "anything else" instead of an assert that python -O would strip.
+    request = Request({"type": "http", "method": "POST", "path": "/v1/ask", "headers": []})
+    response = await _bad_request(request, ValueError("not a validation error"))  # pyright: ignore[reportPrivateUsage]
+    assert response.status_code == 500
+    assert b'"internal_error"' in response.body

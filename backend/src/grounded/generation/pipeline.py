@@ -274,7 +274,8 @@ class AskPipeline:
         of this request (index lookup and cache lookup). ``provider`` and ``model`` are the current
         generator's, which is what the key's ``generator_model`` pins.
         """
-        assert self._cache is not None
+        if self._cache is None:  # eval mode: the caller builds no key, but stay safe without it
+            return None
         stored = await self._cache.get(key)
         if stored is None:
             return None
