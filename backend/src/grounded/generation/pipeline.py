@@ -44,7 +44,7 @@ from pydantic import ValidationError
 
 from grounded.generation.citations import MappedAnswer, map_citations
 from grounded.generation.confidence import ConfidenceConfig, score_claims
-from grounded.generation.context import build_context
+from grounded.generation.context import build_context, escape_content
 from grounded.generation.params import GenerationParams
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
@@ -200,8 +200,9 @@ class AskPipeline:
                     context = build_context(chunks, k_context=self._cfg.k_context)
                     titles = await chunk_titles(conn, [c.chunk_id for c in context.labels.values()])
             labels = context.labels
-            # The connection went back to the pool before the (slow) LLM call.
-            user = prompt.render_user(question=question, sources=context.text)
+            # The connection went back to the pool before the (slow) LLM call. The question is
+            # escaped like chunk text, so it cannot open a fake <source> block of its own.
+            user = prompt.render_user(question=escape_content(question), sources=context.text)
 
         with timer.stage("llm"):
             generation = await self._generate_validated(
@@ -346,6 +347,7 @@ class AskPipeline:
                 )
                 trace.invalid_citation_count = mapped.invalid_citation_count
                 trace.dropped_claim_count = mapped.dropped_claim_count
+                trace.removed_url_count = mapped.removed_url_count
                 if mapped.bad_output is not None:
                     raise ProviderBadOutput(
                         "the answer failed the citation checks",

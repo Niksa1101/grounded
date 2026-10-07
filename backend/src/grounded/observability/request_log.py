@@ -17,7 +17,8 @@ What the row holds that the response does not: ``question`` (kept for the retent
 is ``'api'`` until 5.03 sets ``'web'`` behind the proxy. The row's ``id`` is the ``request_id``, so
 a log line and a row correlate directly. A ``bad_request`` row has no ``question`` (the text was
 rejected, possibly because it is huge or not text at all); only its hash, when one can be computed.
-``dropped_claim_count`` has no column; it goes to the stdout summary line instead.
+``dropped_claim_count`` and ``removed_url_count`` have no column; they go to the stdout summary line
+instead.
 
 ``latency_total_ms`` is measured up to the moment the row is written. The insert itself cannot be
 inside the number stored by that very insert, so "includes logging" (Tech §14) means everything
@@ -101,6 +102,7 @@ class RequestTrace:
     citation_count: int | None = None
     invalid_citation_count: int | None = None
     dropped_claim_count: int | None = None
+    removed_url_count: int | None = None  # links and URLs removed from the answer (citations.py)
     min_claim_confidence: float | None = None
     latency_total_ms: int | None = None  # frozen when the response meta is built
     written: bool = field(default=False, repr=False)
@@ -204,6 +206,7 @@ class RequestLogger:
                 "validation_retries": trace.validation_retries,
                 "invalid_citation_count": trace.invalid_citation_count,
                 "dropped_claim_count": trace.dropped_claim_count,
+                "removed_url_count": trace.removed_url_count,
                 "question_hash": trace.digest(),
             },
         )

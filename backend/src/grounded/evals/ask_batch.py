@@ -85,6 +85,7 @@ class QuestionResult(BaseModel):
     validation_retries: int = 0
     invalid_citation_count: int = 0
     dropped_claim_count: int = 0
+    removed_url_count: int = 0
     citation_count: int = 0
     min_confidence: float | None = None
     latency_total_ms: int | None = None
@@ -104,6 +105,7 @@ class BatchSummary(BaseModel):
     validation_retries: int
     invalid_citations: int
     dropped_claims: int
+    removed_urls: int
     cache_hits: int
     shadow_cost_usd: float
     rate_limit_waits: int
@@ -124,6 +126,7 @@ def summarize(
         validation_retries=sum(r.validation_retries for r in results),
         invalid_citations=sum(r.invalid_citation_count for r in results),
         dropped_claims=sum(r.dropped_claim_count for r in results),
+        removed_urls=sum(r.removed_url_count for r in results),
         cache_hits=sum(r.cache_hit for r in results),
         shadow_cost_usd=round(sum(r.shadow_cost_usd for r in results), 6),
         rate_limit_waits=sum(r.rate_limit_waits for r in results),
@@ -146,7 +149,7 @@ def render_summary(summary: BatchSummary) -> str:
         f"Schema-valid AskResponse: {summary.schema_valid}/{summary.total}",
         f"Validation retries: {summary.validation_retries}; "
         f"invalid citations removed: {summary.invalid_citations}; "
-        f"claims dropped: {summary.dropped_claims}",
+        f"claims dropped: {summary.dropped_claims}; URLs removed: {summary.removed_urls}",
         f"Cache hits: {summary.cache_hits}; rate-limit waits: {summary.rate_limit_waits}",
         f"Shadow cost: ${summary.shadow_cost_usd:.6f} (answered questions only)",
     ]
@@ -266,6 +269,7 @@ def _failed(item: GoldenItem, trace: RequestTrace, waits: int, exc: Exception) -
         validation_retries=trace.validation_retries,
         invalid_citation_count=trace.invalid_citation_count or 0,
         dropped_claim_count=trace.dropped_claim_count or 0,
+        removed_url_count=trace.removed_url_count or 0,
         rate_limit_waits=waits,
     )
 
@@ -293,6 +297,7 @@ def _succeeded(
         validation_retries=trace.validation_retries,
         invalid_citation_count=trace.invalid_citation_count or 0,
         dropped_claim_count=trace.dropped_claim_count or 0,
+        removed_url_count=trace.removed_url_count or 0,
         citation_count=len(response.citations),
         min_confidence=response.min_confidence,
         latency_total_ms=response.meta.latency_ms.get("total"),

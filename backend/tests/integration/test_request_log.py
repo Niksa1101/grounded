@@ -211,6 +211,24 @@ async def test_an_answered_request_writes_one_complete_row(env: Env) -> None:
     assert row["min_claim_confidence"] == pytest.approx(body.min_confidence)
 
 
+async def test_removed_urls_are_counted_on_the_summary_line(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO)
+    linked = LLMAnswer(
+        status="answered",
+        answer_markdown="Quokkas sleep, see [the docs](https://example.com/q). [c1]",
+        claims=[claim("Quokkas sleep.", "c1")],
+    )
+    response, _ = await post(env, [linked])
+
+    assert response.status_code == 200
+    assert "https://example.com" not in response.json()["answer_markdown"]
+    [summary] = [r for r in caplog.records if r.getMessage() == "request completed"]
+    assert summary.__dict__["removed_url_count"] == 1
+    assert summary.__dict__["dropped_claim_count"] == 0
+
+
 async def test_a_retried_request_records_the_retry_and_both_attempts(env: Env) -> None:
     response, llm = await post(env, [uncited(), good()])
 
