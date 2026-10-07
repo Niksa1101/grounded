@@ -343,8 +343,12 @@ async def test_invalid_json_is_retried_once_with_the_error_and_then_succeeds(
     assert FEEDBACK not in first.user
     # The retry is the original message plus the feedback section with the validation error.
     assert retry.user.startswith(first.user)
-    assert f"{FEEDBACK} " in retry.user
-    assert "validation error for LLMAnswer" in retry.user
+    # Compact feedback (Phase 3 review #5): where and what, no echoed input, no Pydantic links.
+    assert retry.user.endswith(
+        f"{FEEDBACK} output: Invalid JSON: EOF while parsing an object at line 1 column 1"
+    )
+    assert "input_value" not in retry.user
+    assert "errors.pydantic.dev" not in retry.user
     assert (retry.system, retry.temperature) == (first.system, first.temperature)
     assert provider.remaining == 0
 

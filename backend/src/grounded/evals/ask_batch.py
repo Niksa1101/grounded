@@ -88,7 +88,8 @@ class QuestionResult(BaseModel):
     citation_count: int = 0
     min_confidence: float | None = None
     latency_total_ms: int | None = None
-    # Of the successful attempt: a failed attempt's cost is not counted.
+    # From the response meta: every attempt of an answered question, a failed retry included. A
+    # question that failed has no response, so its cost is not in the batch total.
     shadow_cost_usd: float = 0.0
     rate_limit_waits: int = 0
     response: dict[str, Any] | None = None
@@ -147,7 +148,7 @@ def render_summary(summary: BatchSummary) -> str:
         f"invalid citations removed: {summary.invalid_citations}; "
         f"claims dropped: {summary.dropped_claims}",
         f"Cache hits: {summary.cache_hits}; rate-limit waits: {summary.rate_limit_waits}",
-        f"Shadow cost: ${summary.shadow_cost_usd:.6f} (successful attempts only)",
+        f"Shadow cost: ${summary.shadow_cost_usd:.6f} (answered questions only)",
     ]
     lines += [f"Failed {f['id']}: {f['reason']}" for f in summary.failures]
     if summary.aborted:

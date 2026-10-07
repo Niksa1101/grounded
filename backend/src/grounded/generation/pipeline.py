@@ -47,7 +47,7 @@ from grounded.generation.confidence import ConfidenceConfig, score_claims
 from grounded.generation.context import build_context
 from grounded.generation.params import GenerationParams
 from grounded.generation.prompts import Prompt
-from grounded.generation.providers.base import GenerationResult, LLMProvider
+from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
 from grounded.infra.answer_cache import AnswerCache, CacheKey, from_stored
 from grounded.infra.provider_errors import ProviderBadOutput
 from grounded.infra.timing import Clock, StageTimer
@@ -331,10 +331,10 @@ class AskPipeline:
         ``require_citations=False`` (``no_rag``) turns the zero-valid-citations check off, so only a
         schema failure can cause the retry.
 
-        The trace gets the usage of every attempt whose token counts we saw (an adapter that raises
-        ``ProviderBadOutput`` reports none, so a schema-invalid attempt is not counted), the retry
-        count and the citation counts of the last attempt, so a request that fails here still logs
-        what it spent.
+        The trace gets the usage of every attempt, a schema-invalid one included (the adapter puts
+        the billed tokens on ``ProviderBadOutput``), the retry count and the citation counts of the
+        last attempt, so a request that fails here still logs what it spent. The citation-check
+        error raised below carries no tokens: that attempt's usage was added right after the call.
         """
         attempt_user = user
         while True:
@@ -354,6 +354,10 @@ class AskPipeline:
                     )
                 return Generation(result, mapped)
             except ProviderBadOutput as exc:
+                if exc.input_tokens or exc.output_tokens:
+                    trace.add_usage(
+                        Usage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens)
+                    )
                 if trace.validation_retries >= MAX_VALIDATION_RETRIES:
                     raise
                 trace.validation_retries += 1

@@ -32,11 +32,11 @@
 - `prompts/answer_v1.md` does **not** change (the prompt hash stays); only the text filled into `{{error}}` does.
 
 **Acceptance criteria**
-- [ ] `test_gemini_provider.py`: the feedback has no `input_value` and no `errors.pydantic.dev`; a `MAX_TOKENS` reply
+- [x] `test_gemini_provider.py`: the feedback has no `input_value` and no `errors.pydantic.dev`; a `MAX_TOKENS` reply
       gets the truncation sentence; `ProviderBadOutput` carries the usage of the recorded `generate_invalid_output.json`.
-- [ ] `test_request_log.py::test_output_that_fails_validation_is_logged_with_what_it_spent` now expects the tokens of
+- [x] `test_request_log.py::test_output_that_fails_validation_is_logged_with_what_it_spent` now expects the tokens of
       both attempts and a shadow cost above 0.
-- [ ] `test_ask.py`: the retry's user message ends with the compact feedback.
+- [x] `test_ask.py`: the retry's user message ends with the compact feedback.
 
 **Verify:** standard checks. The real-provider golden run is done once after R.14 (see the phase README).
 

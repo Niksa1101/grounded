@@ -287,8 +287,9 @@ async def test_a_bad_request_is_logged_without_its_text(env: Env, payload: dict[
 
 
 async def test_output_that_fails_validation_is_logged_with_what_it_spent(env: Env) -> None:
-    bad = ProviderBadOutput("bad", raw="{", validation_error="oops")
-    response, llm = await post(env, [bad, bad])
+    # Two replies that are not JSON. Both were billed, and the adapter puts each reply's usage on
+    # the ProviderBadOutput it raises (Phase 3 review #6), so the row counts both.
+    response, llm = await post(env, ["{", "{"])
 
     assert response.status_code == 502
     assert len(llm.calls) == 2
@@ -300,11 +301,22 @@ async def test_output_that_fails_validation_is_logged_with_what_it_spent(env: En
     )
     assert row["validation_retries"] == 1
     assert row["latency_llm_ms"] == 600
-    # An adapter that raises ProviderBadOutput reports no usage, so no tokens were seen; only the
-    # embedding (0.0000042) is charged.
+    # 2,000 in * 0.30/1e6 + 1,000 out * 2.50/1e6 + 28 embed chars * 0.15/1e6 = 0.0031042
+    assert (row["input_tokens"], row["output_tokens"]) == (2_000, 1_000)
+    assert row["shadow_cost_usd"] == Decimal("0.00310420")
+    assert row["question"] == QUESTION
+
+
+async def test_bad_output_without_reported_usage_charges_only_the_embedding(env: Env) -> None:
+    # An adapter that could not read any usage raises ProviderBadOutput with 0 tokens: nothing is
+    # invented, and only the embedding (0.0000042) is charged.
+    bad = ProviderBadOutput("bad", raw="{", validation_error="oops")
+    response, _ = await post(env, [bad, bad])
+
+    assert response.status_code == 502
+    row = one_row(env)
     assert (row["input_tokens"], row["output_tokens"]) == (None, None)
     assert row["shadow_cost_usd"] == Decimal("0.00000420")
-    assert row["question"] == QUESTION
 
 
 async def test_an_answer_with_no_valid_citation_twice_keeps_its_tokens_and_counts(

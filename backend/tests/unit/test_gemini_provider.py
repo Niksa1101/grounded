@@ -22,7 +22,11 @@ from google.genai import types as genai_types
 from pydantic import BaseModel
 
 from grounded.generation.providers.base import LLMProvider
-from grounded.generation.providers.gemini import GeminiProvider, to_gemini_schema
+from grounded.generation.providers.gemini import (
+    TRUNCATED_FEEDBACK,
+    GeminiProvider,
+    to_gemini_schema,
+)
 from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderRateLimited,
@@ -227,9 +231,14 @@ async def test_a_schema_valid_but_constraint_violating_answer_is_bad_output() ->
     provider, _, _ = _provider(response)
     with pytest.raises(ProviderBadOutput) as caught:
         await _generate(provider)
-    assert "c12" in caught.value.validation_error
-    assert "citation_ids" in caught.value.validation_error
+    # Compact feedback for the retry (Phase 3 review #5): the field and the rule, no echo of the
+    # rejected value, no Pydantic link.
+    assert caught.value.validation_error == (
+        "claims.0.citation_ids.0: String should match pattern '^c[1-9]$'"
+    )
     assert caught.value.raw.startswith('{"status"')
+    # The bad reply was billed: its usage travels on the error (recording: 91 in, 143 out).
+    assert (caught.value.input_tokens, caught.value.output_tokens) == (91, 143)
 
 
 async def test_the_recorded_truncated_answer_is_bad_output() -> None:
@@ -237,7 +246,10 @@ async def test_the_recorded_truncated_answer_is_bad_output() -> None:
     provider, _, _ = _provider(_response("invalid_output"))
     with pytest.raises(ProviderBadOutput, match="MAX_TOKENS") as caught:
         await _generate(provider)
-    assert "json_invalid" in caught.value.validation_error
+    # The retry is told why, not only that the JSON broke (Phase 3 review #5).
+    assert caught.value.validation_error == TRUNCATED_FEEDBACK
+    # Recording: 91 prompt and 5 candidate tokens, billed although the reply is unusable.
+    assert (caught.value.input_tokens, caught.value.output_tokens) == (91, 5)
 
 
 async def test_a_truncated_answer_is_bad_output_and_names_the_finish_reason() -> None:
@@ -250,7 +262,7 @@ async def test_a_truncated_answer_is_bad_output_and_names_the_finish_reason() ->
     provider, _, _ = _provider(response)
     with pytest.raises(ProviderBadOutput, match="MAX_TOKENS") as caught:
         await _generate(provider)
-    assert caught.value.validation_error  # the retry quotes this back to the model
+    assert caught.value.validation_error == TRUNCATED_FEEDBACK  # quoted back by the retry
 
 
 async def test_text_that_is_not_json_is_bad_output() -> None:
@@ -265,6 +277,8 @@ async def test_text_that_is_not_json_is_bad_output() -> None:
     with pytest.raises(ProviderBadOutput) as caught:
         await _generate(provider)
     assert caught.value.raw == "Sorry, no JSON."
+    assert caught.value.validation_error.startswith("output: Invalid JSON")
+    assert (caught.value.input_tokens, caught.value.output_tokens) == (0, 0)  # no usage reported
 
 
 async def test_thought_parts_are_not_part_of_the_answer() -> None:
@@ -291,9 +305,13 @@ async def test_a_blocked_prompt_with_no_candidate_is_bad_output() -> None:
             block_reason=genai_types.BlockedReason.SAFETY
         )
     )
+    response.usage_metadata = genai_types.GenerateContentResponseUsageMetadata(
+        prompt_token_count=91
+    )
     provider, _, _ = _provider(response)
-    with pytest.raises(ProviderBadOutput, match="SAFETY"):
+    with pytest.raises(ProviderBadOutput, match="SAFETY") as caught:
         await _generate(provider)
+    assert (caught.value.input_tokens, caught.value.output_tokens) == (91, 0)
 
 
 # --- Error mapping ------------------------------------------------------------------------------
