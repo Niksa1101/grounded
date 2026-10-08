@@ -28,6 +28,18 @@ def test_gemini_thinking_level_defaults_to_minimal_and_is_typed(
         make_settings(gemini_thinking_level="0")
 
 
+def test_groq_reasoning_effort_defaults_to_low_and_takes_what_gpt_oss_takes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GROQ_REASONING_EFFORT", raising=False)
+    assert make_settings().groq_reasoning_effort == "low"
+    assert make_settings(groq_reasoning_effort="high").groq_reasoning_effort == "high"
+    # "none" and "default" are for Qwen on Groq; gpt-oss answers any other value with a 400.
+    for value in ("none", "default", "minimal"):
+        with pytest.raises(ValidationError):
+            make_settings(groq_reasoning_effort=value)
+
+
 def test_pinned_corpus_and_embedding_defaults_match_tech_md(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

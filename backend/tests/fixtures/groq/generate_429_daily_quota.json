@@ -1,0 +1,15 @@
+{
+ "_synthetic": true,
+ "_note": "HAND-MADE, not recorded (a 429 can't be provoked on demand). Same shape and same caveat as generate_429_per_minute.json: the (TPD) wording and the long retry-after are modeled, not observed. Replace with a recording the first time a real daily 429 is seen.",
+ "status_code": 429,
+ "headers": {
+  "retry-after": "1234"
+ },
+ "body": {
+  "error": {
+   "message": "Rate limit reached for model `openai/gpt-oss-120b` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199600, Requested 1200. Please try again in 20m34s.",
+   "type": "tokens",
+   "code": "rate_limit_exceeded"
+  }
+ }
+}

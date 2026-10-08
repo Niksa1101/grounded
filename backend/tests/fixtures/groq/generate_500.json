@@ -1,0 +1,12 @@
+{
+ "_synthetic": true,
+ "_note": "HAND-MADE, not recorded (a 5xx can't be provoked on demand). The status and the {error: {message, type}} body shape follow the recorded 4xx bodies; the wording is invented.",
+ "status_code": 500,
+ "headers": {},
+ "body": {
+  "error": {
+   "message": "Internal server error.",
+   "type": "internal_server_error"
+  }
+ }
+}

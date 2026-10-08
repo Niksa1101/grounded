@@ -1,0 +1,27 @@
+{
+ "_recorded": {
+  "date": "2026-10-08",
+  "model": "openai/gpt-oss-120b",
+  "reasoning_effort": "low",
+  "temperature": 0.0,
+  "max_completion_tokens": 20,
+  "note": "a cap that the reasoning alone uses up: Groq answers 400 json_validate_failed with an empty failed_generation"
+ },
+ "status_code": 400,
+ "headers": {
+  "x-ratelimit-limit-requests": "1000",
+  "x-ratelimit-limit-tokens": "8000",
+  "x-ratelimit-remaining-requests": "998",
+  "x-ratelimit-remaining-tokens": "7654",
+  "x-ratelimit-reset-requests": "2m52.8s",
+  "x-ratelimit-reset-tokens": "2.594s"
+ },
+ "body": {
+  "error": {
+   "message": "Failed to validate JSON. Please adjust your prompt. See 'failed_generation' for more details.",
+   "type": "invalid_request_error",
+   "code": "json_validate_failed",
+   "failed_generation": ""
+  }
+ }
+}

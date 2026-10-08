@@ -65,6 +65,14 @@ class ProviderBadOutput(ProviderError):
         self.retryable = retryable
 
 
+# The retry feedback for a reply cut off at the output limit (it fills the prompt's ``{{error}}``).
+# Shared by the generator adapters: the JSON error alone would not tell the model why it broke.
+TRUNCATED_FEEDBACK = (
+    "the answer was cut off at the output token limit before the JSON was complete; "
+    "write a shorter answer with fewer, shorter claims"
+)
+
+
 def compact_validation_error(exc: ValidationError) -> str:
     """The Pydantic errors as ``"<field path>: <message>"``, joined with ``"; "``.
 

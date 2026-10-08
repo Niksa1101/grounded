@@ -16,8 +16,8 @@ output_per_mtok = 2.50
 # Groq, the fallback generator and the judge (PRD D48). The model page and the "Production Models" table of
 # console.groq.com/docs/models both show "$0.15 input, $0.60 output" per 1M tokens (cached input $0.075 is not
 # used by the cost formula). groq.com/pricing redirects to the home page since 2026-10-08, so the model page
-# is the source. Whether completion_tokens already includes the reasoning tokens is not stated in the docs:
-# unverified until ticket 4.02 records a real reply (Tech §9.1).
+# is the source. The docs do not say whether completion_tokens includes the reasoning tokens; a real reply
+# in ticket 4.02 showed that it does (2026-10-08, Tech §9.1), so the cost formula adds nothing for them.
 [models."openai/gpt-oss-120b"]
 input_per_mtok = 0.15
 output_per_mtok = 0.60

@@ -1,0 +1,15 @@
+{
+ "_synthetic": true,
+ "_note": "HAND-MADE, not recorded (a 429 can't be provoked on demand). The shape is the groq SDK's RateLimitError: status 429, a retry-after header in seconds (documented on Groq's rate-limits page, set on a 429 only) and the {error: {message, type, code}} body the recorded 400s use. The message wording is NOT documented by Groq: it is modeled on the wording public reports show, and the adapter's is_quota guess reads it (Tech 9.1). Replace with a recording the first time a real 429 is seen.",
+ "status_code": 429,
+ "headers": {
+  "retry-after": "6"
+ },
+ "body": {
+  "error": {
+   "message": "Rate limit reached for model `openai/gpt-oss-120b` service tier `on_demand` on tokens per minute (TPM): Limit 8000, Used 7400, Requested 1200. Please try again in 5.25s.",
+   "type": "tokens",
+   "code": "rate_limit_exceeded"
+  }
+ }
+}
