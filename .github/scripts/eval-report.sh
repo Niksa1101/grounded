@@ -96,12 +96,21 @@ promptfoo_note() {
   case "$status" in
     pass | fail | inconclusive)
       cat "$report"
+      # What the errors were (a quota, a 5xx, a timeout), which the gate's counts do not say.
+      kinds=$(python3 -I "$(dirname "$0")/eval-error-kinds.py" "$results/generation.json" 2> /dev/null || true)
+      if [ -n "$kinds" ]; then
+        echo
+        echo "Errors by kind, of the generator and of the judge:"
+        echo
+        echo "$kinds"
+      fi
       if [ "$status" = "inconclusive" ]; then
         echo
         echo "**An inconclusive run is not a pass.** More than 20% of a config's cases ended in a provider"
         echo "error (a quota, a 5xx or a timeout), so its metrics are shown with their \`n\` but not gated."
-        echo "The job does not fail on it. Re-run after the quota resets: the eval cache keeps every call"
-        echo "that was already paid for, so a re-run sends only the calls still missing."
+        echo "The job does not fail on it. Re-run when the quota has reset or the provider has recovered:"
+        echo "the eval cache keeps every call that was already paid for, so a re-run sends only the calls"
+        echo "still missing."
       fi
       ;;
     cannot-run)

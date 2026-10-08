@@ -239,7 +239,7 @@ jobs:
               echo "The generation gate passed."
               ;;
             inconclusive)
-              echo "::warning title=Generation eval inconclusive::Provider errors (a quota, a 5xx or a timeout) dominated the run, so nothing was gated. This is not a pass: re-run after the quota resets. See the job summary."
+              echo "::warning title=Generation eval inconclusive::Provider errors (a quota, a 5xx or a timeout) dominated the run, so nothing was gated. This is not a pass: re-run once the quota has reset or the provider has recovered. See the job summary."
               ;;
             fail)
               echo "::error title=Generation gate failed::A gated metric fell below its threshold, or the run is not comparable with the baseline. See the job summary."
