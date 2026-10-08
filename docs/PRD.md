@@ -458,8 +458,8 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   after the next push to `main` whose eval got a verdict. Open points the Author may want to decide first: `status` is
   the run's verdict on every row, `no_rag` stores `none` as `index_config_hash`, and a CI re-run adds rows (DB.md §4).
 - ~~The generation gate says `fail`, not `inconclusive`, when every generator call of a gated config failed (found in
-  4.10c).~~ Closed in the PR `fix: report inconclusive when every generator call of a config failed`: a config with no
-  answered case has no index to compare (Tech §15.5, "As built in 4.08", item 7), so a total outage is `inconclusive`.
+  4.10c).~~ Fixed in #80: a config with no answered case has no index to compare (Tech §15.5, "As built in 4.08",
+  item 7), so a total outage is `inconclusive`.
 - **CI eval cache scope (4.10b), open item.** The eval LLM cache of a PR run is visible to that PR only (GitHub scopes a
   cache to the ref that saved it; `main` cannot read a PR's), so after a merge that changed a prompt, a model or retrieval,
   the first `main` run pays for the changed calls once more (about 145K Groq tokens for a full judge run, against a
