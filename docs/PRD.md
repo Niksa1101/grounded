@@ -452,6 +452,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   baseline fail its own gate: the command says so and the Author decides. (3) The PRD §8 targets are constants in
   `evals/report.py` too (`met` / `not met` in the README); a change to PRD §8 must change both. The Groq daily budget of
   the first full run is the item above ("Judge budget of a full run").
+- **CI eval cache scope (4.10b), open item.** The eval LLM cache of a PR run is visible to that PR only (GitHub scopes a
+  cache to the ref that saved it; `main` cannot read a PR's), so after a merge that changed a prompt, a model or retrieval,
+  the first `main` run pays for the changed calls once more (about 145K Groq tokens for a full judge run, against a
+  200K daily quota). `eval.yml` runs on every push to `main`, but a merge that changed nothing the eval sees replays
+  from `main`'s cache. Not built: handing the PR's cache file to the `main` run through an artifact, or running the
+  `main` eval only when `backend/prompts`, retrieval or the eval config changed. Revisit after the first merges that
+  change quality-affecting code.
 - The judge assertions (4.06) pay about a second of imports per judged assertion call, two per row, because `grounded.runtime`, where `open_judge` lives, imports the Gemini SDK. A module that builds the judge without it would cut that; not done, since it is small next to the 8K tokens-per-minute pacing.
 - A missing `GROQ_API_KEY` or `JUDGE_MODEL` is found by the first judged assertion of a real run (every judge component of the run is then `errored` with `ProviderConfigError`, and the run stops asking), after generator calls were spent. A check in the test generator, which runs first, would find it before any quota is used; the generator calls are cached, so the cost of the late discovery is one re-run, not lost quota.
 - ~~The answer cache (3.13) stores a finished answer, and its key did not include the confidence weights.~~ Closed in

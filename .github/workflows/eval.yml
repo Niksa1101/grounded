@@ -1,0 +1,244 @@
+# The full generation eval (promptfoo, Tech.md §15.3, §17): PRs that carry the `run-eval` label, pushes
+# to main, and a manual run. It restores the shared DB and cache setup (./.github/actions/eval-index,
+# the same one retrieval-eval uses), runs the eval through promptfoo with a judge on another provider,
+# decides the job with `grounded eval gate` and reports the outcome in the job summary, in ONE PR
+# comment (updated on every later push, found by <!-- grounded-eval -->) and in a report artifact.
+#
+# - promptfoo's own exit code is ignored: the gate is the single source of truth (Tech.md §15.5).
+#   Gate exit 0 = pass or inconclusive (job succeeds, the report says which), 1 = a quality fail,
+#   2 = the gate could not run. Exits 1 and 2 fail the job, named in an error annotation. A setup
+#   failure (an embeddings quota stop on the ingest) or a promptfoo crash is reported as "did not
+#   run", never as a pass; a cancelled run says so.
+# - Model IDs are literals (PRD D51). A model change is a reviewed diff on a PR that has to carry
+#   `run-eval` anyway.
+# - Free-tier quota (AGENTS.md §6.15): `-j 1`, the eval LLM cache, and a cache saved even when the run
+#   stops on a quota, so nothing paid for is sent twice. Do not re-run hoping for a different result.
+# - workflow_dispatch is there so the main cache can be (re)seeded by hand, like warm-cache.yml.
+name: eval
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write # the one PR comment
+
+jobs:
+  eval:
+    # `labeled` runs only for the run-eval label itself (another label must not start an eval), and
+    # `synchronize` only when the PR carries it.
+    if: >-
+      github.event_name != 'pull_request'
+      || (github.event.action == 'labeled' && github.event.label.name == 'run-eval')
+      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'run-eval'))
+    # Per PR (or ref), here and not on the workflow: a workflow-level group would let a run whose job
+    # is skipped (some other label) cancel an eval in progress. A newer push cancels the run it
+    # supersedes; runs on main always finish.
+    concurrency:
+      group: eval-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45 # a full run took 13 minutes locally at the 8K TPM pacing of the free Groq plan
+    services:
+      db:
+        # Same image as the backend job, retrieval-eval and infra/docker-compose.yml.
+        image: pgvector/pgvector:0.8.6-pg17-trixie
+        env:
+          POSTGRES_USER: grounded
+          POSTGRES_PASSWORD: grounded
+          POSTGRES_DB: grounded
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U grounded -d grounded"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+    env:
+      # The setup steps run like retrieval-eval's; only the promptfoo step is APP_ENV=eval.
+      APP_ENV: test
+      DATABASE_URL: postgresql://grounded:grounded@localhost:5433/grounded
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/tiktoken
+      # Pinned model IDs (PRD D46, D48, D51; Tech.md §4). Literals, verified when they were chosen.
+      GEMINI_MODEL: gemini-3.5-flash-lite
+      GROQ_MODEL: openai/gpt-oss-120b
+      JUDGE_MODEL: openai/gpt-oss-120b
+      # Which eval LLM caches this run reads and writes (Tech.md §17): a PR has its own, main and
+      # manual runs share the main one.
+      LLM_CACHE_SCOPE: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref_name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Exit 3 here is an infrastructure failure (embeddings unavailable), named in the job summary.
+      # Only a push to main or a manual run saves the corpus clone and (at the end) the embeddings.
+      - name: Install, restore the caches, migrate and ingest
+        id: index
+        uses: ./.github/actions/eval-index
+        with:
+          gemini-api-key: ${{ secrets.GEMINI_API_KEY }}
+          save-corpus: ${{ github.event_name != 'pull_request' }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      # The eval LLM cache (generator and judge replies, `.cache/llm_eval.sqlite`). Restored from this
+      # PR's own earlier run, else from main's. Only this one file is cached: `judge_run.sqlite`, the
+      # per-run state of the judge quota, lives next to it and must not carry over from a run.
+      - name: Restore the eval LLM cache
+        id: llm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/llm_eval.sqlite
+          key: llm-eval-${{ env.LLM_CACHE_SCOPE }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            llm-eval-${{ env.LLM_CACHE_SCOPE }}-
+            llm-eval-main-
+      - name: Count the eval cache entries
+        id: cache-before
+        run: |
+          if ! entries=$(bash .github/scripts/eval-cache-entries.sh .cache/llm_eval.sqlite); then
+            echo "::warning title=Eval cache discarded::The restored cache is unreadable; the eval starts from an empty one."
+            rm -f .cache/llm_eval.sqlite .cache/llm_eval.sqlite-wal .cache/llm_eval.sqlite-shm
+            entries=0
+          fi
+          echo "entries=$entries" >> "$GITHUB_OUTPUT"
+          echo "Eval LLM cache: $entries entries restored (${{ steps.llm-cache.outputs.cache-matched-key || 'no cache found' }})."
+      # promptfoo starts the test generator, the providers and the assertions as Python processes of
+      # its own: only PROMPTFOO_PYTHON reaches all of them, and it must be the backend venv (Tech.md §15.3).
+      - name: Point promptfoo at the backend interpreter
+        run: echo "PROMPTFOO_PYTHON=$(uv run --project backend --frozen python -c 'import sys; print(sys.executable)')" >> "$GITHUB_ENV"
+      # The step never fails on promptfoo's exit code (100 just means some assertion failed); it
+      # records the code and keeps the log for the report. A timeout does fail it, and is reported.
+      - name: Generation eval (promptfoo)
+        id: promptfoo
+        timeout-minutes: 38
+        env:
+          APP_ENV: eval
+          GENERATOR_PROVIDERS: gemini
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PROMPTFOO_DISABLE_TELEMETRY: "1"
+          PROMPTFOO_DISABLE_UPDATE: "1"
+        run: |
+          mkdir -p eval/results
+          set +e
+          npx --yes promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1 --no-cache \
+            --no-table --no-progress-bar \
+            -o eval/results/generation.json eval/results/generation.html 2>&1 | tee eval/results/promptfoo.log
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "promptfoo exited $code. The code is ignored: the gate decides."
+      # Exit 0 = pass or inconclusive, 1 = a quality fail, 2 = could not run (Tech.md §15.5). The step
+      # records the code; the last step turns 1 and 2 into a failed job, after the report is out.
+      - name: Generation gate
+        id: gate
+        if: steps.promptfoo.outcome == 'success'
+        run: |
+          code=0
+          uv run --project backend --frozen grounded eval gate --suite generation \
+            --results eval/results/generation.json --baseline eval/baselines/generation.json \
+            > eval/results/gate-report.md 2> eval/results/gate-errors.txt || code=$?
+          cat eval/results/gate-report.md eval/results/gate-errors.txt
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "The gate exited $code (0 pass or inconclusive, 1 quality fail, 2 could not run)."
+      # Before anything that can fail or be cut short: what was paid for is kept, also after a quota
+      # stop or a cancel. Saved only when the run added entries (a pure replay adds a copy of itself).
+      - name: Count the eval cache entries after the run
+        id: cache-after
+        if: always()
+        run: |
+          if entries=$(bash .github/scripts/eval-cache-entries.sh .cache/llm_eval.sqlite); then
+            echo "entries=$entries" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save the eval LLM cache
+        if: >-
+          always() && steps.cache-after.outputs.entries != '' && steps.cache-after.outputs.entries != '0'
+          && steps.cache-after.outputs.entries != steps.cache-before.outputs.entries
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/llm_eval.sqlite
+          key: llm-eval-${{ env.LLM_CACHE_SCOPE }}-${{ github.run_id }}-${{ github.run_attempt }}
+      # Main only (a push, or a manual run), as in retrieval-eval: a cache saved on a PR branch is
+      # invisible to main. The hybrid config embeds the unanswerable questions too, which the
+      # retrieval eval never does, so this is where their vectors get into the shared cache.
+      - name: Save the embeddings cache
+        if: always() && github.event_name != 'pull_request'
+        uses: ./.github/actions/save-embeddings
+      - name: Upload the report
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: generation-eval-report
+          path: |
+            eval/results/generation.json
+            eval/results/generation.html
+            eval/results/gate-report.md
+            eval/results/gate-errors.txt
+            eval/results/promptfoo.log
+          if-no-files-found: ignore
+          retention-days: 14
+          overwrite: true
+      # The report always says what happened: a verdict, "could not run", "did not run" or "cancelled".
+      - name: Report
+        id: report
+        if: always()
+        env:
+          SETUP_OUTCOME: ${{ steps.index.outcome }}
+          PROMPTFOO_OUTCOME: ${{ steps.promptfoo.outcome }}
+          PROMPTFOO_EXIT: ${{ steps.promptfoo.outputs.exit_code }}
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          GATE_EXIT: ${{ steps.gate.outputs.exit_code }}
+          JOB_STATUS: ${{ job.status }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          CACHE_MATCHED_KEY: ${{ steps.llm-cache.outputs.cache-matched-key }}
+          CACHE_ENTRIES_BEFORE: ${{ steps.cache-before.outputs.entries }}
+          CACHE_ENTRIES_AFTER: ${{ steps.cache-after.outputs.entries }}
+        run: bash .github/scripts/eval-report.sh
+      - name: Post or update the PR comment
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/eval-comment.sh eval/results/comment.md
+      # Last, so the cache, the artifact and the comment are out even when the job fails here.
+      - name: Verdict
+        if: always()
+        env:
+          STATUS: ${{ steps.report.outputs.status }}
+          GATE_EXIT: ${{ steps.gate.outputs.exit_code }}
+        run: |
+          case "$STATUS" in
+            pass)
+              echo "The generation gate passed."
+              ;;
+            inconclusive)
+              echo "::warning title=Generation eval inconclusive::Provider errors (a quota, a 5xx or a timeout) dominated the run, so nothing was gated. This is not a pass: re-run after the quota resets. See the job summary."
+              ;;
+            fail)
+              echo "::error title=Generation gate failed::A gated metric fell below its threshold, or the run is not comparable with the baseline. See the job summary."
+              exit 1
+              ;;
+            cannot-run)
+              echo "::error title=Generation gate could not run::A missing or broken results or baseline file, or a judge that cannot work, not a quality verdict. See the job summary."
+              exit "${GATE_EXIT:-2}"
+              ;;
+            cancelled)
+              echo "::notice title=Generation eval cancelled::The run was cancelled before the gate ran."
+              ;;
+            not-run)
+              echo "::error title=Generation eval did not run::A step before the gate did not finish (setup, promptfoo). An infrastructure failure is named in the job summary. See the job summary."
+              exit 1
+              ;;
+            *)
+              echo "::error title=Generation eval not classified::The report step produced no known status ('$STATUS'). See the job summary."
+              exit 1
+              ;;
+          esac
