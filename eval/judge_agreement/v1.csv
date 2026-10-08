@@ -1,0 +1,789 @@
+﻿item_id,kind,question_id,question,claim,sources,reference_answer,candidate_answer,allowed_labels,human_label
+a01,faithfulness,q017,My app is in backend/main.py. How do I make the fastapi command find it without passing the path every time?,You can configure the entrypoint in your pyproject.toml file so the fastapi command knows where to find your app.,"<source id=""c3"">
+## Configure the `entrypoint` in `pyproject.toml`
+
+As your FastAPI `app` object lives in `app/main.py`, you can configure the `entrypoint` in your `pyproject.toml` file like this:
+
+```toml
+[tool.fastapi]
+entrypoint = ""app.main:app""
+```
+
+that is equivalent to importing like:
+
+```python
+from app.main import app
+```
+
+That way the `fastapi` command will know where to find your app.
+
+/// Note
+
+You could also pass the path to the command, like:
+
+```console
+$ uv run fastapi dev app/main.py
+```
+
+But you would have to remember to pass the correct path every time you call the `fastapi` command.
+
+Additionally, other tools might not be able to find it, for example the [VS Code Extension](../editor-support.md) or [FastAPI Cloud](https://fastapicloud.com), so it is recommended to use the `entrypoint` in `pyproject.toml`.
+
+///
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a02,correctness,q026,"How do I run a function after returning the response, for example to send an email notification?",,,"Declare a parameter of type `BackgroundTasks` in the path operation function and call `background_tasks.add_task(func, *args, **kwargs)`; FastAPI runs it after sending the response. For heavy computation that doesn't need the same process, a bigger tool like Celery may fit better.",The documentation provided does not cover how to run a function after returning the response for tasks such as sending an email notification.,CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a03,correctness,q003,How do I install FastAPI with its standard optional dependencies but without the FastAPI Cloud CLI?,,,"Use `uv add ""fastapi[standard-no-fastapi-cloud-cli]""`. `uv add ""fastapi[standard]""` includes `fastapi-cloud-cli`, and `uv add fastapi` installs FastAPI without the optional standard dependencies.","To install FastAPI with the standard optional dependencies but without the `fastapi-cloud-cli`, you can use `uv` with the following command: [1][2]
+
+```console
+$ uv add ""fastapi[standard-no-fastapi-cloud-cli]""
+```
+[1][2]",CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a04,correctness,q042,How can I set a cookie and a custom header on the response while still returning a normal dict filtered by the response model?,,,"Declare a parameter of type `Response` in the path operation (or in a dependency), call `response.set_cookie(...)` and set `response.headers[...]` on it, and return your data as usual. FastAPI copies the cookies, headers and status code from that temporary response into the final one, which is still filtered by any `response_model`.","You can set cookies and custom headers by declaring a parameter of type `Response` in your path operation function, and then setting values on it directly. FastAPI will still use your `response_model` to filter the returned dictionary.
+
+```python
+from fastapi import FastAPI, Response
+
+app = FastAPI()
+
+@app.get(""/"", response_model=Item)
+def read_item(response: Response):
+    response.set_cookie(key=""fakesession"", value=""fake-cookie-value"")
+    response.headers[""X-Custom-Header""] = ""custom-value""
+    return {""name"": ""Foo"", ""description"": ""A very nice Item"", ""price"": 50.5, ""tax"": 10.2}
+```",CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a05,faithfulness,q007,Why does the StreamingResponse example call await anyio.sleep(0) inside the generator?,The StreamingResponse example calls await anyio.sleep(0) inside the generator to give the event loop a chance to handle cancellation.,"<source id=""c1"">
+### `StreamingResponse`
+
+Takes an async generator or a normal generator/iterator (a function with `yield`) and streams the response body.
+
+```python
+import anyio
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+
+app = FastAPI()
+
+
+async def fake_video_streamer():
+    for i in range(10):
+        yield b""some fake video bytes""
+        await anyio.sleep(0)
+
+
+@app.get(""/"")
+async def main():
+    return StreamingResponse(fake_video_streamer())
+```
+
+/// note | Technical Details
+
+An `async` task can only be cancelled when it reaches an `await`. If there is no `await`, the generator (function with `yield`) can not be cancelled properly and may keep running even after cancellation is requested.
+
+Since this small example does not need any `await` statements, we add an `await anyio.sleep(0)` to give the event loop a chance to handle cancellation.
+
+This would be even more important with large or infinite streams.
+
+///
+
+/// tip
+
+Instead of returning a `StreamingResponse` directly, you should probably follow the style in [Stream Data](./stream-data.md), it's much more convenient and handles cancellation behind the scenes for you.
+
+If you are streaming JSON Lines, follow the [Stream JSON Lines](../tutorial/stream-json-lines.md) tutorial.
+
+///
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a06,faithfulness,q020,How can I make HTTPException errors return plain text instead of JSON?,You can override the HTTPException handler by registering an exception handler for Starlette's HTTPException and returning a PlainTextResponse.,"<source id=""c1"">
+## Declare `Cookie` parameters
+
+Then declare the cookie parameters using the same structure as with `Path` and `Query`.
+
+You can define the default value as well as all the extra validation or annotation parameters:
+
+/// note | Technical Details
+
+`Cookie` is a ""sister"" class of `Path` and `Query`. It also inherits from the same common `Param` class.
+
+But remember that when you import `Query`, `Path`, `Cookie` and others from `fastapi`, those are actually functions that return special classes.
+
+///
+
+/// note
+
+To declare cookies, you need to use `Cookie`, because otherwise the parameters would be interpreted as query parameters.
+
+///
+
+/// note
+
+Have in mind that, as **browsers handle cookies** in special ways and behind the scenes, they **don't** easily allow **JavaScript** to touch them.
+
+If you go to the **API docs UI** at `/docs` you will be able to see the **documentation** for cookies for your *path operations*.
+
+But even if you **fill the data** and click ""Execute"", because the docs UI works with **JavaScript**, the cookies won't be sent, and you will see an **error** message as if you didn't write any values.
+
+///
+
+## Recap
+
+Declare cookies with `Cookie`, using the same common pattern as `Query` and `Path`.
+</source>
+
+<source id=""c2"">
+## Check the Docs
+
+You can see the defined cookies in the docs UI at `/docs`:
+
+<div class=""screenshot"">
+<img src=""/img/tutorial/cookie-param-models/image01.png"">
+</div>
+
+/// note
+
+Have in mind that, as **browsers handle cookies** in special ways and behind the scenes, they **don't** easily allow **JavaScript** to touch them.
+
+If you go to the **API docs UI** at `/docs` you will be able to see the **documentation** for cookies for your *path operations*.
+
+But even if you **fill the data** and click ""Execute"", because the docs UI works with **JavaScript**, the cookies won't be sent, and you will see an **error** message as if you didn't write any values.
+
+///
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a07,correctness,q043,How do I return a 401 error with a WWW-Authenticate header from a dependency?,,,"Raise `HTTPException(status_code=401, detail=..., headers={""WWW-Authenticate"": ...})`: `HTTPException` accepts custom headers. For bearer tokens the value should be `Bearer` (the spec expects every 401 to carry a `WWW-Authenticate` header); HTTP Basic uses `Basic`.","Starting with FastAPI version `0.122.0`, integrated security utilities automatically return an HTTP status code `401 Unauthorized` and a sensible `WWW-Authenticate` header when authentication fails [1]. For example, you can use `HTTPBearer` as a dependency [1]:
+
+```python
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+app = FastAPI()
+
+
+class HTTPBearer403(HTTPBearer):
+    def make_not_authenticated_error(self) -> HTTPException:
+        return HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail=""Not authenticated""
+        )
+
+
+CredentialsDep = Annotated[HTTPAuthorizationCredentials, Depends(HTTPBearer403())]
+
+
+@app.get(""/me"")
+def read_me(credentials: CredentialsDep):
+    return {""message"": ""You are authenticated"", ""token"": credentials.credentials}
+```
+
+(Note that to return `401 Unauthorized` with the default behavior, you would use standard security dependencies like `HTTPBearer` directly without overriding `make_not_authenticated_error`.) Any HTTP error status code 401 is supposed to return a `WWW-Authenticate` header, and for bearer tokens, the value of that header should be `Bearer` [2].",CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a08,correctness,q022,How should I check HTTP Basic credentials so the check is not vulnerable to timing attacks?,,,"Use `HTTPBasic` with a dependency that receives `HTTPBasicCredentials`, encode the username and password to UTF-8 bytes and compare them with `secrets.compare_digest()`, which takes the same time whatever the input. On a mismatch raise `HTTPException` with status 401 and the header `WWW-Authenticate: Basic`.","To prevent timing attacks when checking HTTP Basic credentials, you should use `secrets.compare_digest()` from the Python standard module `secrets` [1][2][3]. 
+
+Because `secrets.compare_digest()` requires `bytes` or a `str` containing only ASCII characters, you should first encode the username and password strings to `bytes` using UTF-8 [2]. Then, use `secrets.compare_digest()` to compare them, which ensures the comparison takes the same amount of time regardless of whether the initial characters match [1][2].
+
+Here is an example of how to implement this in a dependency [2]:
+
+```python
+import secrets
+from typing import Annotated
+
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+
+app = FastAPI()
+
+security = HTTPBasic()
+
+
+def get_current_username(
+    credentials: Annotated[HTTPBasicCredentials, Depends(security)],
+):
+    current_username_bytes = credentials.username.encode(""utf8"")
+    correct_username_bytes = b""stanleyjobson""
+    is_correct_username = secrets.compare_digest(
+        current_username_bytes, correct_username_bytes
+    )
+    current_password_bytes = credentials.password.encode(""utf8"")
+    correct_password_bytes = b""swordfish""
+    is_correct_password = secrets.compare_digest(
+        current_password_bytes, correct_password_bytes
+    )
+    if not (is_correct_username and is_correct_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=""Incorrect username or password"",
+            headers={""WWW-Authenticate"": ""Basic""},
+        )
+    return credentials.username
+
+
+@app.get(""/users/me"")
+def read_current_user(username: Annotated[str, Depends(get_current_username)]):
+    return {""username"": username}
+```
+[2]",CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a09,correctness,q029,"Write an endpoint whose q query parameter accepts multiple values and defaults to [""foo"", ""bar""].",,,"```python
+from typing import Annotated
+
+from fastapi import FastAPI, Query
+
+app = FastAPI()
+
+
+@app.get(""/items/"")
+async def read_items(q: Annotated[list[str], Query()] = [""foo"", ""bar""]):
+    return {""q"": q}
+```
+`Query()` is needed, otherwise a list would be read as a request body.","To create an endpoint where a query parameter accepts multiple values and has a default value, you can use `Query` along with a list type. Here is an example:
+
+```python
+from typing import List
+from fastapi import FastAPI, Query
+
+app = FastAPI()
+
+@app.get(""/items/"")
+async def read_items(q: List[str] = Query(default=[""foo"", ""bar""]):
+    return {""q"": q}
+```",CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a10,faithfulness,q031,Show a streaming endpoint that yields bytes instead of strings.,You can stream bytes by declaring response_class=StreamingResponse on the path operation function and yielding encoded bytes.,"<source id=""c1"">
+### Query parameter list / multiple values with defaults
+
+You can also define a default `list` of values if none are provided:
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI, Query
+
+app = FastAPI()
+
+
+@app.get(""/items/"")
+async def read_items(q: Annotated[list[str], Query()] = [""foo"", ""bar""]):
+    query_items = {""q"": q}
+    return query_items
+```
+
+If you go to:
+
+```
+http://localhost:8000/items/
+```
+
+the default of `q` will be: `[""foo"", ""bar""]` and your response will be:
+
+#### Using just `list`
+
+You can also use `list` directly instead of `list[str]`:
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI, Query
+
+app = FastAPI()
+
+
+@app.get(""/items/"")
+async def read_items(q: Annotated[list, Query()] = []):
+    query_items = {""q"": q}
+    return query_items
+```
+
+/// note
+
+Keep in mind that in this case, FastAPI won't check the contents of the list.
+
+For example, `list[int]` would check (and document) that the contents of the list are integers. But `list` alone wouldn't.
+
+///
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a11,correctness,q019,How do I receive username and password as form fields instead of JSON?,,,"Declare them with `Form`, the same way as `Body` or `Query`, e.g. `username: Annotated[str, Form()]`. Without `Form` they would be interpreted as query or JSON body parameters. `Form` supports the same options as `Body` (validation, examples, alias).","To receive username and password as form fields instead of JSON in FastAPI, you should use the `OAuth2PasswordRequestForm` dependency from `fastapi.security`. This automatically expects `username` and `password` as form data fields rather than a JSON body.
+
+```python
+from fastapi import FastAPI, Depends
+from fastapi.security import OAuth2PasswordRequestForm
+
+app = FastAPI()
+
+@app.post(""/token"")
+async def login(form_data: OAuth2PasswordRequestForm = Depends()):
+    return {""username"": form_data.username, ""password"": form_data.password}
+```
+
+Alternatively, for standard form fields without OAuth2 specs, you can use `Form` parameters.",CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a12,faithfulness,q019,How do I receive username and password as form fields instead of JSON?,"To receive username and password as form fields instead of JSON, use Form parameters or OAuth2PasswordRequestForm with Depends.","<source id=""c4"">
+## JSON Responses
+
+By default FastAPI returns JSON responses.
+
+If you declare a [Response Model](../tutorial/response-model.md) FastAPI will use it to serialize the data to JSON, using Pydantic.
+
+If you don't declare a response model, FastAPI will use the `jsonable_encoder` explained in [JSON Compatible Encoder](../tutorial/encoder.md) and put it in a `JSONResponse`.
+
+If you declare a `response_class` with a JSON media type (`application/json`), like is the case with the `JSONResponse`, the data you return will be automatically converted (and filtered) with any Pydantic `response_model` that you declared in the *path operation decorator*. But the data won't be serialized to JSON bytes with Pydantic, instead it will be converted with the `jsonable_encoder` and then passed to the `JSONResponse` class, which will serialize it to bytes using the standard JSON library in Python.
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a13,correctness,q016,"How can I create a dependency that I can configure with parameters, for example to check whether the query contains a string I choose?",,,"Write a class whose `__init__` takes the configuration (e.g. `fixed_content`) and whose `__call__` declares the request parameters (e.g. `q: str = """"`) and returns the result. Create an instance (`checker = FixedContentQueryChecker(""bar"")`) and use `Depends(checker)`. FastAPI calls the instance (`checker(q=...)`) and never touches `__init__`.",The provided documentation does not cover how to create a dependency configured with custom parameters like checking whether a query contains a specific string.,CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a14,faithfulness,q036,How do I implement a PATCH endpoint that only updates the fields the client actually sent?,"To update only the fields sent by the client, use the exclude_unset=True parameter in Pydantic's model_dump().","<source id=""c1"">
+### Partial updates recap
+
+In summary, to apply partial updates you would:
+
+* (Optionally) use `PATCH` instead of `PUT`.
+* Retrieve the stored data.
+* Put that data in a Pydantic model.
+* Generate a `dict` without default values from the input model (using `exclude_unset`).
+    * This way you can update only the values actually set by the user, instead of overriding values already stored with default values in your model.
+* Create a copy of the stored model, updating its attributes with the received partial updates (using the `update` parameter).
+* Convert the copied model to something that can be stored in your DB (for example, using the `jsonable_encoder`).
+    * This is comparable to using the model's `.model_dump()` method again, but it makes sure (and converts) the values to data types that can be converted to JSON, for example, `datetime` to `str`.
+* Save the data to your DB.
+* Return the updated model.
+
+/// tip
+
+You can actually use this same technique with an HTTP `PUT` operation.
+
+But the example here uses `PATCH` because it was created for these use cases.
+
+///
+
+/// note
+
+Notice that the input model is still validated.
+
+So, if you want to receive partial updates that can omit all the attributes, you need to have a model with all the attributes marked as optional (with default values or `None`).
+
+To distinguish from the models with all optional values for **updates** and models with required values for **creation**, you can use the ideas described in [Extra Models](extra-models.md).
+
+///
+</source>
+
+<source id=""c2"">
+### Using Pydantic's `exclude_unset` parameter
+
+If you want to receive partial updates, it's very useful to use the parameter `exclude_unset` in Pydantic's model's `.model_dump()`.
+
+Like `item.model_dump(exclude_unset=True)`.
+
+That would generate a `dict` with only the data that was set when creating the `item` model, excluding default values.
+
+Then you can use this to generate a `dict` with only the data that was set (sent in the request), omitting default values:
+
+```python
+from fastapi import FastAPI
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
+
+app = FastAPI()
+
+
+class Item(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    price: float | None = None
+    tax: float = 10.5
+    tags: list[str] = []
+
+
+items = {
+    ""foo"": {""name"": ""Foo"", ""price"": 50.2},
+    ""bar"": {""name"": ""Bar"", ""description"": ""The bartenders"", ""price"": 62, ""tax"": 20.2},
+    ""baz"": {""name"": ""Baz"", ""description"": None, ""price"": 50.2, ""tax"": 10.5, ""tags"": []},
+}
+
+
+@app.get(""/items/{item_id}"", response_model=Item)
+async def read_item(item_id: str):
+    return items[item_id]
+
+
+@app.patch(""/items/{item_id}"")
+async def update_item(item_id: str, item: Item) -> Item:
+    stored_item_data = items[item_id]
+    stored_item_model = Item(**stored_item_data)
+    update_data = item.model_dump(exclude_unset=True)
+    updated_item = stored_item_model.model_copy(update=update_data)
+    items[item_id] = jsonable_encoder(updated_item)
+    return updated_item
+```
+</source>
+
+<source id=""c5"">
+### Update a Hero with `HeroUpdate`
+
+We can **update a hero**. For this we use an HTTP `PATCH` operation.
+
+And in the code, we get a `dict` with all the data sent by the client, **only the data sent by the client**, excluding any values that would be there just for being the default values. To do it we use `exclude_unset=True`. This is the main trick. 🪄
+
+Then we use `hero_db.sqlmodel_update(hero_data)` to update the `hero_db` with the data from `hero_data`.
+
+```python
+# Code above omitted 👆
+
+@app.patch(""/heroes/{hero_id}"", response_model=HeroPublic)
+def update_hero(hero_id: int, hero: HeroUpdate, session: SessionDep):
+    hero_db = session.get(Hero, hero_id)
+    if not hero_db:
+        raise HTTPException(status_code=404, detail=""Hero not found"")
+    hero_data = hero.model_dump(exclude_unset=True)
+    hero_db.sqlmodel_update(hero_data)
+    session.add(hero_db)
+    session.commit()
+    session.refresh(hero_db)
+    return hero_db
+
+# Code below omitted 👇
+```
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a15,faithfulness,q015,"With OAuth2PasswordRequestForm, how do I get the scopes the client requested?",You can access the requested scopes via form_data.scopes inside a token path operation using OAuth2PasswordRequestForm.,"<source id=""c1"">
+```python
+from datetime import datetime, timedelta, timezone
+from typing import Annotated
+
+import jwt
+from fastapi import Depends, FastAPI, HTTPException, Security, status
+from fastapi.security import (
+    OAuth2PasswordBearer,
+    OAuth2PasswordRequestForm,
+    SecurityScopes,
+)
+from jwt.exceptions import InvalidTokenError
+from pwdlib import PasswordHash
+from pydantic import BaseModel, ValidationError
+
+# to get a string like this run:
+# openssl rand -hex 32
+SECRET_KEY = ""09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7""
+ALGORITHM = ""HS256""
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
+
+
+fake_users_db = {
+    ""johndoe"": {
+        ""username"": ""johndoe"",
+        ""full_name"": ""John Doe"",
+        ""email"": ""johndoe@example.com"",
+        ""hashed_password"": ""$argon2id$v=19$m=65536,t=3,p=4$wagCPXjifgvUFBzq4hqe3w$CYaIb8sB+wtD+Vu/P4uod1+Qof8h+1g7bbDlBID48Rc"",
+        ""disabled"": False,
+    },
+    ""alice"": {
+        ""username"": ""alice"",
+        ""full_name"": ""Alice Chains"",
+        ""email"": ""alicechains@example.com"",
+        ""hashed_password"": ""$argon2id$v=19$m=65536,t=3,p=4$g2/AV1zwopqUntPKJavBFw$BwpRGDCyUHLvHICnwijyX8ROGoiUPwNKZ7915MeYfCE"",
+        ""disabled"": True,
+    },
+}
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class TokenData(BaseModel):
+    username: str | None = None
+    scopes: list[str] = []
+
+
+class User(BaseModel):
+    username: str
+    email: str | None = None
+    full_name: str | None = None
+    disabled: bool | None = None
+
+
+class UserInDB(User):
+    hashed_password: str
+
+
+password_hash = PasswordHash.recommended()
+
+DUMMY_HASH = password_hash.hash(""dummypassword"")
+
+oauth2_scheme = OAuth2PasswordBearer(
+    tokenUrl=""token"",
+    scopes={""me"": ""Read information about the current user."", ""items"": ""Read items.""},
+)
+
+app = FastAPI()
+
+
+def verify_password(plain_password, hashed_password):
+    return password_hash.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password):
+    return password_hash.hash(password)
+
+
+def get_user(db, username: str):
+    if username in db:
+        user_dict = db[username]
+        return UserInDB(**user_dict)
+
+
+def authenticate_user(fake_db, username: str, password: str):
+    user = get_user(fake_db, username)
+    if not user:
+        verify_password(password, DUMMY_HASH)
+        return False
+    if not verify_password(password, user.hashed_password):
+        return False
+    return user
+
+
+def create_access_token(data: dict, expires_delta: timedelta | None = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({""exp"": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+async def get_current_user(
+    security_scopes: SecurityScopes, token: Annotated[str, Depends(oauth2_scheme)]
+):
+    if security_scopes.scopes:
+        authenticate_value = f'Bearer scope=""{security_scopes.scope_str}""'
+    else:
+        authenticate_value = ""Bearer""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail=""Could not validate credentials"",
+        headers={""WWW-Authenticate"": authenticate_value},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username = payload.get(""sub"")
+        if username is None:
+            raise credentials_exception
+        scope: str = payload.get(""scope"", """")
+        token_scopes = scope.split("" "")
+        token_data = TokenData(scopes=token_scopes, username=username)
+    except (InvalidTokenError, ValidationError):
+        raise credentials_exception
+    user = get_user(fake_users_db, username=token_data.username)
+    if user is None:
+        raise credentials_exception
+    for scope in security_scopes.scopes:
+        if scope not in token_data.scopes:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=""Not enough permissions"",
+                headers={""WWW-Authenticate"": authenticate_value},
+            )
+    return user
+
+
+async def get_current_active_user(
+    current_user: Annotated[User, Security(get_current_user, scopes=[""me""])],
+):
+    if current_user.disabled:
+        raise HTTPException(status_code=400, detail=""Inactive user"")
+    return current_user
+
+
+@app.post(""/token"")
+async def login_for_access_token(
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+) -> Token:
+    user = authenticate_user(fake_users_db, form_data.username, form_data.password)
+    if not user:
+        raise HTTPException(status_code=400, detail=""Incorrect username or password"")
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={""sub"": user.username, ""scope"": "" "".join(form_data.scopes)},
+        expires_delta=access_token_expires,
+    )
+    return Token(access_token=access_token, token_type=""bearer"")
+
+
+@app.get(""/users/me/"")
+async def read_users_me(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+) -> User:
+    return current_user
+
+
+@app.get(""/users/me/items/"")
+async def read_own_items(
+    current_user: Annotated[User, Security(get_current_active_user, scopes=[""items""])],
+):
+    return [{""item_id"": ""Foo"", ""owner"": current_user.username}]
+
+
+@app.get(""/status/"")
+async def read_system_status(current_user: Annotated[User, Depends(get_current_user)]):
+    return {""status"": ""ok""}
+```
+</source>
+
+<source id=""c2"">
+## JWT token with scopes
+
+Now, modify the token *path operation* to return the scopes requested.
+
+We are still using the same `OAuth2PasswordRequestForm`. It includes a property `scopes` with a `list` of `str`, with each scope it received in the request.
+
+And we return the scopes as part of the JWT token.
+
+/// danger
+
+For simplicity, here we are just adding the scopes received directly to the token.
+
+But in your application, for security, you should make sure you only add the scopes that the user is actually able to have, or the ones you have predefined.
+
+///
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a16,correctness,q036,How do I implement a PATCH endpoint that only updates the fields the client actually sent?,,,"Load the stored data into a Pydantic model; get only the fields the client sent with `item.model_dump(exclude_unset=True)`; create an updated copy with `stored_model.model_copy(update=update_data)`; convert it with `jsonable_encoder` to store it; return the updated model. The input model needs all fields optional, since it is still validated.","To implement a partial update where you only update the fields sent by the client, use Pydantic's `exclude_unset=True` parameter on `.model_dump()` to generate a dictionary containing only the data set by the user [1][2][3]. 
+
+Here is an example implementation from the documentation:
+
+```python
+@app.patch(""/items/{item_id}"")
+async def update_item(item_id: str, item: Item) -> Item:
+    stored_item_data = items[item_id]
+    stored_item_model = Item(**stored_item_data)
+    update_data = item.model_dump(exclude_unset=True)
+    updated_item = stored_item_model.model_copy(update=update_data)
+    items[item_id] = jsonable_encoder(updated_item)
+    return updated_item
+``` [c2]",CORRECT | PARTIALLY_CORRECT | INCORRECT,
+a17,faithfulness,q043,How do I return a 401 error with a WWW-Authenticate header from a dependency?,"Starting with FastAPI version 0.122.0, integrated security utilities return a 401 Unauthorized status code and a WWW-Authenticate header upon failed authentication.","<source id=""c1"">
+/// details | FastAPI installation options
+
+When you install with `uv add ""fastapi[standard]""` it comes with some default optional standard dependencies, including `fastapi-cloud-cli`, which allows you to deploy to [FastAPI Cloud](https://fastapicloud.com).
+
+If you don't want to have those optional dependencies, you can instead install `uv add fastapi`.
+
+If you want to install the standard dependencies but without the `fastapi-cloud-cli`, you can install with `uv add ""fastapi[standard-no-fastapi-cloud-cli]""`.
+
+///
+
+/// details | Using `pip` instead
+
+If you prefer to manage a virtual environment and packages manually, create and activate a virtual environment and then install FastAPI with `pip install ""fastapi[standard]""`.
+
+Read the [Virtual Environments guide](https://tiangolo.com/guides/virtual-environments/) for the detailed steps.
+
+///
+</source>
+
+<source id=""c2"">
+### Without `fastapi-cloud-cli`
+
+If you want to install FastAPI with the standard dependencies but without the `fastapi-cloud-cli`, you can install with `uv add ""fastapi[standard-no-fastapi-cloud-cli]""`.
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a18,faithfulness,q030,Write an endpoint that accepts several uploaded files in one form field and returns their filenames.,An endpoint can return the filenames by accessing the filename attribute of each UploadFile in the list [c1].,"<source id=""c1"">
+## Multiple File Uploads
+
+It's possible to upload several files at the same time.
+
+They would be associated to the same ""form field"" sent using ""form data"".
+
+To use that, declare a list of `bytes` or `UploadFile`:
+
+```python
+from typing import Annotated
+
+from fastapi import FastAPI, File, UploadFile
+from fastapi.responses import HTMLResponse
+
+app = FastAPI()
+
+
+@app.post(""/files/"")
+async def create_files(files: Annotated[list[bytes], File()]):
+    return {""file_sizes"": [len(file) for file in files]}
+
+
+@app.post(""/uploadfiles/"")
+async def create_upload_files(files: list[UploadFile]):
+    return {""filenames"": [file.filename for file in files]}
+
+
+@app.get(""/"")
+async def main():
+    content = """"""
+<body>
+<form action=""/files/"" enctype=""multipart/form-data"" method=""post"">
+<input name=""files"" type=""file"" multiple>
+<input type=""submit"">
+</form>
+<form action=""/uploadfiles/"" enctype=""multipart/form-data"" method=""post"">
+<input name=""files"" type=""file"" multiple>
+<input type=""submit"">
+</form>
+</body>
+    """"""
+    return HTMLResponse(content=content)
+```
+
+You will receive, as declared, a `list` of `bytes` or `UploadFile`s.
+
+/// note | Technical Details
+
+You could also use `from starlette.responses import HTMLResponse`.
+
+**FastAPI** provides the same `starlette.responses` as `fastapi.responses` just as a convenience for you, the developer. But most of the available responses come directly from Starlette.
+
+///
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a19,faithfulness,q023,My app runs with several worker processes. How should I run database migrations before it starts?,Running database migrations with multiple processes in parallel would duplicate work and could cause conflicts.,"<source id=""c1"">
+## Previous Steps Before Starting
+
+There are many cases where you want to perform some steps **before starting** your application.
+
+For example, you might want to run **database migrations**.
+
+But in most cases, you will want to perform these steps only **once**.
+
+So, you will want to have a **single process** to perform those **previous steps**, before starting the application.
+
+And you will have to make sure that it's a single process running those previous steps *even* if afterwards, you start **multiple processes** (multiple workers) for the application itself. If those steps were run by **multiple processes**, they would **duplicate** the work by running it in **parallel**, and if the steps were something delicate like a database migration, they could cause conflicts with each other.
+
+Of course, there are some cases where there's no problem in running the previous steps multiple times, in that case, it's a lot easier to handle.
+
+/// tip
+
+Also, keep in mind that depending on your setup, in some cases you **might not even need any previous steps** before starting your application.
+
+In that case, you wouldn't have to worry about any of this. 🤷
+
+///
+</source>",,,SUPPORTED | NOT_SUPPORTED,
+a20,correctness,q034,Write a custom exception handler that turns my UnicornException into a 418 JSON response.,,,"```python
+class UnicornException(Exception):
+    def __init__(self, name: str):
+        self.name = name
+
+
+@app.exception_handler(UnicornException)
+async def unicorn_exception_handler(request: Request, exc: UnicornException):
+    return JSONResponse(
+        status_code=418,
+        content={""message"": f""Oops! {exc.name} did something. There goes a rainbow...""},
+    )
+```","To create a custom exception handler in FastAPI that turns a custom exception into a 418 I'm a teapot JSON response, you can use the `@app.exception_handler` decorator. Here is an example:
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+app = FastAPI()
+
+class UnicornException(Exception):
+    def __init__(self, name: str):
+        self.name = name
+
+@app.exception_handler(UnicornException)
+async def unicorn_exception_handler(request: Request, exc: UnicornException):
+    return JSONResponse(
+        status_code=418,
+        content={""message"": f""Oops! {exc.name} did something there.""},
+    )
+```",CORRECT | PARTIALLY_CORRECT | INCORRECT,

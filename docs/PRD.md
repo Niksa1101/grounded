@@ -507,6 +507,11 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - Confidence invariant 4 and its `Settings` guard (`self_carry_worst_case`) assume rerank off: the weakest support has
   no rerank score. When Phase 6 sets `CONFIDENCE_W_RERANK` above 0, decide what "weakest support" means for a chunk
   that retrieval found weakly but the reranker scores high, and extend the guard and its equality test (R.17).
+- Judge–human agreement (4.11) was measured on 20 items, one rater (the Author, who wrote the rubrics), and the real
+  baseline run has no `NOT_SUPPORTED` verdict, so the sample has four synthetic controls and cannot show whether the judge
+  catches a borderline unsupported *real* claim. The degraded-prompt run of the gate demonstration (4.12) will produce real
+  `NOT_SUPPORTED` verdicts; a second sheet drawn from it (the same tool, another seed and results file) would measure that,
+  if the agreement number is thin or low.
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
   (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
   null and not null. Tracked in ticket 9.06.

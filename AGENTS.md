@@ -230,6 +230,10 @@ uv run grounded eval report   # the README's eval tables, from eval/baselines/*.
 ```
 
 ```bash
+APP_ENV=eval GENERATOR_PROVIDERS=gemini GROQ_MODEL=<pinned> JUDGE_MODEL=<pinned> uv run grounded eval export-verdicts --results <promptfoo-output>.json --git-sha <commit>   # draws the judge-agreement sample: blind eval/judge_agreement/v1.csv + v1.md, and the key in eval/results/ (gitignored). Up to --controls (4) real judge calls; --no-judge asks none; a re-run completes a key (Tech §15.4)
+```
+
+```bash
 uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key <key>.json   # judge-human agreement and Cohen's kappa from the labeled sheet; refuses a missing or invalid label (Tech §15.4)
 ```
 
