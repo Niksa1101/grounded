@@ -181,7 +181,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | **4** | **[Generation eval + CI quality gate](phase-4/README.md)** | | | | |
 | [4.01](phase-4/4.01-decision-groq-promptfoo.md) | Decision: Groq and judge models, promptfoo version and test loading | Decision | D | done | [#66](https://github.com/Niksa1101/grounded/pull/66) |
 | [4.02](phase-4/4.02-groq-provider.md) | `GroqProvider` adapter | Build | G | done | [#67](https://github.com/Niksa1101/grounded/pull/67) |
-| [4.03](phase-4/4.03-eval-mode.md) | Eval mode (`APP_ENV=eval`) and the eval LLM cache | Build | G | todo | |
+| [4.03](phase-4/4.03-eval-mode.md) | Eval mode (`APP_ENV=eval`) and the eval LLM cache | Build | G | done | [#68](https://github.com/Niksa1101/grounded/pull/68) |
 | [4.04](phase-4/4.04-judge.md) | Judge rubrics and the judge module | Build | A+G | todo | |
 | [4.05](phase-4/4.05-promptfoo-tracer.md) | Tracer bullet: promptfoo harness with deterministic assertions | Build | G | todo | |
 | [4.06](phase-4/4.06-judge-asserts.md) | Judge-based assertions: faithfulness and correctness | Build | G | todo | |
