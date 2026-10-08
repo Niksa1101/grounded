@@ -88,8 +88,21 @@ differ, so a baseline PR re-pastes it.
 
 ## Judge agreement
 
-PRD FR-22 asks for the judge's agreement with a human, measured on at least 10 verdicts. The Author labels a sheet
-(`judge_agreement/v1.csv`, `human_label` column) without seeing any verdict, and then:
+PRD FR-22 asks for the judge's agreement with a human, measured on at least 10 verdicts. The sample is drawn once from a
+results file of a real run (the baseline's, ticket 4.09), from `backend/`:
+
+```bash
+APP_ENV=eval GENERATOR_PROVIDERS=gemini GROQ_MODEL=openai/gpt-oss-120b JUDGE_MODEL=openai/gpt-oss-120b \
+  uv run grounded eval export-verdicts --results ../eval/results/<name>.json --git-sha <commit of the run>
+```
+
+It writes the blind `judge_agreement/v1.csv` and `v1.md` (the evidence of 20 items, no verdict anywhere) and the key
+(`eval/results/judge-agreement-v1.key.json`, gitignored: what each `item_id` is and what the judge said). Four of the
+faithfulness items are synthetic controls (a real claim with the sources of another question) and need one real judge call
+each, on Groq's quota; a quota error stops it, and running it again completes the key. How the items were chosen, the source
+run and what the number can and cannot say: [judge_agreement/README.md](judge_agreement/README.md).
+
+The Author labels the sheet (`human_label` column) without seeing any verdict, and then:
 
 ```bash
 uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key <key>.json
@@ -97,5 +110,4 @@ uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key <ke
 
 It prints exact agreement and Cohen's kappa (overall, per kind, real items only, controls only), the confusion matrices,
 the disagreements and the PRD §8 target (0.8) as Markdown with `n` in every row. It refuses, listing every item, a sheet
-with a missing or invalid label. The key is the file that says what each `item_id` is and what the judge said; it is
-kept out of the repository until the labels are in. Details: [docs/Tech.md §15.4](../docs/Tech.md).
+with a missing or invalid label. Details: [docs/Tech.md §15.4](../docs/Tech.md).
