@@ -44,11 +44,14 @@ there is not an error of the model's, it just has no place in a refusal.
 
 **No URLs from the model** (AGENTS.md §6.3, PRD D47). The prompt forbids them, and this module
 enforces it on ``answer_markdown`` (``strip_urls``, before the markers are rewritten): a Markdown
-link or image keeps only its text, an autolink or a bare URL is removed, and every removal is
-counted (``removed_url_count``). The URLs a reader can click are the DB-sourced ``citations``.
-Loopback URLs (``http://127.0.0.1:8000/docs``) are kept but wrapped in inline code: the FastAPI
-docs tell readers to open them, and in code they cannot become links. Fenced code and inline code
-spans are left alone, as for markers. Removing a URL is not bad output and causes no retry.
+link or image keeps only its text, a link reference definition is removed (otherwise ``[1]``, a
+rewritten marker, could be a link to the host it defines), an autolink or a bare URL is removed,
+and every removal is counted (``removed_url_count``). The URLs a reader can click are the
+DB-sourced ``citations``. Loopback URLs (``http://127.0.0.1:8000/docs``) are kept but wrapped in
+inline code: the FastAPI docs tell readers to open them, and in code they cannot become links.
+Fenced code and inline code spans are left alone (unlike markers, which are rewritten in inline
+code, see above): a URL in code is not a link. Removing a URL is not bad output and causes no retry.
+It is a regex, not a Markdown parser, so it is the first layer and not the guarantee (Tech §12).
 
 Snippets are the first ``SNIPPET_CHARS`` characters of the chunk, cut back to a word boundary
 (see ``make_snippet``).
@@ -73,12 +76,33 @@ _FENCE = re.compile(r"[ \t]*(`{3,}|~{3,})(.*)")
 
 # An inline code span: a run of backticks, then the shortest text up to a run of the same length.
 _CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
-# ``[text](target)`` or ``![alt](target)``, with an optional title. Group 1 is the text.
-_LINK = re.compile(r"!?\[([^\]\n]*)\]\(\s*<?[^)\s>]*>?(?:\s+\"[^\"]*\")?\s*\)")
+# ``[text](destination "title")`` or ``![alt](…)``. Group 1 is the text, with one level of nested
+# brackets. The destination is ``<…>`` or has balanced parentheses (one level, as in
+# ``javascript:alert(1)``); the title is ``"…"``, ``'…'`` or ``(…)``. Deeper shapes are left to
+# ``_cut_destinations``.
+_LINK = re.compile(
+    r"!?\[((?:[^\[\]\n]|\[[^\[\]\n]*\])*)\]"
+    r"\(\s*(?:<[^<>\n]*>|(?:[^\s()<>]|\([^\s()]*\))*)"
+    r"(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^()]*\)))?\s*\)"
+)
+# A link reference definition (CommonMark 0.31 §4.7) after optional ``>`` and list-item markers:
+# ``[label]:``, an optional destination, an optional title (it may continue on the next line, so
+# its closing quote is optional). The destination may be on the next line too, so a bare
+# ``[label]:`` matches. Prose such as ``[c1]: the dependency runs first.`` does not: words after
+# the destination are not a title. Matched against a whole line; ``prefix`` holds the container
+# markers and ``end`` the line ending.
+_DEFINITION = re.compile(
+    r"(?P<prefix>(?:[ \t]*(?:>|[-+*][ \t]|\d{1,9}[.)][ \t]))*)[ \t]*"
+    r"\[(?:[^\[\]\\\n]|\\.)+\]:[ \t]*(?:<[^<>\n]*>|[^\s<]\S*)?"
+    r"(?:[ \t]+(?:\"[^\"\n]*\"?|'[^'\n]*'?|\([^()\n]*\)?))?[ \t]*(?P<end>\r?\n?)"
+)
 # ``<http://…>`` autolinks and bare ``http(s)://…`` / ``www.…`` URLs, with one space before them so
 # the removal does not leave a double space. Group 1 is the space, group 2 the URL.
 # Case-insensitive, as the scheme and ``www.`` are for a Markdown renderer (``HTTPS://`` links too).
 _URL = re.compile(r"( ?)<?((?:https?://|www\.)[^\s<>()\[\]`]+)>?", re.IGNORECASE)
+# The other CommonMark autolinks: ``<scheme:…>`` (a letter, then 1-31 letters, digits, ``+.-``)
+# and ``<user@host>``. Matched after ``_URL``, so an http(s) loopback autolink is wrapped instead.
+_AUTOLINK = re.compile(r"( ?)<(?:[A-Za-z][A-Za-z0-9+.\-]{1,31}:[^\s<>]*|[^\s<>@]+@[^\s<>@]+)>")
 _TRAILING_PUNCTUATION = ".,;:!?"
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 
@@ -175,9 +199,12 @@ def strip_urls(markdown: str) -> tuple[str, int]:
     """Remove the links and URLs of ``markdown`` outside code; return the text and how many.
 
     A link or image becomes its text (a marker text such as ``c1`` stays ``[c1]``, so it is still
-    a citation); an autolink or a bare URL is removed together with the space before it; a
-    loopback URL is wrapped in inline code instead and is not counted. Sentence punctuation right
-    after a bare URL stays in the text. Inline code spans are matched per line.
+    a citation); a link reference definition line is removed; a ``](…)`` whose ``[`` is not in the
+    same part of the line (a code span in the link text, or text over two lines) loses its
+    destination; an autolink or a bare URL is removed together with the space before it; a
+    loopback URL is wrapped in inline code instead and is not counted. Each removal counts once: a
+    URL in a link's text is part of that link. Sentence punctuation right after a bare URL stays in
+    the text. Inline code spans are matched per line.
     """
     removed = 0
 
@@ -186,24 +213,79 @@ def strip_urls(markdown: str) -> tuple[str, int]:
         removed += 1
         text = match[1]
         # Any marker form, a group like ``c1, c2`` too: the rewrite then judges it as usual.
-        return f"[{text}]" if _MARKER.fullmatch(f"[{text}]") else text
+        if _MARKER.fullmatch(f"[{text}]"):
+            return f"[{text}]"
+        # A link or an image inside the text is a link of its own; a URL there belongs to this one,
+        # already counted (a loopback URL stays, for the pass below to wrap).
+        return _URL.sub(_drop_unless_loopback, _LINK.sub(link, text))
 
     def url(match: re.Match[str]) -> str:
         nonlocal removed
-        space, target = match[1], match[2]
-        kept = ""
-        while target and target[-1] in _TRAILING_PUNCTUATION:
-            target, kept = target[:-1], target[-1] + kept
+        space, target, kept = _split_url(match)
         if _is_loopback(target):
             return f"{space}`{target}`{kept}"
         removed += 1
         return kept
 
-    def text(part: str) -> str:
-        return _URL.sub(url, _LINK.sub(link, part))
+    def autolink(_match: re.Match[str]) -> str:
+        nonlocal removed
+        removed += 1
+        return ""
 
-    stripped = _outside_fences(markdown, lambda line: _outside_code_spans(line, text))
+    def text(part: str) -> str:
+        nonlocal removed
+        part, cut = _cut_destinations(_LINK.sub(link, part))
+        removed += cut
+        return _AUTOLINK.sub(autolink, _URL.sub(url, part))
+
+    def line(markdown_line: str) -> str:
+        nonlocal removed
+        if (definition := _DEFINITION.fullmatch(markdown_line)) is not None:
+            removed += 1
+            return definition["prefix"].rstrip(" \t") + definition["end"]
+        return _outside_code_spans(markdown_line, text)
+
+    stripped = _outside_fences(markdown, line)
     return stripped, removed
+
+
+def _split_url(match: re.Match[str]) -> tuple[str, str, str]:
+    """A ``_URL`` match as (space before, URL, sentence punctuation after it)."""
+    space, target = match[1], match[2]
+    kept = ""
+    while target and target[-1] in _TRAILING_PUNCTUATION:
+        target, kept = target[:-1], target[-1] + kept
+    return space, target, kept
+
+
+def _drop_unless_loopback(match: re.Match[str]) -> str:
+    _, target, kept = _split_url(match)
+    return match[0] if _is_loopback(target) else kept
+
+
+def _cut_destinations(part: str) -> tuple[str, int]:
+    """Remove every ``(…)`` that follows a ``]`` in ``part``; return the text and how many.
+
+    Runs after ``_LINK``, so what is left is a link ``_LINK`` could not see whole: its text holds
+    a code span or runs over two lines (the ``[`` is in another part), or nests deeper than
+    ``_LINK`` knows. Outside code a ``](`` only ever opens a link destination. The cut runs to the
+    matching ``)``, or to the end of the part when there is none (the destination continues on
+    the next line, which is then plain text).
+    """
+    out: list[str] = []
+    count, done = 0, 0
+    while (start := part.find("](", done)) != -1:
+        depth, end = 1, start + 2
+        while end < len(part) and depth:
+            depth += {"(": 1, ")": -1}.get(part[end], 0)
+            end += 1
+        if depth:
+            end = len(part.rstrip("\r\n"))
+        out.append(part[done : start + 1])  # up to and with the ``]``
+        done = end
+        count += 1
+    out.append(part[done:])
+    return "".join(out), count
 
 
 def _is_loopback(url: str) -> bool:

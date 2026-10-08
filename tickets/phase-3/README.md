@@ -56,5 +56,6 @@ with `n=30`, compared with the 2026-10-07 run, as information and not a baseline
 - [R.14 — URLs in the answer, and the question escaped in the prompt](R.14-answer-text-safety.md)
 - [R.15 — Small hardening and documentation drift](R.15-review-polish.md)
 - [R.16 — Fixes from the review of R.10–R.15](R.16-review-follow-up-fixes.md)
+- [R.17 — Reference links, link leftovers and doc wording](R.17-reference-links.md)
 
 Rules for working a ticket: [../README.md](../README.md).

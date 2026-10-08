@@ -231,6 +231,110 @@ def test_url_removal_is_not_bad_output_and_applies_to_refusals_too() -> None:
     assert refusal.removed_url_count == 1
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("See [docs][x].\n\n[x]: //evil.example/phish\n", "See [docs][x].\n\n\n"),
+        ("See [docs][x].\n\n[x]: mailto:a@evil.example", "See [docs][x].\n\n"),
+        ('[docs]\n\n[docs]: <//evil.example> "Title"', "[docs]\n\n"),
+        ("[docs]\n\n   [docs]:'//evil.example'", "[docs]\n\n"),
+        # CommonMark allows the destination on the next line: without its label it is just text.
+        ("[docs]\n\n[docs]:\n  //evil.example\n", "[docs]\n\n\n  //evil.example\n"),
+        ("> [x]: //evil.example\n> [x]", ">\n> [x]"),
+        ("- [x]: //evil.example\n- [x]", "-\n- [x]"),
+        ("1. [x]: //evil.example", "1."),
+    ],
+)
+def test_a_link_reference_definition_is_removed_and_counted(text: str, expected: str) -> None:
+    # Without it ``[docs]`` (or a rewritten marker ``[1]``) renders as a link to the defined host.
+    assert strip_urls(text) == (expected, 1)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "[c1]: the dependency runs first.",  # a destination followed by more words: prose
+        "```\n[x]: //example.com\n```",
+        "Use `[x]: //example.com` in the file.",
+    ],
+)
+def test_text_that_only_looks_like_a_definition_is_left_alone(text: str) -> None:
+    assert strip_urls(text) == (text, 0)
+
+
+def test_a_definition_cannot_turn_a_marker_into_a_link() -> None:
+    result = mapped("Use it. [c1]\n\n[c1]: //evil.example/phish", claim("Use it.", "c1"))
+    assert result.answer_markdown == "Use it. [1]\n\n"
+    assert (result.removed_url_count, result.invalid_citation_count) == (1, 0)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected", "removed"),
+    [
+        # Balanced parentheses and <…> in the destination, other title quotes.
+        ("See [docs](https://en.example.org/wiki/Foo_(bar)) now.", "See docs now.", 1),
+        ("[c1](javascript:alert(1))", "[c1]", 1),
+        ("a [x](<https://evil.example/a b>) b", "a x b", 1),
+        ("a [x](//evil.example 'T') b", "a x b", 1),
+        ("a [x](//evil.example (T)) b", "a x b", 1),
+        ("An empty [t]() link.", "An empty t link.", 1),
+        # One level of nested brackets in the text.
+        ("See [a [b] c](https://x.example) now.", "See a [b] c now.", 1),
+        # A link inside a link, and a badge (an image inside a link): each one counted.
+        ("[[c1](//a.example)](//b.example)", "[c1]", 2),
+        ("[![badge](https://img.example/b.svg)](https://evil.example)", "badge", 2),
+        # A link whose text is its own URL is one link, counted once.
+        ("[https://x.example](https://x.example)", "", 1),
+        ("[http://127.0.0.1:8000](http://127.0.0.1:8000)", "`http://127.0.0.1:8000`", 1),
+    ],
+)
+def test_links_leave_no_leftovers(text: str, expected: str, removed: int) -> None:
+    assert strip_urls(text) == (expected, removed)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        # The text holds a code span, so the link is split across the parts outside code.
+        ("[click `here`](//evil.example) now", "[click `here`] now"),
+        ("[click `here`](https://evil.example)", "[click `here`]"),
+        # The text runs over two lines.
+        ("[click\nhere](//evil.example) now", "[click\nhere] now"),
+        # Deeper nesting than _LINK knows.
+        ("[a [b [c]]](//evil.example)", "[a [b [c]]]"),
+        # The destination starts on the next line: the opening is cut, the rest is text.
+        ("[x](\n//evil.example)", "[x]\n//evil.example)"),
+    ],
+)
+def test_a_destination_without_its_opening_bracket_is_removed(text: str, expected: str) -> None:
+    assert strip_urls(text) == (expected, 1)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Mail <mailto:a@evil.example> now.", "Mail now."),
+        ("Get <ftp://evil.example/f>.", "Get."),
+        ("Call <tel:+1-555-0100> today.", "Call today."),
+        ("Write to <someone@evil.example>.", "Write to."),
+    ],
+)
+def test_other_autolinks_are_removed_and_counted(text: str, expected: str) -> None:
+    assert strip_urls(text) == (expected, 1)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Use <br> or <Depends> here.",  # no scheme: HTML (not rendered) or prose, not a link
+        "In code: `<mailto:a@b.example>`.",
+        "Prose (with parentheses) and [c1] (a note) stay.",
+    ],
+)
+def test_text_without_links_is_left_alone(text: str) -> None:
+    assert strip_urls(text) == (text, 0)
+
+
 # --- fenced code ------------------------------------------------------------------------------
 
 

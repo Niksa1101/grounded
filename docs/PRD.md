@@ -449,9 +449,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   it is hashed whatever the provider. Move it to the provider in Phase 4, when Groq arrives: each adapter exposes the
   parameters that change its answer, and the key hashes those (R.16, Author's decision of 2026-10-07).
 - `strip_urls` (Tech §9.6) is a regex, not a Markdown parser: a URL between escaped backticks, or after a "fence" with
-  four spaces of indentation, or a `<scheme:…>` autolink other than http(s), passes it. The guarantee is planned for the
-  frontend (Phase 5): `react-markdown` with `a` and `img` disallowed (`unwrapDisallowed`), and claims and follow-up
-  questions rendered as plain text (R.16).
+  four spaces of indentation, or a bare e-mail address (GFM makes it a `mailto:` link) passes it. Reference
+  definitions and `<scheme:…>` autolinks are removed since R.17. The guarantee is planned for the frontend (Phase 5):
+  `react-markdown` with `a` and `img` disallowed (`unwrapDisallowed`), and claims and follow-up questions rendered as
+  plain text (R.16).
+- Confidence invariant 4 and its `Settings` guard (`self_carry_worst_case`) assume rerank off: the weakest support has
+  no rerank score. When Phase 6 sets `CONFIDENCE_W_RERANK` above 0, decide what "weakest support" means for a chunk
+  that retrieval found weakly but the reranker scores high, and extend the guard and its equality test (R.17).
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
   (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
   null and not null. Tracked in ticket 9.06.

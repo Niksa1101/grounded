@@ -97,8 +97,8 @@ Phase 2 starts only after **Phase 1 is closed** (handled outside these tickets):
 Phase 1 is closed, but the code review of Phases 0 and 1 left follow-ups (R.00–R.08, B.01 in the index). Ticket 2.01
 waited for R.07 (the chunker fix changes the index), and the baseline is regenerated once, in B.01.
 
-Phase 3 is closed too; its code review left follow-ups R.09–R.15 ([phase 3 README](phase-3/README.md#review-follow-ups)).
-Ticket 4.01 waits for R.15.
+Phase 3 is closed too; its code review left follow-ups R.09–R.17 ([phase 3 README](phase-3/README.md#review-follow-ups)).
+Ticket 4.01 waits for R.17.
 
 ## Cross-cutting rules (short form)
 
@@ -177,6 +177,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.14](phase-3/R.14-answer-text-safety.md) | URLs in the answer, and the question escaped in the prompt | Build | G | done | [#62](https://github.com/Niksa1101/grounded/pull/62) |
 | [R.15](phase-3/R.15-review-polish.md) | Small hardening and documentation drift | Build | G | done | [#63](https://github.com/Niksa1101/grounded/pull/63) |
 | [R.16](phase-3/R.16-review-follow-up-fixes.md) | Fixes from the review of R.10–R.15 | Build | G | done | [#64](https://github.com/Niksa1101/grounded/pull/64) |
+| [R.17](phase-3/R.17-reference-links.md) | Reference links, link leftovers and doc wording | Build | G | done | [#65](https://github.com/Niksa1101/grounded/pull/65) |
 | **4** | **[Generation eval + CI quality gate](phase-4/README.md)** | | | | |
 | [4.01](phase-4/4.01-decision-groq-promptfoo.md) | Decision: Groq and judge models, promptfoo version and test loading | Decision | D | todo | |
 | [4.02](phase-4/4.02-groq-provider.md) | `GroqProvider` adapter | Build | G | todo | |
