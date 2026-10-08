@@ -34,9 +34,10 @@ commandLineOptions:
   maxConcurrency: 1
   cache: false
 
-# The deterministic metrics (Tech §15.3). `metric` is the stable name a results parser reads from
-# componentResults[].assertion.metric. A metric that does not apply to a case returns
-# not_applicable (see grounded/evals/promptfoo_asserts.py); aggregation must skip those.
+# The metrics (Tech §15.3): four deterministic ones, then the two judge ones. `metric` is the stable
+# name a results parser reads from componentResults[].assertion.metric. A metric that does not
+# apply to a case returns not_applicable (see grounded/evals/promptfoo_asserts.py); aggregation
+# must skip those, and the judge components that are `errored`.
 defaultTest:
   assert:
     - type: python
@@ -51,3 +52,12 @@ defaultTest:
     - type: python
       value: file://asserts.py:citation_precision
       metric: citation_precision
+    # The two judge metrics (D50): Python assertions that call the Groq judge through our adapter,
+    # the eval LLM cache and the backoff, not promptfoo's llm-rubric. A case the judge could not
+    # grade is `errored`, which is neither a score nor not_applicable (Tech §15.3).
+    - type: python
+      value: file://asserts.py:faithfulness
+      metric: faithfulness
+    - type: python
+      value: file://asserts.py:correctness
+      metric: correctness

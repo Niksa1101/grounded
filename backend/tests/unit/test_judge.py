@@ -35,7 +35,7 @@ from grounded.generation.providers.eval_wrappers import (
     BackoffExhaustedError,
     EvalLLM,
 )
-from grounded.generation.providers.fake import FakeLLMProvider, ScriptStep
+from grounded.generation.providers.fake import FakeLLMProvider, ScriptStep, StubJudgeProvider
 from grounded.generation.providers.groq import GroqProvider, to_groq_schema
 from grounded.infra.kvcache import KVCache
 from grounded.infra.provider_errors import (
@@ -710,8 +710,8 @@ async def test_the_judge_provider_is_groq_with_the_judge_model_not_groq_model() 
     settings = judge_settings(judge_model="judge-pinned-id", groq_model="other-model")
 
     provider = build_judge_provider(settings)
+    assert isinstance(provider, GroqProvider)
     try:
-        assert isinstance(provider, GroqProvider)
         assert (provider.name, provider.model) == ("groq", "judge-pinned-id")
     finally:
         await provider.aclose()
@@ -748,3 +748,28 @@ def test_a_judge_call_takes_the_eval_timeout_in_eval_mode() -> None:
     in_dev = JudgeConfig.from_settings(make_settings())
 
     assert (in_eval.timeout_s, in_dev.timeout_s) == (40.0, 12.0)
+
+
+async def test_a_fake_run_gets_the_canned_judge_and_never_the_cache(tmp_path: Path) -> None:
+    # GENERATOR_PROVIDERS=fake is the no-network switch (Tech §15.3): no key, model or cache file.
+    settings = judge_settings(
+        cache_dir=tmp_path, generator_providers=["fake"], judge_model=None, groq_api_key=None
+    )
+
+    async with open_judge(settings) as judge:
+        claim = await judge.judge_claim(0, CLAIM, [SOURCE])
+        answer = await judge.judge_correctness(question="q?", reference_answer="r", answer="a")
+
+    assert (claim.verdict, claim.judge_provider) == ("SUPPORTED", "fake-judge")
+    assert claim.cache_hit is False
+    assert (answer.verdict, answer.score) == ("PARTIALLY_CORRECT", 0.5)
+    assert not (tmp_path / LLM_EVAL_CACHE_FILE).exists()
+
+
+def test_the_stub_judge_is_refused_in_prod() -> None:
+    settings = judge_settings(generator_providers=["fake"], app_env="eval")
+    assert isinstance(build_judge_provider(settings), StubJudgeProvider)
+
+    prod = settings.model_copy(update={"app_env": "prod"})
+    with pytest.raises(ProviderConfigError, match="APP_ENV=prod"):
+        build_judge_provider(prod)

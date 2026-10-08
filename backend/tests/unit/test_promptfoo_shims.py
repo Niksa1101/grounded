@@ -53,6 +53,8 @@ def test_each_assertion_has_a_metric_label_equal_to_its_function_name() -> None:
         "citation_validity",
         "refusal_correctness",
         "citation_precision",
+        "faithfulness",
+        "correctness",
     ]
     assert all(function == metric for function, metric in pairs)
 
@@ -77,8 +79,31 @@ def test_the_asserts_shim_re_exports_the_package_functions(monkeypatch: pytest.M
         "citation_validity",
         "refusal_correctness",
         "citation_precision",
+        "faithfulness",
+        "correctness",
     ):
         assert getattr(shim, name) is getattr(promptfoo_asserts, name)
+    # The judge assertions read the settings in their own process: same eval environment as the
+    # provider (APP_ENV forced, GENERATOR_PROVIDERS defaulted, a shell choice such as `fake` kept).
+    assert os.environ["APP_ENV"] == "eval"
+    assert os.environ["GENERATOR_PROVIDERS"] == "gemini"
+
+
+def test_the_asserts_shim_keeps_a_generator_chosen_in_the_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for variable in ("APP_ENV", "GENERATOR_PROVIDERS"):
+        monkeypatch.setenv(variable, "placeholder")
+    monkeypatch.setenv("GENERATOR_PROVIDERS", "fake")
+    spec = importlib.util.spec_from_file_location(
+        "promptfoo_shim_asserts_fake", PROMPTFOO_DIR / "asserts.py"
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    spec.loader.exec_module(importlib.util.module_from_spec(spec))
+
+    assert os.environ["GENERATOR_PROVIDERS"] == "fake"
+    assert os.environ["APP_ENV"] == "eval"
 
 
 def test_the_provider_shim_re_exports_call_api_and_sets_eval_mode(

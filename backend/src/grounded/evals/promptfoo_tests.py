@@ -13,6 +13,8 @@ One test case per golden item:
   the golden-set version and sha256 (so a results file says which set it scored). promptfoo hands
   the test's ``metadata`` to every assertion (``context["test"]["metadata"]``) and copies it into
   the results row, so the assertion processes (a new Python process per call) never reload the file.
+- ``metadata.run_id`` is one random id for the whole call: it tells the judge assertions, which run
+  in separate processes, which run a stop belongs to (``promptfoo_judge``).
 
 The golden file is only read (AGENTS.md §7). Which items run is the caller's choice: the full set by
 default, or a list of ids for a cheap smoke run.
@@ -21,6 +23,7 @@ default, or a list of ids for a cheap smoke run.
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, Final
@@ -58,12 +61,20 @@ def golden_case(item: GoldenItem, *, version: str, sha256: str) -> dict[str, Any
 
 
 def build_tests(
-    *, golden_set: str = DEFAULT_GOLDEN_SET, ids: Sequence[str] | None = None
+    *,
+    golden_set: str = DEFAULT_GOLDEN_SET,
+    ids: Sequence[str] | None = None,
+    run_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """The test cases for ``golden_set`` (a file name in ``eval/golden/``), in file order.
 
     ``ids`` limits the run to those items. An id that is not in the file raises instead of running
     fewer questions than asked for, so a typo in a smoke run cannot pass for a small run.
+
+    ``run_id`` (a fresh random one by default) is the same in every case of one call and goes in
+    each case's ``metadata.run_id``. The judge assertions run in separate processes, and a daily
+    quota found by one must stop the judging of this run for the others (Tech §15.3); the id is
+    what tells "this run" from an earlier one whose stop is still on disk.
     """
     if Path(golden_set).name != golden_set:
         raise PromptfooTestsError(
@@ -78,11 +89,15 @@ def build_tests(
             raise PromptfooTestsError(f"{golden_set} has no item {', '.join(unknown)}")
         wanted = set(ids)
         items = [item for item in items if item.id in wanted]
+    run_id = run_id or uuid.uuid4().hex
     return [
         {
             "description": f"{item.id} ({item.type})",
             "vars": {"question": item.question},
-            "metadata": {"golden": golden_case(item, version=version, sha256=sha256)},
+            "metadata": {
+                "golden": golden_case(item, version=version, sha256=sha256),
+                "run_id": run_id,
+            },
         }
         for item in items
     ]

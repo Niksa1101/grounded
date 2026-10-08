@@ -6,6 +6,7 @@ use a small one written to ``tmp_path``."""
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -160,3 +161,19 @@ def test_the_committed_golden_set_becomes_one_case_per_item() -> None:
 )
 def test_parse_question_ids(text: str | None, expected: list[str] | None) -> None:
     assert parse_question_ids(text) == expected
+
+
+def test_every_case_of_a_call_carries_the_same_fresh_run_id(golden_dir: Path) -> None:
+    first = build_tests(golden_set="golden_set.v7.jsonl")
+    second = build_tests(golden_set="golden_set.v7.jsonl")
+
+    ids = {t["metadata"]["run_id"] for t in first}
+    assert len(ids) == 1
+    assert ids != {t["metadata"]["run_id"] for t in second}  # a new call is a new run
+    assert re.fullmatch(r"[0-9a-f]{32}", ids.pop())
+
+
+def test_a_given_run_id_is_used_as_it_is(golden_dir: Path) -> None:
+    tests = build_tests(golden_set="golden_set.v7.jsonl", run_id="fixed")
+
+    assert {t["metadata"]["run_id"] for t in tests} == {"fixed"}

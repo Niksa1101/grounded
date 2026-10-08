@@ -13,6 +13,7 @@ Every call is recorded, including the ones that raise, so a test can assert what
 
 from __future__ import annotations
 
+import json
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from grounded.infra.provider_errors import (
     ProviderError,
     compact_validation_error,
 )
+from grounded.schemas.judge import FaithfulnessVerdict
 from grounded.schemas.llm import LLMAnswer, LLMClaim
 
 ScriptStep = BaseModel | str | ProviderError
@@ -134,6 +136,50 @@ class StubLLMProvider:
             ],
         )
         raw = answer.model_dump_json()
+        return GenerationResult(
+            parsed=schema.model_validate_json(raw),
+            raw_text=raw,
+            usage=Usage(input_tokens=0, output_tokens=0),
+            provider=self.name,
+            model=self.model,
+            latency_ms=0,
+        )
+
+
+class StubJudgeProvider:
+    """Dev-only judge for ``GENERATOR_PROVIDERS=fake`` runs (Tech §15.3): the promptfoo harness then
+    runs with no network, judge included. Every claim is ``SUPPORTED`` and every answer
+    ``PARTIALLY_CORRECT``, with a reason that says it is a stand-in, so nobody reads the numbers of
+    such a run as a judgment.
+
+    Its name differs from the stub generator's (``fake``) on purpose: the judge must not be the
+    generator's provider (AGENTS.md §6.5) and ``check_judge_provider`` compares names. Like the stub
+    generator it is never put behind the eval LLM cache: canned verdicts must not be replayed from
+    a file after the stub changes.
+    """
+
+    name = "fake-judge"
+    model = "stub-judge"
+
+    async def generate[T: BaseModel](
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[T],
+        temperature: float,
+        max_output_tokens: int,
+        timeout_s: float,
+    ) -> GenerationResult[T]:
+        verdict = (
+            {"verdict": "SUPPORTED", "reason": "Stub verdict from the fake judge, not a judgment."}
+            if schema is FaithfulnessVerdict
+            else {
+                "verdict": "PARTIALLY_CORRECT",
+                "reason": "Stub verdict from the fake judge, not a judgment.",
+            }
+        )
+        raw = json.dumps(verdict)
         return GenerationResult(
             parsed=schema.model_validate_json(raw),
             raw_text=raw,
