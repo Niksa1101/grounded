@@ -21,6 +21,7 @@
 set -uo pipefail
 
 results=${RESULTS_DIR:-eval/results}
+mkdir -p "$results" # absent when the setup failed before promptfoo ran
 report="$results/gate-report.md"
 errors="$results/gate-errors.txt"
 log="$results/promptfoo.log"
