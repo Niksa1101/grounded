@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from grounded.settings import SELF_CARRY_CEILING, Settings
-from tests.support import make_settings
+from tests.support import EVAL_SETTINGS, make_settings
 
 
 def test_defaults_match_tech_md() -> None:
@@ -228,6 +228,23 @@ class TestEvalGuard:
         assert make_settings(eval_max_total_wait_s=30).eval_max_total_wait_s == 30.0
         with pytest.raises(ValidationError):
             make_settings(eval_max_total_wait_s=0)
+
+
+def test_eval_mode_takes_its_own_llm_timeout_in_place_of_the_request_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 4.05: 2 of 6 real Gemini calls hit the 12 s request-path timeout (typical: 2-3 s), and a
+    # timeout counts toward `inconclusive`. The eval has no user-facing deadline, so it has its own.
+    for name in ("LLM_TIMEOUT_S", "EVAL_LLM_TIMEOUT_S", "GENERATOR_PROVIDERS", "LLM_TEMPERATURE"):
+        monkeypatch.delenv(name, raising=False)
+    assert make_settings().eval_llm_timeout_s == 40.0
+    assert make_settings().call_timeout_s == 12.0  # test/dev/prod: LLM_TIMEOUT_S
+    eval_settings = make_settings(**EVAL_SETTINGS)
+    assert (eval_settings.call_timeout_s, eval_settings.llm_timeout_s) == (40.0, 12.0)
+    assert make_settings(**EVAL_SETTINGS, eval_llm_timeout_s=90).call_timeout_s == 90.0
+    assert make_settings(llm_timeout_s=5, eval_llm_timeout_s=90).call_timeout_s == 5.0
+    with pytest.raises(ValidationError):
+        make_settings(eval_llm_timeout_s=0)
 
 
 def test_the_judge_output_cap_is_its_own_positive_setting(monkeypatch: pytest.MonkeyPatch) -> None:

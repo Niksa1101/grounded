@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_max_output_tokens: int = Field(default=800, gt=0)
     llm_timeout_s: float = Field(default=12.0, gt=0)  # each generation attempt (Tech.md §6)
+    # Eval only: the timeout of one LLM call (generator or judge) in place of LLM_TIMEOUT_S. The
+    # request path's 12 s is a user-facing deadline; an eval has none, and a rare slow reply (2 of 6
+    # Gemini calls hit 12 s in 4.05, typically 2-3 s) would end as a provider-side error and push a
+    # run towards ``inconclusive`` (Tech §15.5). The timeout is not in the eval cache key (Tech
+    # §11), so changing it invalidates nothing. Read it through ``call_timeout_s``.
+    eval_llm_timeout_s: float = Field(default=40.0, gt=0)
     # Eval mode only (Tech §15.6): the most seconds one LLM call (generator or judge) may spend
     # waiting out per-minute 429s. The eval path may wait; the request path never does.
     eval_max_total_wait_s: float = Field(default=120.0, gt=0)
@@ -274,6 +280,12 @@ class Settings(BaseSettings):
             )
         if self.llm_temperature != 0.0:
             raise ValueError("APP_ENV=eval requires LLM_TEMPERATURE=0 (reproducible runs)")
+
+    @property
+    def call_timeout_s(self) -> float:
+        """The timeout of one LLM call here: ``EVAL_LLM_TIMEOUT_S`` in eval mode, else
+        ``LLM_TIMEOUT_S``. The one place that chooses, so the pipeline and the judge agree."""
+        return self.eval_llm_timeout_s if self.app_env == "eval" else self.llm_timeout_s
 
     @property
     def migration_database_url(self) -> SecretStr:

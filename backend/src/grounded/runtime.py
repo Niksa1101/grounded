@@ -21,7 +21,7 @@ from grounded.generation.pipeline import AskPipeline
 from grounded.generation.prompts import load_answer_prompt, load_no_rag_prompt
 from grounded.generation.providers.base import LLMProvider
 from grounded.generation.providers.eval_wrappers import EvalLLM
-from grounded.generation.providers.fake import StubLLMProvider
+from grounded.generation.providers.fake import StubJudgeProvider, StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
 from grounded.generation.providers.groq import GroqProvider
 from grounded.infra.db import create_pool
@@ -98,9 +98,16 @@ def build_groq_provider(settings: Settings, *, model: str | None) -> GroqProvide
     return GroqProvider.create(key, model=pinned, reasoning_effort=settings.groq_reasoning_effort)
 
 
-def build_judge_provider(settings: Settings) -> GroqProvider:
+def build_judge_provider(settings: Settings) -> GroqProvider | StubJudgeProvider:
     """The judge's adapter: Groq with ``JUDGE_MODEL`` (PRD D48). A blank model is an error here,
-    with the name of the variable, not a silently shared ``GROQ_MODEL``."""
+    with the name of the variable, not a silently shared ``GROQ_MODEL``.
+
+    ``GENERATOR_PROVIDERS=fake`` (the existing no-network switch, refused in prod like
+    ``build_provider``) gives the canned stub judge instead, with no key or model needed."""
+    if settings.generator_providers[0] == "fake":
+        if settings.app_env == "prod":
+            raise ProviderConfigError("the fake provider must not be used with APP_ENV=prod")
+        return StubJudgeProvider()
     if not (settings.judge_model or "").strip():
         raise ProviderConfigError(
             "JUDGE_MODEL must be set to a pinned model ID (PRD D48: openai/gpt-oss-120b)"
@@ -138,15 +145,22 @@ async def open_judge(
     cache file and one set of counters; without it a kit of its own is opened over the same file.
     ``provider`` is the inner adapter for tests, which never build a real one (AGENTS.md §8); it is
     wrapped like the real one. Raises ``ProviderConfigError`` for a missing ``JUDGE_MODEL`` or
-    ``GROQ_API_KEY`` and for a judge on the generator's provider, before any call.
+    ``GROQ_API_KEY`` and for a judge on the generator's provider, before any call. The stub judge of
+    a ``fake`` run is the one provider that is not wrapped: its canned verdicts must never be
+    replayed from the cache file, nor written to it.
     """
+    config = JudgeConfig.from_settings(settings)
     async with AsyncExitStack() as stack:
         if provider is None:
             provider = build_judge_provider(settings)
-            stack.push_async_callback(provider.aclose)
+            if isinstance(provider, GroqProvider):
+                stack.push_async_callback(provider.aclose)
         check_judge_provider(provider, settings.generator_providers[0])
+        if isinstance(provider, StubJudgeProvider):
+            yield Judge.create(provider, config)
+            return
         kit = eval_llm or EvalLLM.open(settings, stack)
-        yield Judge.create(kit.wrap(provider), JudgeConfig.from_settings(settings))
+        yield Judge.create(kit.wrap(provider), config)
 
 
 @asynccontextmanager
