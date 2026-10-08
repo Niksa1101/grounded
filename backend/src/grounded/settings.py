@@ -102,6 +102,13 @@ class Settings(BaseSettings):
     # Eval mode only (Tech §15.6): the most seconds one LLM call (generator or judge) may spend
     # waiting out per-minute 429s. The eval path may wait; the request path never does.
     eval_max_total_wait_s: float = Field(default=120.0, gt=0)
+    # Eval mode only (Tech §15.6): a transient 5xx ("high demand" 503s took 46 of 60 cases in the
+    # first CI run) is waited out the same way: up to this many retries, the first after
+    # ``eval_unavailable_wait_s`` seconds and each next one twice as long (5/10/20/40 = 75 s by
+    # default), all inside ``eval_max_total_wait_s``. 0 retries turns it off. The cap of 10 only
+    # catches a typo: the total bound is what limits the waiting.
+    eval_unavailable_retries: int = Field(default=4, ge=0, le=10)
+    eval_unavailable_wait_s: float = Field(default=5.0, ge=0)
     # Eval only: the output cap of one judge call. Groq's reasoning tokens count inside it (Tech
     # §9.1). It is the judge's own setting, not LLM_MAX_OUTPUT_TOKENS: the cap is part of the eval
     # cache key (Tech §11), so sharing it would throw away cached verdicts, which cost scarce Groq
