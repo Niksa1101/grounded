@@ -237,7 +237,7 @@ def results_path(now: datetime) -> Path:
 
 
 def write_run(path: Path, run: RetrievalRun) -> None:
-    _write_json(path, run.model_dump(mode="json"))
+    write_json(path, run.model_dump(mode="json"))
 
 
 def read_run(path: Path) -> RetrievalRun:
@@ -296,7 +296,7 @@ def update_baseline(path: Path, run: RetrievalRun) -> dict[str, RetrievalBaselin
             git_dirty=git_dirty,
             date=run.info.date,
         )
-    _write_json(path, _BASELINE_FILE.dump_python(rows, mode="json"))
+    write_json(path, _BASELINE_FILE.dump_python(rows, mode="json"))
     return rows
 
 
@@ -340,7 +340,8 @@ def _short(value: str | None) -> str:
     return "unset" if value is None else value[:8] if len(value) > 12 else value
 
 
-def _write_json(path: Path, data: Mapping[str, Any]) -> None:
+def write_json(path: Path, data: Mapping[str, Any]) -> None:
+    """The one way eval files are written (results and both baselines): UTF-8, LF, indent 2."""
     path.parent.mkdir(parents=True, exist_ok=True)
     # Bytes, not text: LF line endings on every OS, like the rest of the committed files.
     path.write_bytes((json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8"))

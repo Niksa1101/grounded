@@ -218,6 +218,14 @@ EVAL_QUESTION_IDS=q003,q045,q036 <the promptfoo command above>   # a smoke run o
 ```
 
 ```bash
+uv run grounded eval baseline --suite generation --results <promptfoo-output>.json   # writes the run's rows into eval/baselines/generation.json; baseline PRs only (Tech §15.7)
+```
+
+```bash
+uv run grounded eval report   # the README's eval tables, from eval/baselines/*.json only; paste the output into the README block
+```
+
+```bash
 cd frontend && npm run lint && npm run typecheck && npm run build
 ```
 

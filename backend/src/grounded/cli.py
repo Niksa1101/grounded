@@ -41,6 +41,11 @@ from grounded.evals.gate import (
     render_generation_markdown,
     render_markdown,
 )
+from grounded.evals.generation_baseline import (
+    GenerationBaselineError,
+    check_against_itself,
+    update_generation_baseline,
+)
 from grounded.evals.generation_results import (
     GENERATION_BASELINE,
     read_generation_baseline,
@@ -58,6 +63,7 @@ from grounded.evals.golden import (
     sample_sections,
     type_counts,
 )
+from grounded.evals.report import build_report
 from grounded.evals.retrieval_runner import (
     RETRIEVAL_BASELINE,
     BaselineMismatchError,
@@ -788,13 +794,18 @@ def eval_gate(
         markdown, code = _generation_gate(results, baseline or GENERATION_BASELINE)
     else:
         markdown, code = _retrieval_gate(results, baseline or RETRIEVAL_BASELINE)
-    # The report has ✅ ❌ Δ ≥. Redirected, a Windows stdout is cp1252 and would crash on them.
-    stdout: object = sys.stdout
-    if isinstance(stdout, io.TextIOWrapper):
-        stdout.reconfigure(encoding="utf-8")
-    typer.echo(markdown, nl=False)
+    _echo_markdown(markdown)
     if code:
         raise typer.Exit(code=code)
+
+
+def _echo_markdown(markdown: str) -> None:
+    """Print a Markdown report as UTF-8 with LF line endings. It has ✅ ❌ Δ ≥ —: redirected, a
+    Windows stdout is cp1252 and would crash on them (and would write CRLF into a pasted file)."""
+    stdout: object = sys.stdout
+    if isinstance(stdout, io.TextIOWrapper):
+        stdout.reconfigure(encoding="utf-8", newline="\n")
+    typer.echo(markdown, nl=False)
 
 
 def _retrieval_gate(results: Path, baseline_path: Path) -> tuple[str, int]:
@@ -838,3 +849,93 @@ def _generation_gate(results: Path, baseline_path: Path) -> tuple[str, int]:
             "The gate could not run:\n" + "\n".join(f"- {r}" for r in exc.reasons)
         ) from exc
     return render_generation_markdown(report), exit_code(report)
+
+
+class BaselineSuite(StrEnum):
+    generation = "generation"  # retrieval rows are written by `eval retrieval --write-baseline`
+
+
+@eval_app.command("baseline")
+def eval_baseline(
+    suite: Annotated[
+        BaselineSuite,
+        typer.Option(help="Which baseline to write. Retrieval: `eval retrieval --write-baseline`."),
+    ],
+    results: Annotated[
+        Path,
+        typer.Option(help="promptfoo's JSON output of the run (`promptfoo eval -o <file>.json`)."),
+    ],
+    baseline: Annotated[
+        Path | None,
+        typer.Option(
+            help="Baseline file. Default: eval/baselines/generation.json.", show_default=False
+        ),
+    ] = None,
+) -> None:
+    """Copy the rows of a generation run into the baseline file (other configs' rows are kept).
+
+    Refuses, with the file untouched and exit 1, a run that is inconclusive or has a provider or
+    judge error, rows from another setup than the kept ones, and an unknown git state (Tech.md
+    §15.7). A new hybrid row gets the initial thresholds of Tech.md §15.5: they need the Author's
+    approval in the baseline PR. Numbers are never typed by hand (AGENTS.md §7).
+    """
+    del suite  # generation is the only suite; the option keeps `eval baseline` unambiguous
+    path = baseline or GENERATION_BASELINE
+    git_sha, git_dirty = repo_state()
+    try:
+        run = read_generation_results(results, git_sha=git_sha, git_dirty=git_dirty)
+    except (OSError, ValueError) as exc:
+        raise _fail(f"Cannot read the results file {results}: {exc}") from exc
+    if git_dirty:
+        typer.echo("Warning: uncommitted changes; the baseline's git_sha isn't the code that ran.")
+    try:
+        update = update_generation_baseline(path, run)
+    except GenerationBaselineError as exc:
+        raise _fail(f"Baseline not updated: {exc}\nThe baseline file was not changed.") from exc
+    except OSError as exc:
+        raise _fail(f"Cannot read or write the baseline {path}: {exc}") from exc
+
+    typer.echo(f"Baseline updated: {path} ({', '.join(update.written)})")
+    for name in update.written:
+        row = update.rows[name]
+        scores = ", ".join(f"{m} {v:.3f} (n={row.n[m]})" for m, v in sorted(row.metrics.items()))
+        typer.echo(f"  {name}: {row.cases} cases; {scores}")
+    for name in update.seeded:
+        typer.echo(
+            f"  {name}: thresholds are the initial table of Tech.md §15.5, written for the first "
+            "time: the Author approves them in the baseline PR."
+        )
+    check = check_against_itself(run, update)
+    if check is not None:
+        typer.echo("")
+        _echo_markdown(render_generation_markdown(check))
+        if check.status != "pass":
+            typer.echo(
+                "Warning: the new baseline does not pass its own gate on the run it was made "
+                "from. The file is written; decide the thresholds before the baseline PR."
+            )
+
+
+@eval_app.command("report")
+def eval_report(
+    retrieval: Annotated[
+        Path,
+        typer.Option(
+            help="Retrieval baseline. Default: eval/baselines/retrieval.json.", show_default=False
+        ),
+    ] = RETRIEVAL_BASELINE,
+    generation: Annotated[
+        Path,
+        typer.Option(
+            help="Generation baseline. Default: eval/baselines/generation.json.",
+            show_default=False,
+        ),
+    ] = GENERATION_BASELINE,
+) -> None:
+    """Print the eval tables of the README (retrieval ablation, generation) as Markdown, from the
+    committed baseline files only. A baseline that does not exist yet is said so, not an error."""
+    try:
+        report = build_report(retrieval, generation)
+    except (OSError, ValueError) as exc:
+        raise _fail(f"Cannot read the baselines: {exc}") from exc
+    _echo_markdown(report)

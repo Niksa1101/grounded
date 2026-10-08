@@ -44,4 +44,26 @@ PowerShell, the CI form, the flags, what each variable is for and the result for
   case): leave it out of every mean, like a not-applicable one.
 - The golden set is never edited by this run; `tests_loader.py` only reads it.
 
+## Baselines and the report
+
+Baseline rows are copied from a run by a tool, never typed (AGENTS.md §7), and only a PR titled
+`eval: update baseline (<reason>)` changes them. Retrieval rows: `grounded eval retrieval ... --write-baseline`.
+Generation rows come from promptfoo's results file, in a second step (from the repository root or `backend/`):
+
+```bash
+uv run grounded eval baseline --suite generation --results eval/results/<name>.json
+```
+
+It reads the file with the gate's parser and the repo's git state, keeps the rows of the configs the run does not
+have, and **refuses** (exit 1, the file untouched) a run that is `inconclusive`, has a provider or judge error, comes
+from a different setup than the kept rows (golden set, index, generator, judge), or has no git state: re-run the eval
+(the eval cache makes that cheap) and write again. A new `hybrid` row gets the initial thresholds of Tech §15.5,
+which the Author approves in the baseline PR. It then prints the gate's verdict on the new rows against the same
+run. Details: [docs/Tech.md §15.7](../docs/Tech.md).
+
+`uv run grounded eval report` prints the README's tables (retrieval ablation, generation, the PRD §8 targets met /
+not met, the RAG value) from `baselines/*.json` only. The README block between its
+`<!-- eval-report:start -->` and `<!-- eval-report:end -->` markers is that output, pasted; a test fails when they
+differ, so a baseline PR re-pastes it.
+
 `grounded eval retrieval --write-baseline` refuses to put rows from different setups (golden-set version or bytes, index config) into one baseline file. To add or refresh a config after such a change, run every config together, e.g. `--config dense --config fts --write-baseline`.
