@@ -118,6 +118,20 @@ def test_the_committed_pricing_file_loads_and_prices_the_defaults() -> None:
     loaded.require_generator("gemini", "gemini-3.5-flash-lite")
 
 
+def test_the_committed_pricing_file_prices_the_pinned_groq_model() -> None:
+    # PRD D48 pins openai/gpt-oss-120b for the fallback generator and the judge (4.01).
+    loaded = load_pricing()
+    loaded.require_generator("groq", "openai/gpt-oss-120b")
+    # 1M in * 0.15 + 2M out * 0.60 = 0.15 + 1.20, from Groq's model page (2026-10-08).
+    cost = loaded.shadow_cost(
+        provider="groq",
+        model="openai/gpt-oss-120b",
+        input_tokens=1_000_000,
+        output_tokens=2_000_000,
+    )
+    assert cost == Decimal("1.35000000")
+
+
 def test_a_missing_or_invalid_file_is_a_pricing_error(tmp_path: Path) -> None:
     with pytest.raises(PricingError, match="cannot load"):
         load_pricing(tmp_path / "missing.toml")
