@@ -33,6 +33,13 @@ from grounded.evals.ask_batch import (
     summarize,
     write_ask_batch,
 )
+from grounded.evals.eval_record import (
+    EvalRecordError,
+    EvalRunRow,
+    build_rows,
+    insert_rows,
+    read_active_index,
+)
 from grounded.evals.gate import (
     GateCannotRunError,
     evaluate_gate,
@@ -914,6 +921,101 @@ def eval_baseline(
                 "Warning: the new baseline does not pass its own gate on the run it was made "
                 "from. The file is written; decide the thresholds before the baseline PR."
             )
+
+
+class RecordSuite(StrEnum):
+    generation = "generation"  # the only suite CI records on main (the retrieval eval is not)
+
+
+@eval_app.command("record")
+def eval_record(
+    suite: Annotated[RecordSuite, typer.Option(help="Which suite's run to record.")],
+    results: Annotated[
+        Path,
+        typer.Option(help="promptfoo's JSON output of the run (`promptfoo eval -o <file>.json`)."),
+    ],
+    branch: Annotated[str, typer.Option(help="Branch the run was made on (CI: the ref name).")],
+    report_url: Annotated[
+        str, typer.Option(help="Link to the CI run (or its artifact), stored as report_url.")
+    ],
+    baseline: Annotated[
+        Path | None,
+        typer.Option(
+            help="Baseline file. Default: eval/baselines/generation.json.", show_default=False
+        ),
+    ] = None,
+    write: Annotated[
+        bool,
+        typer.Option(
+            "--write",
+            help="Insert the rows into eval_runs of DATABASE_URL_DIRECT. Without it: a dry run "
+            "that prints the rows and writes nothing.",
+        ),
+    ] = False,
+) -> None:
+    """Record a generation run in `eval_runs`, one row per config (DB.md §4, aggregates only).
+
+    CI runs this on a push to main only, behind the repository variable EVAL_RECORD_RUNS, with the
+    owner connection DATABASE_URL_DIRECT; the index hash is read from DATABASE_URL, the database
+    the eval ran against. Nothing is written without --write. Exit 1: not recorded; exit 2: the
+    gate could not run on these results (Tech.md §15.7).
+    """
+    del suite  # generation is the only suite; the option keeps `eval record` unambiguous
+    settings = get_settings()
+    git_sha, git_dirty = repo_state()
+    if git_sha is None or git_dirty is None:
+        raise _fail("Not recorded: this is not a git checkout, so the row has no commit to name.")
+    if git_dirty:
+        raise _fail("Not recorded: tracked files are modified, so HEAD is not the code that ran.")
+    try:
+        run = read_generation_results(results, git_sha=git_sha, git_dirty=git_dirty)
+    except (OSError, ValueError) as exc:
+        raise _fail(f"Cannot read the results file {results}: {exc}") from exc
+    try:
+        rows = read_generation_baseline(baseline or GENERATION_BASELINE)
+    except (OSError, ValueError) as exc:
+        raise _fail(f"Cannot read the baseline: {exc}") from exc
+
+    source = settings.database_url.get_secret_value()
+    try:
+        active = read_active_index(source)
+        records = build_rows(
+            run, rows, git_sha=git_sha, branch=branch, report_url=report_url, active_index=active
+        )
+    except GateCannotRunError as exc:
+        raise _gate_error(
+            "The gate could not run:\n" + "\n".join(f"- {r}" for r in exc.reasons)
+        ) from exc
+    except (EvalRecordError, psycopg.Error) as exc:
+        raise _fail(f"Not recorded: {exc}") from exc
+
+    typer.echo(
+        f"Run of {git_sha[:7]} on {branch}; index {active.label} (from {_describe_target(source)})"
+    )
+    for record in records:
+        typer.echo(_describe_record(record))
+    if not write:
+        typer.echo("Dry run: nothing was written. Pass --write to insert these rows.")
+        return
+    if settings.database_url_direct is None:
+        raise _fail(
+            "Not recorded: DATABASE_URL_DIRECT is not set (eval_runs needs the owner role)."
+        )
+    target = settings.database_url_direct.get_secret_value()
+    try:
+        ids = insert_rows(target, records)
+    except (EvalRecordError, psycopg.Error) as exc:
+        raise _fail(f"Not recorded, nothing was inserted: {exc}") from exc
+    typer.echo(f"Inserted {len(ids)} rows into eval_runs at {_describe_target(target)}.")
+
+
+def _describe_record(record: EvalRunRow) -> str:
+    """One line per row: what is about to be (or was) written, without any text of the eval."""
+    return (
+        f"  {record.config_name}: {record.status}, {record.case_count} cases "
+        f"({record.errored_case_count} provider errors), index {record.index_config_hash[:8]}, "
+        f"{len(record.metrics)} metric entries"
+    )
 
 
 @eval_app.command("report")

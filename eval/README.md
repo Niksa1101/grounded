@@ -53,6 +53,9 @@ to `main` and a manual run (`workflow_dispatch`) run it too. The job sets up the
 run fail the job. The result is in the job summary, in one PR comment (found by `<!-- grounded-eval -->`, updated on
 every push) and in the `generation-eval-report` artifact (promptfoo HTML and JSON, the gate's Markdown, the log).
 
+On `main` the run can also be recorded in `eval_runs` (`grounded eval record`, a dry run unless `--write`); that step is
+disabled until the Author sets the repository variable `EVAL_RECORD_RUNS` to `true`.
+
 The eval LLM cache is saved by PR runs too (key `llm-eval-pr-<number>-…`, with `main`'s cache as the fallback), so a
 second push to the same PR replays what the first one paid for. Quota: one full judge run is about 145K of the 200K
 Groq tokens of a day, so check the day's headroom before adding the label and never re-run a stopped run hoping for a

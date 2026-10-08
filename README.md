@@ -125,6 +125,8 @@ n = 25, so differences under one question (0.04) are not claims either way.
   `no_rag` and `hybrid`, a judge on another provider, `grounded eval gate` against `eval/baselines/generation.json`).
   The PR gets **one comment** with the metric table, `n` and the verdict, updated on every push and never duplicated;
   the promptfoo HTML and JSON report is a downloadable artifact; a quality fail blocks.
+- A run on `main` is also recorded in the `eval_runs` table for the dashboard (aggregates only). That write is shipped
+  **disabled** until the repository variable `EVAL_RECORD_RUNS` is set to `true`.
 - Runs dominated by free-tier quota errors are reported as **inconclusive**, not as failures: the comment, the job
   summary and a warning annotation say so, and an inconclusive run is never shown as a pass.
 
