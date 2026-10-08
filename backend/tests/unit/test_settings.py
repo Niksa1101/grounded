@@ -230,6 +230,16 @@ class TestEvalGuard:
             make_settings(eval_max_total_wait_s=0)
 
 
+def test_the_judge_output_cap_is_its_own_positive_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Not LLM_MAX_OUTPUT_TOKENS: the cap is part of the eval cache key, so sharing it would drop the
+    # cached judge verdicts whenever the generator's answer cap moved (Tech §11).
+    monkeypatch.delenv("JUDGE_MAX_OUTPUT_TOKENS", raising=False)
+    assert make_settings().judge_max_output_tokens == 800
+    assert make_settings(judge_max_output_tokens=1200).judge_max_output_tokens == 1200
+    with pytest.raises(ValidationError):
+        make_settings(judge_max_output_tokens=0)
+
+
 def test_env_example_lists_every_setting() -> None:
     # .env.example is the documented config surface (Tech.md §4); it must not drift from Settings.
     env_example = Path(__file__).resolve().parents[3] / ".env.example"

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from google import genai
 from psycopg_pool import AsyncConnectionPool
 
+from grounded.evals.judge import Judge, JudgeConfig
 from grounded.generation.pipeline import AskPipeline
 from grounded.generation.prompts import load_answer_prompt, load_no_rag_prompt
 from grounded.generation.providers.base import LLMProvider
@@ -34,7 +35,8 @@ from grounded.settings import Settings
 
 
 class ProviderConfigError(Exception):
-    """``GENERATOR_PROVIDERS`` names a provider this build cannot create."""
+    """A provider this build cannot create or must not use: an unknown ``GENERATOR_PROVIDERS``
+    entry, a missing key or model ID, a judge on the generator's provider."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +96,57 @@ def build_groq_provider(settings: Settings, *, model: str | None) -> GroqProvide
             "PRD D48: openai/gpt-oss-120b)"
         )
     return GroqProvider.create(key, model=pinned, reasoning_effort=settings.groq_reasoning_effort)
+
+
+def build_judge_provider(settings: Settings) -> GroqProvider:
+    """The judge's adapter: Groq with ``JUDGE_MODEL`` (PRD D48). A blank model is an error here,
+    with the name of the variable, not a silently shared ``GROQ_MODEL``."""
+    if not (settings.judge_model or "").strip():
+        raise ProviderConfigError(
+            "JUDGE_MODEL must be set to a pinned model ID (PRD D48: openai/gpt-oss-120b)"
+        )
+    return build_groq_provider(settings, model=settings.judge_model)
+
+
+def check_judge_provider(judge: LLMProvider, generator: str) -> None:
+    """The judge must not grade its own provider's answers (AGENTS.md §6.5, PRD FR-22).
+
+    ``generator`` is the provider that wrote the answers, ``GENERATOR_PROVIDERS[0]``: eval mode
+    allows no other (fallback is off). The comparison is by provider name; ``Settings`` refuses a
+    ``groq`` generator in eval mode too, but this also holds for the other environments and for a
+    provider that is handed in.
+    """
+    if judge.name == generator:
+        raise ProviderConfigError(
+            f"the judge ({judge.name}) is the same provider as the generator ({generator}): "
+            "the judge must run on a different provider (AGENTS.md §6.5); "
+            "set GENERATOR_PROVIDERS=gemini"
+        )
+
+
+@asynccontextmanager
+async def open_judge(
+    settings: Settings,
+    *,
+    eval_llm: EvalLLM | None = None,
+    provider: LLMProvider | None = None,
+) -> AsyncGenerator[Judge]:
+    """The judge of an eval run (Tech §15.4): the Groq adapter behind the eval LLM cache and the
+    429 backoff, on the committed rubrics.
+
+    ``eval_llm`` is the kit the generator already uses (``Runtime.eval_llm``), so both share one
+    cache file and one set of counters; without it a kit of its own is opened over the same file.
+    ``provider`` is the inner adapter for tests, which never build a real one (AGENTS.md §8); it is
+    wrapped like the real one. Raises ``ProviderConfigError`` for a missing ``JUDGE_MODEL`` or
+    ``GROQ_API_KEY`` and for a judge on the generator's provider, before any call.
+    """
+    async with AsyncExitStack() as stack:
+        if provider is None:
+            provider = build_judge_provider(settings)
+            stack.push_async_callback(provider.aclose)
+        check_judge_provider(provider, settings.generator_providers[0])
+        kit = eval_llm or EvalLLM.open(settings, stack)
+        yield Judge.create(kit.wrap(provider), JudgeConfig.from_settings(settings))
 
 
 @asynccontextmanager

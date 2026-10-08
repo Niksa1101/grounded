@@ -1,20 +1,35 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import get_args
 
 import pytest
+from pydantic import BaseModel
 
 from grounded.generation.prompts import (
     ANSWER_PLACEHOLDERS,
     ANSWER_RETRY_PLACEHOLDERS,
+    JUDGE_CORRECTNESS_PLACEHOLDERS,
+    JUDGE_FAITHFULNESS_PLACEHOLDERS,
+    JUDGE_RETRY_PLACEHOLDERS,
     NO_RAG_PLACEHOLDERS,
+    Prompt,
     PromptLoadError,
     PromptRenderError,
     load_answer_prompt,
+    load_judge_correctness_prompt,
+    load_judge_faithfulness_prompt,
     load_no_rag_prompt,
     load_prompt,
     parse_prompt,
     prompt_version,
+)
+from grounded.schemas.judge import (
+    CorrectnessLabel,
+    CorrectnessVerdict,
+    FaithfulnessLabel,
+    FaithfulnessVerdict,
 )
 
 VALID = "# System\n\nBe brief.\n\n# User template\n\nQ: {{question}}\nS: {{sources}}\n"
@@ -283,3 +298,70 @@ def test_the_no_rag_prompt_asks_for_no_citation_markers() -> None:
     system = load_no_rag_prompt().system
     assert "no citation markers" in system.lower()
     assert "{{" not in system
+
+
+# --- the judge rubrics (4.04) ----------------------------------------------------------------
+
+JUDGE_PROMPTS = [
+    pytest.param(
+        load_judge_faithfulness_prompt,
+        "judge_faithfulness_v1",
+        JUDGE_FAITHFULNESS_PLACEHOLDERS,
+        FaithfulnessVerdict,
+        get_args(FaithfulnessLabel),
+        id="faithfulness",
+    ),
+    pytest.param(
+        load_judge_correctness_prompt,
+        "judge_correctness_v1",
+        JUDGE_CORRECTNESS_PLACEHOLDERS,
+        CorrectnessVerdict,
+        get_args(CorrectnessLabel),
+        id="correctness",
+    ),
+]
+
+
+@pytest.mark.parametrize(("load", "name", "placeholders", "_schema", "_labels"), JUDGE_PROMPTS)
+def test_the_committed_judge_prompts_load_with_a_retry_section(
+    load: object, name: str, placeholders: frozenset[str], _schema: object, _labels: object
+) -> None:
+    prompt: Prompt = load()  # type: ignore[operator]
+    assert prompt.name == name
+    assert prompt.version.startswith(f"{name}@")
+    assert prompt.placeholders == placeholders
+    assert prompt.retry_placeholders == JUDGE_RETRY_PLACEHOLDERS == frozenset({"error"})
+    assert "{{" not in prompt.system
+    retry = prompt.render_retry("USER", error="the verdict is unknown")
+    assert retry.startswith("USER\n\nYour previous output was invalid because the verdict is")
+    assert retry.endswith("Return only the JSON object with `verdict` and `reason`.")
+
+
+def test_the_two_judge_prompts_are_separate_versions() -> None:
+    assert load_judge_faithfulness_prompt().version != load_judge_correctness_prompt().version
+
+
+@pytest.mark.parametrize(("load", "_name", "_placeholders", "schema", "labels"), JUDGE_PROMPTS)
+def test_a_judge_prompt_names_exactly_the_labels_of_its_schema(
+    load: object,
+    _name: str,
+    _placeholders: object,
+    schema: type[BaseModel],
+    labels: tuple[str, ...],
+) -> None:
+    prompt: Prompt = load()  # type: ignore[operator]
+    assert set(schema.model_fields) == {"verdict", "reason"}  # what the Output section lists
+    for label in labels:
+        assert f"`{label}`" in prompt.system
+
+
+@pytest.mark.parametrize(("load", "_name", "_placeholders", "schema", "_labels"), JUDGE_PROMPTS)
+def test_every_worked_example_of_a_judge_prompt_is_a_valid_verdict(
+    load: object, _name: str, _placeholders: object, schema: type[BaseModel], _labels: object
+) -> None:
+    """The examples teach the model the output shape, so each must pass the schema it is held to."""
+    prompt: Prompt = load()  # type: ignore[operator]
+    outputs = [line for line in prompt.system.splitlines() if line.startswith("Output: ")]
+    assert len(outputs) == 3  # 2-3 worked examples (Tech §15.4)
+    for line in outputs:
+        schema.model_validate(json.loads(line.removeprefix("Output: ")))
