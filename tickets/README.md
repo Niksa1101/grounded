@@ -189,7 +189,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [4.08](phase-4/4.08-gate-generation.md) | Generation gate and inconclusive rule — implementation | Author | G (delegated) | done | [#74](https://github.com/Niksa1101/grounded/pull/74) |
 | [4.09](phase-4/4.09-generation-baseline.md) | First generation baseline and the eval report | Build + Baseline | G | done | [#75](https://github.com/Niksa1101/grounded/pull/75) (4.09a), [#76](https://github.com/Niksa1101/grounded/pull/76) (4.09b) |
 | [4.10](phase-4/4.10-eval-workflow.md) | `eval.yml` workflow with the PR comment | Build | G | done | [#77](https://github.com/Niksa1101/grounded/pull/77) (4.10a), [#78](https://github.com/Niksa1101/grounded/pull/78) (4.10b), [#79](https://github.com/Niksa1101/grounded/pull/79) (4.10c; the `eval_runs` insert ships disabled) |
-| [4.11](phase-4/4.11-judge-agreement.md) | Judge–human agreement | Build | A+G | todo | |
+| [4.11](phase-4/4.11-judge-agreement.md) | Judge–human agreement | Build | A+G | in-progress (4.11a: the agreement computation in review; the export follows; 4.11b: the Author's labels pending) | [#82](https://github.com/Niksa1101/grounded/pull/82) (4.11a, 1/2) |
 | [4.12](phase-4/4.12-closeout.md) | Gate demonstrations and Phase 4 closeout | Closeout | A+G | todo | |
 | **5** | **[UI, protection, deploy (MVP)](phase-5/README.md)** | | | | |
 | [5.01](phase-5/5.01-decision-rate-limit.md) | Decision: rate limiter on serverless, limit and budget numbers | Decision | D | todo | |
