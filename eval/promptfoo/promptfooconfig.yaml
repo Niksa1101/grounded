@@ -1,0 +1,53 @@
+# Generation eval (Tech §15.3). Run from the repository root; the exact command, including the
+# interpreter variable, is in AGENTS.md §10 and Tech §15.3:
+#   npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1 --no-cache -o eval/results/<name>.json
+description: Grounded generation eval (no_rag vs hybrid, golden set)
+
+# Passthrough: the real prompts live in the backend (backend/prompts/), and the provider receives
+# the question as it is.
+prompts:
+  - "{{question}}"
+
+# One provider entry per config; promptfoo starts one persistent Python worker for each. The
+# baseline comes first, then the product. `mode` is read by grounded.evals.promptfoo_provider.
+providers:
+  - id: file://provider.py
+    label: no_rag
+    config:
+      mode: no_rag
+  - id: file://provider.py
+    label: hybrid
+    config:
+      mode: hybrid
+
+# Test cases come from the golden set through promptfoo's Python generator (D49). `ids` is not set
+# here: EVAL_QUESTION_IDS limits a smoke run (eval/promptfoo/tests_loader.py).
+tests:
+  - path: file://tests_loader.py:generate_tests
+    config:
+      golden_set: golden_set.v1.jsonl
+
+# The two flags of the command line, also enforced here so a forgotten flag cannot turn a run into
+# a cached or concurrent one: concurrency 1 (free tiers, Tech §15.6) and no promptfoo result cache
+# (its key ignores the backend's prompts and settings, Tech §15.3).
+commandLineOptions:
+  maxConcurrency: 1
+  cache: false
+
+# The deterministic metrics (Tech §15.3). `metric` is the stable name a results parser reads from
+# componentResults[].assertion.metric. A metric that does not apply to a case returns
+# not_applicable (see grounded/evals/promptfoo_asserts.py); aggregation must skip those.
+defaultTest:
+  assert:
+    - type: python
+      value: file://asserts.py:schema_first_try
+      metric: schema_first_try
+    - type: python
+      value: file://asserts.py:citation_validity
+      metric: citation_validity
+    - type: python
+      value: file://asserts.py:refusal_correctness
+      metric: refusal_correctness
+    - type: python
+      value: file://asserts.py:citation_precision
+      metric: citation_precision

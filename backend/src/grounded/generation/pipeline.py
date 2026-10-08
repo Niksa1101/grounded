@@ -200,6 +200,8 @@ class AskPipeline:
                     context = build_context(chunks, k_context=self._cfg.k_context)
                     titles = await chunk_titles(conn, [c.chunk_id for c in context.labels.values()])
             labels = context.labels
+            trace.retrieved_section_ids = [chunk.section_id for chunk in chunks]
+            trace.context_chunks = dict(context.labels)
             # The connection went back to the pool before the (slow) LLM call. The question is
             # escaped like chunk text, so it cannot open a fake <source> block of its own.
             user = prompt.render_user(question=escape_content(question), sources=context.text)

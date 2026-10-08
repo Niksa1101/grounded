@@ -64,6 +64,7 @@ from grounded.evals.retrieval_runner import (
 from grounded.generation.pipeline import AskMode
 from grounded.generation.providers.eval_wrappers import EvalStats
 from grounded.generation.providers.fake import StubLLMProvider
+from grounded.infra.event_loop import loop_factory
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
 from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
@@ -607,8 +608,7 @@ def golden_validate(
 
 def _run_async[T](coro: Coroutine[Any, Any, T]) -> T:
     # psycopg async can't run on the Proactor loop that asyncio.run picks on Windows.
-    loop_factory = asyncio.SelectorEventLoop if sys.platform == "win32" else None
-    return asyncio.run(coro, loop_factory=loop_factory)
+    return asyncio.run(coro, loop_factory=loop_factory())
 
 
 @eval_app.command("retrieval")
