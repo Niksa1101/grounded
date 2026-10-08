@@ -189,6 +189,47 @@ class TestProdGuard:
         assert s.app_env == "prod"
 
 
+class TestEvalGuard:
+    """APP_ENV=eval refuses, at startup, a config that would make a run unreproducible (4.03)."""
+
+    @pytest.fixture(autouse=True)
+    def _unset_guarded_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # make_settings honors real env vars; a developer's .env-style shell must not decide these.
+        for name in ("GENERATOR_PROVIDERS", "LLM_TEMPERATURE", "EVAL_MAX_TOTAL_WAIT_S"):
+            monkeypatch.delenv(name, raising=False)
+
+    def test_a_provider_list_with_a_fallback_is_refused_not_ignored(self) -> None:
+        # The default list is "gemini,groq": eval needs the primary alone, and says so.
+        with pytest.raises(ValidationError, match=r"exactly one provider.*got gemini,groq"):
+            make_settings(app_env="eval")
+        with pytest.raises(ValidationError, match="exactly one provider"):
+            make_settings(app_env="eval", generator_providers=["gemini", "fake"])
+
+    @pytest.mark.parametrize("providers", [["gemini"], ["fake"]])
+    def test_a_single_provider_is_accepted(self, providers: list[str]) -> None:
+        assert make_settings(app_env="eval", generator_providers=providers).app_env == "eval"
+
+    def test_the_judge_provider_cannot_also_be_the_eval_generator(self) -> None:
+        # The judge runs on Groq and must differ from the generator (AGENTS.md §6.5).
+        with pytest.raises(ValidationError, match="judge runs on Groq"):
+            make_settings(app_env="eval", generator_providers=["groq"])
+
+    def test_temperature_must_be_zero(self) -> None:
+        with pytest.raises(ValidationError, match="LLM_TEMPERATURE=0"):
+            make_settings(app_env="eval", generator_providers=["gemini"], llm_temperature=0.3)
+
+    @pytest.mark.parametrize("env", ["dev", "test"])
+    def test_other_environments_keep_the_router_list_and_any_temperature(self, env: str) -> None:
+        s = make_settings(app_env=env, llm_temperature=0.3)
+        assert s.generator_providers == ["gemini", "groq"]
+
+    def test_the_backoff_bound_is_a_positive_setting_with_a_default(self) -> None:
+        assert make_settings().eval_max_total_wait_s == 120.0
+        assert make_settings(eval_max_total_wait_s=30).eval_max_total_wait_s == 30.0
+        with pytest.raises(ValidationError):
+            make_settings(eval_max_total_wait_s=0)
+
+
 def test_env_example_lists_every_setting() -> None:
     # .env.example is the documented config surface (Tech.md §4); it must not drift from Settings.
     env_example = Path(__file__).resolve().parents[3] / ".env.example"

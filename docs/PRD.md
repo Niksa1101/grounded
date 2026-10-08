@@ -454,8 +454,10 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - `thinking_level` is read twice: by the Gemini adapter (`runtime.py`) and by `GenerationParams` for the cache key, and
   it is hashed whatever the provider. Move it to the provider in Phase 4, when Groq arrives: each adapter exposes the
   parameters that change its answer, and the key hashes those (R.16, Author's decision of 2026-10-07).
-  `GROQ_REASONING_EFFORT` (4.02) is another such parameter: it is not in the key yet, because `groq` cannot be
-  the generator before the router, so the move to the provider has to include it.
+  `GROQ_REASONING_EFFORT` (4.02) is another such parameter: it is not in the answer-cache key yet, because `groq`
+  cannot be the generator before the router, so the move to the provider has to include it. The eval LLM cache (4.03)
+  already hashes both, per provider and only the knob that provider uses, through
+  `generation/params.py:adapter_params(settings, provider)`: a second reading of `Settings`, the one the move replaces.
 - `strip_urls` (Tech §9.6) is a regex, not a Markdown parser: a URL between escaped backticks, or after a "fence" with
   four spaces of indentation, or a bare e-mail address (GFM makes it a `mailto:` link) passes it. Reference
   definitions and `<scheme:…>` autolinks are removed since R.17. The guarantee is planned for the frontend (Phase 5):

@@ -45,3 +45,20 @@ class GenerationParams:
         """sha256 hex of the key-sorted JSON, like ``RetrievalConfig.config_hash``."""
         canonical = json.dumps(asdict(self), sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def adapter_params(settings: Settings, provider: str) -> dict[str, str]:
+    """The settings an adapter reads by itself, not as call arguments, that change what it says.
+
+    The eval LLM cache key (Tech §11, 4.03) hashes these next to the call arguments, so a changed
+    ``GEMINI_THINKING_LEVEL`` or ``GROQ_REASONING_EFFORT`` misses instead of replaying answers made
+    with the old value. Only the knob the provider actually uses is listed: a Groq judge verdict
+    costs scarce daily quota, and it must not be thrown away because a Gemini setting moved.
+    ``runtime.py`` builds the adapters from the same ``Settings``, so the key and the call agree;
+    the day each adapter exposes its own parameters (PRD §12), this function is what it replaces.
+    """
+    if provider == "gemini":
+        return {"thinking_level": settings.gemini_thinking_level}
+    if provider == "groq":
+        return {"reasoning_effort": settings.groq_reasoning_effort}
+    return {}  # the fake and stub providers have no such knob

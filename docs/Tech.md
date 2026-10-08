@@ -102,7 +102,7 @@ The point is to show the mechanics.
 │   │   ├── ingest/                # types.py, corpus.py, markdown.py, includes.py, tokens.py, chunker.py [A], embed.py, pipeline.py
 │   │   ├── retrieval/             # index.py (active version), dense.py, lexical.py [A], hybrid.py [A], rerank.py, config.py, types.py
 │   │   ├── generation/
-│   │   │   ├── providers/         # base.py (Protocol), gemini.py, groq.py, fake.py
+│   │   │   ├── providers/         # base.py (Protocol), gemini.py, groq.py, fake.py, eval_wrappers.py (eval LLM cache + 429 backoff, §15.6)
 │   │   │   ├── router.py          # fallback + circuit breaker [A]
 │   │   │   ├── prompts.py         # load + version/hash
 │   │   │   ├── context.py         # c1..c5 labeling, source blocks
@@ -146,11 +146,12 @@ or with `ALLOW_DIRECT_API=true`.
 | `EMBEDDING_MAX_INPUT_TOKENS` | `2048` | longer texts fail before any call; must be ≤ `EMBEDDING_TPM` |
 | `EMBEDDING_MAX_RETRIES`, `EMBEDDING_TIMEOUT_S` | `5`, `30.0` | per batch, on 429 / 5xx / timeout |
 | `EMBEDDING_MAX_RETRY_WAIT_S` | `60` | a server-given `Retry-After` above this stops the run instead of waiting (§5.6) |
-| `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list (eval: `gemini`). Until the router (Phase 7) the first entry is the only provider used. The extra value `fake` selects the canned stub provider for local runs (`StubLLMProvider`); it is refused with `APP_ENV=prod` |
+| `GENERATOR_PROVIDERS` | `gemini,groq` | ordered router list. `APP_ENV=eval` takes exactly one entry (`gemini`) and refuses `groq`, the judge's provider, at startup (§15.6). Until the router (Phase 7) the first entry is the only provider used. The extra value `fake` selects the canned stub provider for local runs (`StubLLMProvider`); it is refused with `APP_ENV=prod` |
 | `GEMINI_MODEL`, `GROQ_MODEL`, `JUDGE_MODEL` | pinned IDs, verified at implementation time | no floating aliases. `GEMINI_MODEL` is `gemini-3.5-flash-lite` (D46, verified 2026-10-06). `GROQ_MODEL` and `JUDGE_MODEL` are both `openai/gpt-oss-120b` (D48, verified 2026-10-08); they have no default in `Settings`, like `GEMINI_MODEL` (CI sets them as literals, D51). Required, with `GEMINI_API_KEY`, when `gemini` is the first provider; a blank value is an error at startup |
 | `GEMINI_THINKING_LEVEL` | `minimal` (D46) | `minimal` \| `low` \| `medium` \| `high`; thinking adds latency and billed output tokens. Gemini 3.x models are controlled by a level, not a token budget (renamed from `GEMINI_THINKING_BUDGET` in 3.08). Which levels a model accepts differs (`gemini-3.7-flash` and `gemini-3.8-flash` reject `minimal`), so the API validates the pair |
 | `GROQ_REASONING_EFFORT` | `low` | `low` \| `medium` \| `high` (what `openai/gpt-oss-120b` takes; `none` and `default` are for Qwen only). Reasoning tokens are billed as output, count inside `LLM_MAX_OUTPUT_TOKENS` and use the free plan's 8K tokens per minute, so the default is the smallest; the judge agreement (4.11) shows whether it costs verdict quality (§9.1, PRD §12) |
-| `LLM_TEMPERATURE` | `0` | same in prod and eval |
+| `LLM_TEMPERATURE` | `0` | same in prod and eval; `APP_ENV=eval` refuses any other value at startup |
+| `EVAL_MAX_TOTAL_WAIT_S` | `120.0` | eval only: the most seconds one LLM call (generator or judge) may spend waiting out per-minute 429s (`Retry-After`); a longer wait is not taken and the call fails as provider-errored (§15.6). The request path never waits |
 | `LLM_MAX_OUTPUT_TOKENS` | `800` | answer length cap |
 | `LLM_TIMEOUT_S` | `12.0` | each generation attempt (§6) |
 | `RERANK_PROVIDER` | `none` \| `cohere` | feature flag |
@@ -345,6 +346,7 @@ class GenerationResult(BaseModel, Generic[T]):
     provider: str
     model: str
     latency_ms: int
+    cache_hit: bool = False     # True only for a reply the eval LLM cache served (§15.6)
 
 class LLMProvider(Protocol):
     name: str
@@ -504,7 +506,7 @@ Requirements:
 - Breaker state is in memory, per provider, protected for concurrent async access.
 - No sleeping inside the request path: fallback is immediate, and the router never waits out a `Retry-After`.
 - The router reports `fallback_used`, `provider`, `model` and the list of attempts (for logs and tests).
-- **Eval mode:** provider list is only the primary. Fallback disabled, because the fallback provider is also the judge.
+- **Eval mode:** provider list is only the primary, enforced at startup by `Settings` (§15.6). Fallback disabled, because the fallback provider is also the judge.
 - Tests (with fakes): 429 → fallback + breaker open; breaker skip; half-open recovery; timeouts ×3 → open; bad output → retry → fallback; all open → 503.
 
 ## 11. Caching
@@ -515,7 +517,7 @@ Requirements:
 | Query embedding | in-memory LRU (prod), SQLite (dev/CI/eval), in front of the request-path embedder (§6: one attempt, no sleep) | (model, dim, RETRIEVAL_QUERY, sha256(question)) | all | process lifetime / persistent |
 | Chunk embedding | SQLite `.cache/embeddings.sqlite` | (model, dim, RETRIEVAL_DOCUMENT, content_hash) | ingest | persistent |
 | Rerank | SQLite `.cache/rerank.sqlite` | sha256(model \| query \| candidate hashes) | dev/CI/eval | persistent |
-| Eval LLM responses | SQLite `.cache/llm_eval.sqlite` | sha256(provider \| model \| temperature \| system \| user \| schema hash) | eval only | persistent |
+| Eval LLM responses | SQLite `.cache/llm_eval.sqlite` | sha256 of the JSON array [provider, model, temperature, max output tokens, system, user, schema hash, adapter settings] (details below) | eval only (generator and judge) | persistent |
 
 Question normalization: Unicode NFKC → lowercase → collapse whitespace → strip trailing sentence punctuation (`. , ; : ! ? … 。`, not every symbol: `C#` stays distinct from `C`). One function, `infra/hashing.py:normalize_question`, shared by the answer cache key and `request_logs.question_hash`.
 
@@ -527,9 +529,14 @@ Answer cache details (`infra/answer_cache.py`, 3.13):
 - The lookup comes right after the active index is known and before the embedding, so a hit costs no embedding, retrieval or LLM call, and the budget reservation (5.05) must come after it: a hit never consumes budget. The lookup is skipped when `APP_ENV=eval` and in `no_rag` mode, which neither read nor write the cache.
 - Only a built, valid response is stored (`answered`, `partial`, `insufficient_context`); every failure raises first, so errors are never cached. A database error on the cache is a logged miss or a skipped write, never a failed request.
 - `expires_at = created_at + ANSWER_CACHE_TTL_DAYS`, and `Settings` and the store both cap it at 30 days (question retention).
-- Not in the key: `LLM_TEMPERATURE` and `LLM_MAX_OUTPUT_TOKENS`. They change sampling, not what the question means, and the prompt, index, retrieval and model already do. Changing either does not invalidate stored answers.
-
 The eval LLM cache is keyed by the *full prompt*. Any prompt or context change misses the cache, so regressions are still detected, while identical cases are free and deterministic on re-runs.
+
+Eval LLM cache details (`generation/providers/eval_wrappers.py`, 4.03):
+- **The key** is the sha256 of the parts as a JSON array (a `|` in a prompt cannot shift a field): the provider name, the model, the call's `temperature` and `max_output_tokens`, the `system` and `user` text, the schema hash (sha256 of the sorted JSON Schema of the requested Pydantic model, so the generator's `LLMAnswer` and a judge verdict never collide) and the adapter settings (`generation/params.py:adapter_params`: `{"thinking_level": …}` for Gemini, `{"reasoning_effort": …}` for Groq, `{}` for the fake and stub providers). The ticket's list was provider, model, temperature, system, user and schema; **the output cap and the adapter settings are added** because they change the reply (a cap cuts it off, and Groq's reasoning shares it; thinking level and reasoning effort change what the model writes) and a stale hit would then pass for the current configuration, the same reasoning as D47 for the answer cache. Only the settings the provider uses are in its key, so a moved `GEMINI_THINKING_LEVEL` does not throw away the Groq judge's verdicts (scarce daily quota). The timeout is not in it: it decides whether a reply arrives, not what it says. The adapter settings are read from `Settings` (the same one `runtime.py` builds the adapter from), the same "read twice" as `thinking_level` in `GenerationParams` (PRD §12).
+- **The value** is the raw reply text and its `Usage` (JSON), nothing else; provider and model come from the key.
+- **A hit** is validated again with Pydantic exactly like a live reply (§9.1), and returns the stored `Usage` with `GenerationResult.cache_hit=True`. The pipeline counts hits on `RequestTrace.llm_cache_hits`. `latency_ms` of a hit is the time of the lookup, not a provider latency; latency statistics must skip results with the flag (§15.3).
+- **Only a successful reply is stored.** A provider error or a bad output is never cached (a re-run pays it again). An entry that no longer validates (a corrupt file, a validator changed under an unchanged schema) is deleted and counted as a miss, so the live reply replaces it: one extra live call, no loop. The pipeline's own retry (§9.5) sends a different `user` text (the feedback is appended), hence another key, so a cached first attempt that fails the citation check is replayed once and its retry is the retry's own entry, never the same bad one.
+- The file is a `KVCache` (`infra/kvcache.py`); the lookup and the write run in `asyncio.to_thread`.
 
 ## 12. Abuse protection and API security
 
@@ -670,7 +677,7 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
 | Answer correctness | custom Python grader (`asserts.py` → `evals/judge.py` → Groq adapter → eval cache, D50) vs `reference_answer`, 0 / 0.5 / 1 | judge |
 
 - `no_rag` config: same schema and prompt family without sources (`answer_no_rag_v1`, §9.2; `AskMode.NO_RAG`, §7). Its claims have no citations, so the confidence cap applies to all of them. Faithfulness is N/A there; correctness and refusal are comparable.
-- Latency p50/p95 and shadow cost per 1k questions are computed from provider metadata (warm, excluding cold start).
+- Latency p50/p95 and shadow cost per 1k questions are computed from provider metadata (warm, excluding cold start). A case with an eval LLM cache hit (`RequestTrace.llm_cache_hits > 0`, §15.6) is left out of the latency statistics, because a replayed reply has no provider latency, and stays in the cost: a hit returns the original call's usage.
 
 ### 15.4 Judge
 - Provider: Groq (different from generator), pinned `JUDGE_MODEL` = `openai/gpt-oss-120b` (D48, verified 2026-10-08), temperature 0, prompts in `backend/prompts/judge_*_v1.md` with 2–3 worked examples each.
@@ -704,6 +711,19 @@ OpenAPI docs (`/docs`) stay enabled. The API contract is itself part of the port
 ### 15.6 Eval mode (`APP_ENV=eval`)
 Fallback off · temperature 0 · answer cache off · rate limit and budget off · LLM/rerank/embedding SQLite caches on · concurrency 1 (`-j 1`) · backoff honoring `Retry-After` (bounded total wait) · `request_logs.source='eval'` (CI DB only).
 
+As built in 4.03 (the checks are the first two items; everything else is wiring in `runtime.py:open_runtime`):
+- **One provider, enforced at startup.** `Settings` raises (a `ValidationError`, so the process does not start) when `GENERATOR_PROVIDERS` does not have exactly one entry, when that entry is `groq` (the judge's provider, AGENTS.md §6.5), or when `LLM_TEMPERATURE` is not `0`. Nothing is corrected silently, so `APP_ENV=eval` needs `GENERATOR_PROVIDERS=gemini` set explicitly (the default list is the router's `gemini,groq`). `fake` (the canned stub, for smoke runs) is accepted.
+- **Answer cache off** (`AskPipeline` builds none). The caches that stay on are SQLite files (§11): the query embeddings (`.cache/embeddings.sqlite`, `build_query_embedder`) and the eval LLM cache below.
+- **Rate limit and budget off.** They do not exist yet; 5.04 and 5.05 must bypass their check when `settings.app_env == "eval"` and their tests assert it (both tickets say so).
+- **`request_logs.source='eval'`**: `open_runtime` builds the `RequestLogger` with it, so an eval request is told apart from `api`/`web` traffic in the table (DB.md §4; the CI database only).
+- **The eval LLM cache and the backoff** (`generation/providers/eval_wrappers.py`). `open_runtime` wraps a provider it builds from the settings (not an injected one, and not the `fake` stub) as `CachingProvider(BackoffProvider(adapter))` through one `EvalLLM`; `EvalLLM.wrap(provider)` does the same for the judge (4.04), so the generator and the judge share the cache file and the counters. The cache is §11. The backoff sits behind it, so a hit never waits or calls:
+  - A 429 with `is_quota` (a daily quota) is raised **at once**, as the original `ProviderRateLimited`. A per-minute 429 waits the advertised `Retry-After` (60 s when absent) and asks again. The waits of one call add up to at most `EVAL_MAX_TOTAL_WAIT_S` and there are at most 3 of them; a wait that would pass the bound, or a fourth, raises `BackoffExhaustedError` (a `ProviderRateLimited` subclass with `is_quota=False` and `waited_s`) without sleeping. Nothing else is retried: a 5xx, a timeout, a bad output and a rejected request pass through, and a failed call is not repeated. The sleep and the clock are injected, so no test sleeps.
+  - This waiting is allowed because it is the eval path; the adapters never sleep and the request path never waits (§9.5). `grounded ask --golden` does not wait a second time for a `BackoffExhaustedError` (`evals/ask_batch.py`): it stops the run, like a quota.
+  - **Provider-errored cases.** The error types already say it: `ProviderRateLimited` (a quota, or `BackoffExhaustedError` after the bounded wait), `ProviderUnavailable` and `ProviderTimeout` are provider-side failures, which is what the `inconclusive` rule counts (§15.5); `ProviderBadOutput` is a reply the model got wrong, and `ProviderRequestRejected` means the run cannot work (a bad key). The promptfoo provider (4.05) tags a case with the exception's class name (and `is_quota`); 4.08 fixes which tags count.
+- **Cache hits are marked, not hidden.** A replayed reply has `GenerationResult.cache_hit=True`, the original usage (tokens and shadow cost add up on a cached run as on a live one) and the lookup time as `latency_ms`. The pipeline puts the number of hits of a request on `RequestTrace.llm_cache_hits`; a case with a hit is left out of the latency percentiles (§15.3).
+- **Counts at the end of a run.** `EvalLLM.stats` (`EvalStats`: `hits`, `misses`, `invalid_entries`, `rate_limit_waits`, `waited_s`; `snapshot()` copies it, `render()` is the line to print) is on `Runtime.eval_llm`. `grounded ask --golden` prints it after the summary (`Eval LLM cache: 3 hits, 27 misses (30 calls); …`) when the run is in eval mode; the promptfoo provider and the judge module use the same object.
+- **Concurrency 1** stays a property of the callers: promptfoo `-j 1` (§15.3) and the sequential `ask --golden` (§15.8).
+
 ### 15.7 Baselines and history
 - `eval/baselines/retrieval.json`, `eval/baselines/generation.json`: per config → metrics, `n`, thresholds, golden set version, prompt version, model IDs, index config hash, git SHA, date.
 - `retrieval.json` today (`schemas/eval.py:RetrievalBaselineEntry`): per config `metrics`, `thresholds`, `n`, `k`, `golden_set_version`, `index_config_hash`, `retrieval_config_hash`, `fastapi_ref`/`fastapi_sha`, `embedding_model`/`embedding_dim`, `git_sha`, `git_dirty`, `golden_set_sha256`, `date`. `golden_set_sha256` and `git_dirty` are **required** (since 2.09): a row without them fails to load, and the gate exits 2. `retrieval_config_hash` is still optional (no gate rule uses it). `thresholds` (optional, default none) is the one hand-written part of a row: it maps a metric name (a key of `metrics`) to `{"tolerance": t}` with `t >= 0`. `--write-baseline` keeps a refreshed row's thresholds, and refuses a run without git state (`git_dirty` unknown). Adding thresholds to the committed file is a baseline PR.
@@ -714,7 +734,7 @@ Fallback off · temperature 0 · answer cache off · rate limit and budget off �
 `uv run grounded ask --golden <golden_set.vN.jsonl> [--out <file>] [--limit N] [--fake] [--mode hybrid|no_rag]` asks every golden question through the same `AskPipeline` as `POST /v1/ask`. It is CLI tooling for the closeout and for manual smoke runs, **not an eval**: no metric is computed, the summary is informational and never a baseline.
 - **Sequential, concurrency 1.** The pipeline never sleeps (§9.5, §10); the waiting lives in the CLI layer (`evals/ask_batch.py`). A per-minute 429 is waited out for exactly the advertised `Retry-After` (60 s if absent) and the same question is asked again, at most `--max-rate-limit-retries` times (default 3) per question. A daily quota, a `Retry-After` over `--max-wait-s` (default 120), a rejected request (bad key), a missing or mismatched index, a database error, or `--max-consecutive-failures` (default 3) provider-side failures in a row **stop the run**; what was answered so far is written and the reason is printed. A question whose answer fails validation twice is a recorded failure, not a stop.
 - **Output.** The summary on stdout (status counts, schema-valid count over the file's questions, validation retries, invalid citations removed, dropped claims, URLs removed, cache hits, rate-limit waits, shadow cost of the answered questions (every attempt of each, a failed retry included), failures with reasons) and a JSON file, default `eval/results/<UTC timestamp>-ask.json` (gitignored), with the golden-set version and hash, the mode, `fake_provider`, the summary and one result per question, including its full `AskResponse`. "Schema-valid" means the response the pipeline built round-trips through `AskResponse`. That is not an independent check: the response is assembled from validated parts, so the evidence that matters is that the model output passed `LLMAnswer` validation in the adapter (with at most one retry) and the pipeline returned without an error. Read "30/30 schema-valid" as "30/30 answered without a validation failure". Only question ids are printed or written, never the text (AGENTS.md §6.13). The golden file is read-only, and `--out` refuses to be it.
-- It does not write `request_logs` rows: it reads the pipeline's `RequestTrace` for the retry and citation counts instead. The answer cache stays on in `APP_ENV=dev`, so a re-run reports cache hits; use `APP_ENV=eval` to measure generation instead of the cache.
+- It does not write `request_logs` rows: it reads the pipeline's `RequestTrace` for the retry and citation counts instead. The answer cache stays on in `APP_ENV=dev`, so a re-run reports cache hits; use `APP_ENV=eval` (with `GENERATOR_PROVIDERS=gemini`, §15.6) to measure generation instead of the cache: it adds the eval LLM cache, so a re-run of an unchanged setup makes no provider call, and the run ends with the cache's hit and miss counts.
 
 ## 16. Testing strategy
 

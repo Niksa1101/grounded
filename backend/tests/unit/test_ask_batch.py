@@ -21,6 +21,7 @@ from grounded.evals.ask_batch import (
     summarize,
     write_ask_batch,
 )
+from grounded.generation.providers.eval_wrappers import BackoffExhaustedError
 from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderError,
@@ -146,6 +147,18 @@ async def test_a_daily_quota_stops_the_run_without_waiting() -> None:
     assert (summary.attempted, summary.not_run, summary.schema_valid) == (2, 1, 1)
     assert not is_complete(summary)
     assert "STOPPED EARLY" in render_summary(summary)
+
+
+async def test_a_429_the_eval_backoff_gave_up_on_is_not_waited_out_again() -> None:
+    # APP_ENV=eval waits inside the provider (4.03); this layer would double that bound.
+    exhausted = BackoffExhaustedError("gave up", retry_after_s=5.0, waited_s=100.0)
+    script = Script(exhausted, response())
+    results, stopped, sleeps = await run([item(1)], script)
+    assert stopped is not None
+    assert "eval backoff gave up (100s waited)" in stopped
+    assert sleeps.waited == []
+    assert script.asked == ["q001"]  # not asked again
+    assert results[0].outcome == "failed"
 
 
 async def test_a_retry_after_over_the_limit_stops_instead_of_waiting() -> None:

@@ -19,6 +19,7 @@ from psycopg_pool import AsyncConnectionPool
 from grounded.generation.pipeline import AskPipeline
 from grounded.generation.prompts import load_answer_prompt, load_no_rag_prompt
 from grounded.generation.providers.base import LLMProvider
+from grounded.generation.providers.eval_wrappers import EvalLLM
 from grounded.generation.providers.fake import StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
 from grounded.generation.providers.groq import GroqProvider
@@ -41,6 +42,9 @@ class Runtime:
     pool: AsyncConnectionPool
     pipeline: AskPipeline
     request_logger: RequestLogger
+    # Eval mode only (Tech §15.6), and only for a provider built from the settings: the cache and
+    # backoff around it, whose counters a run prints at its end. ``wrap`` takes the judge as well.
+    eval_llm: EvalLLM | None = None
 
 
 def build_provider(settings: Settings) -> LLMProvider:
@@ -106,10 +110,16 @@ async def open_runtime(
         # wait=False: start serving even if the database is unreachable; /readyz reports it.
         await pool.open(wait=False)
         stack.push_async_callback(pool.close)
+        eval_llm: EvalLLM | None = None
         if provider is None:
             provider = build_provider(settings)
             if isinstance(provider, GeminiProvider):
                 stack.push_async_callback(provider.aclose)
+            # The stub is no quota-limited API, and its canned answers must never be replayed from a
+            # file after the stub changes, so only a real adapter gets the eval wrappers.
+            if settings.app_env == "eval" and not isinstance(provider, StubLLMProvider):
+                eval_llm = EvalLLM.open(settings, stack)
+                provider = eval_llm.wrap(provider)
         pricing = pricing or load_pricing()
         pipeline = AskPipeline(
             settings=settings,
@@ -122,5 +132,10 @@ async def open_runtime(
             pricing=pricing,
             clock=clock,
         )
-        request_logger = RequestLogger(pool, pricing, clock=clock)
-        yield Runtime(pool=pool, pipeline=pipeline, request_logger=request_logger)
+        # Eval runs are told apart from real traffic in the table (DB.md §4, CI database only).
+        request_logger = RequestLogger(
+            pool, pricing, clock=clock, source="eval" if settings.app_env == "eval" else "api"
+        )
+        yield Runtime(
+            pool=pool, pipeline=pipeline, request_logger=request_logger, eval_llm=eval_llm
+        )

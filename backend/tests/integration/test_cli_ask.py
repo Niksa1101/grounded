@@ -23,6 +23,7 @@ from grounded.settings import Settings
 from tests.hybrid_corpus import CORPUS, insert_page
 from tests.support import (
     EMBEDDING_DIM,
+    EVAL_SETTINGS,
     insert_index_version,
     make_settings,
     pricing_for_fake_embedder,
@@ -291,3 +292,29 @@ def test_ask_without_a_question_or_a_golden_file_fails(settings: Settings) -> No
     result = runner.invoke(app, ["ask", "--fake"])
     assert result.exit_code == 1
     assert "Give a QUESTION" in result.output
+
+
+def test_golden_batch_in_eval_mode_reports_the_eval_llm_cache_counts(
+    settings: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    eval_settings = settings.model_copy(update=EVAL_SETTINGS)
+    monkeypatch.setattr(grounded.cli, "get_settings", lambda: eval_settings)
+
+    def generator(*script: LLMAnswer) -> FakeLLMProvider:  # a priced model, so the pipeline starts
+        return FakeLLMProvider(script, name="gemini", model="gemini-3.5-flash-lite")
+
+    live = generator(cited_answer(), cited_answer())
+    monkeypatch.setattr(grounded.runtime, "build_provider", lambda _settings: live)
+    args = ["ask", "--golden", str(write_golden(tmp_path)), "--out", str(tmp_path / "a.json")]
+
+    first = runner.invoke(app, args)
+    assert first.exit_code == 0, first.output
+    assert "Eval LLM cache: 0 hits, 2 misses (2 calls)" in first.stdout
+
+    replayed = generator()  # a live call would exhaust the script
+    monkeypatch.setattr(grounded.runtime, "build_provider", lambda _settings: replayed)
+    second = runner.invoke(app, args)
+    assert second.exit_code == 0, second.output
+    assert "Eval LLM cache: 2 hits, 0 misses (2 calls)" in second.stdout
+    assert replayed.calls == []
+    assert "Cache hits: 0;" in second.stdout  # the answer cache stays off in eval mode

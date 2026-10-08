@@ -30,7 +30,13 @@ from grounded.runtime import open_runtime
 from grounded.schemas.api import AskResponse
 from grounded.schemas.llm import AnswerStatus, LLMAnswer, LLMClaim
 from tests.hybrid_corpus import CORPUS, insert_page
-from tests.support import EMBEDDING_DIM, app_client, insert_index_version, make_settings
+from tests.support import (
+    EMBEDDING_DIM,
+    EVAL_SETTINGS,
+    app_client,
+    insert_index_version,
+    make_settings,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -379,7 +385,7 @@ async def test_a_row_that_is_not_a_json_object_is_a_miss_and_is_replaced(env: En
 
 async def test_the_cache_lookup_is_a_miss_when_the_cache_is_off(env: Env) -> None:
     # Eval mode has no cache; the lookup helper must answer "miss", not fail (it used to assert).
-    settings = make_settings(database_url=env.url, app_env="eval")
+    settings = make_settings(database_url=env.url, **EVAL_SETTINGS)
     async with open_runtime(
         settings, embedder=FakeEmbedder(dim=EMBEDDING_DIM), provider=FakeLLMProvider([])
     ) as runtime:
@@ -424,7 +430,7 @@ async def test_changed_generation_params_are_a_miss(env: Env, change: dict[str, 
 
 async def test_eval_mode_bypasses_the_cache(env: Env) -> None:
     llm = FakeLLMProvider([good(), good()])
-    first, second = await post(env, llm, (QUESTION, QUESTION), app_env="eval")
+    first, second = await post(env, llm, (QUESTION, QUESTION), **EVAL_SETTINGS)
 
     assert not body_of(first).meta.cache_hit
     assert not body_of(second).meta.cache_hit
@@ -436,7 +442,7 @@ async def test_eval_mode_ignores_rows_written_outside_it(env: Env) -> None:
     await post(env, FakeLLMProvider([good()]))  # a dev/test run stored an answer
     llm = FakeLLMProvider([good()])
 
-    [response] = await post(env, llm, app_env="eval")
+    [response] = await post(env, llm, **EVAL_SETTINGS)
 
     assert not body_of(response).meta.cache_hit
     assert len(llm.calls) == 1

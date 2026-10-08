@@ -1,7 +1,7 @@
 """Persistent key-value cache in a local SQLite file (Tech.md §11).
 
-One file per cache under ``CACHE_DIR`` (``embeddings.sqlite`` now; rerank and eval LLM responses
-later). Offline tooling only: ingest, evals, dev. The request path in prod uses in-memory caches.
+One file per cache under ``CACHE_DIR`` (``embeddings.sqlite``, ``llm_eval.sqlite``; rerank later).
+Offline tooling only: ingest, evals, dev. The request path in prod uses in-memory caches.
 
 The API is synchronous (stdlib ``sqlite3``); async callers wrap calls in ``asyncio.to_thread`` so
 disk I/O never blocks the event loop (AGENTS.md §6.12). A lock serializes access because those
@@ -64,6 +64,15 @@ class KVCache:
                 self._conn.execute("ROLLBACK")
                 raise
             self._conn.execute("COMMIT")
+
+    def delete_many(self, keys: Sequence[str]) -> None:
+        """Remove the keys; absent ones are ignored. For an entry that turned out unusable: a plain
+        ``put_many`` cannot replace it (the first value wins), so it has to go first."""
+        with self._lock:
+            for start in range(0, len(keys), _KEYS_PER_QUERY):
+                batch = keys[start : start + _KEYS_PER_QUERY]
+                placeholders = ",".join("?" * len(batch))
+                self._conn.execute(f"DELETE FROM kv WHERE key IN ({placeholders})", tuple(batch))
 
     def __len__(self) -> int:
         with self._lock:

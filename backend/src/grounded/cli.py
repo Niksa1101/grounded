@@ -62,6 +62,7 @@ from grounded.evals.retrieval_runner import (
     write_run,
 )
 from grounded.generation.pipeline import AskMode
+from grounded.generation.providers.eval_wrappers import EvalStats
 from grounded.generation.providers.fake import StubLLMProvider
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
@@ -266,6 +267,7 @@ def _ask_golden(
         raise _fail("--out must not be the golden-set file.")
 
     results: list[QuestionResult] = []
+    eval_stats: list[EvalStats] = []  # one entry when APP_ENV=eval wrapped the provider (4.03)
 
     def record(result: QuestionResult) -> None:
         results.append(result)
@@ -279,7 +281,11 @@ def _ask_golden(
                     item.question, trace.request_id, mode=mode, trace=trace
                 )
 
-            return await run_batch(items, ask_one, policy=policy, on_result=record)
+            try:
+                return await run_batch(items, ask_one, policy=policy, on_result=record)
+            finally:  # also when the run is interrupted: the quota it spent is still worth knowing
+                if runtime.eval_llm is not None:
+                    eval_stats.append(runtime.eval_llm.stats.snapshot())
 
     typer.echo(f"Golden set {version}: {len(items)} questions, {mode.value} mode")
     aborted: str | None = None
@@ -304,6 +310,8 @@ def _ask_golden(
             typer.echo(f"Results: {path}")
     summary = summarize(results, total=len(items), aborted=aborted)
     typer.echo(render_summary(summary))
+    for stats in eval_stats:
+        typer.echo(stats.render())
     if not is_complete(summary):
         raise typer.Exit(code=1)
 
