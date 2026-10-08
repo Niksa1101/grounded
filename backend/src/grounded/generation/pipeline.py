@@ -18,7 +18,8 @@ today is marked below.
 - ``RequestTrace`` (3.12) is filled as the stages run: versions, usage, retries and citation counts
   for the ``request_logs`` row, and the stage timings and shadow cost for ``meta``. The pipeline
   never writes the row itself (the route does, and the error handlers for the failures), so a
-  request that raises still leaves its trace behind.
+  request that raises still leaves its trace behind. The trace also keeps the retrieval (section
+  ids in rank order) and the labelled context chunks, which only the eval harness reads (4.05).
 - ``AskMode.NO_RAG`` (3.11) is the Phase 4 baseline: no embedding, no index lookup, no retrieval,
   the sibling prompt ``answer_no_rag_v1`` and no zero-citations check (there is nothing to cite, so
   the check would send every answer to the retry). It is reachable from ``grounded ask --mode
