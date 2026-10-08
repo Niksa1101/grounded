@@ -96,6 +96,11 @@ class Settings(BaseSettings):
     # Eval mode only (Tech §15.6): the most seconds one LLM call (generator or judge) may spend
     # waiting out per-minute 429s. The eval path may wait; the request path never does.
     eval_max_total_wait_s: float = Field(default=120.0, gt=0)
+    # Eval only: the output cap of one judge call. Groq's reasoning tokens count inside it (Tech
+    # §9.1). It is the judge's own setting, not LLM_MAX_OUTPUT_TOKENS: the cap is part of the eval
+    # cache key (Tech §11), so sharing it would throw away cached verdicts, which cost scarce Groq
+    # quota, whenever the generator's answer cap moved.
+    judge_max_output_tokens: int = Field(default=800, gt=0)
 
     rerank_provider: RerankProvider = "none"
     rerank_model: str | None = None

@@ -39,6 +39,11 @@ DEFAULT_PROMPTS_DIR = Path(__file__).resolve().parents[3] / "prompts"
 ANSWER_PLACEHOLDERS = frozenset({"question", "sources"})
 ANSWER_RETRY_PLACEHOLDERS = frozenset({"error"})
 NO_RAG_PLACEHOLDERS = frozenset({"question"})  # no sources: the baseline has no retrieval
+# The judge rubrics (4.04, ``evals/judge.py``): one claim and its cited sources, or an answer, its
+# question and the reference answer. Both end with the same ``{{error}}`` retry section.
+JUDGE_FAITHFULNESS_PLACEHOLDERS = frozenset({"claim", "sources"})
+JUDGE_CORRECTNESS_PLACEHOLDERS = frozenset({"question", "reference_answer", "answer"})
+JUDGE_RETRY_PLACEHOLDERS = frozenset({"error"})
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 _PLACEHOLDER_RE = re.compile(r"\{\{([^{}]*)\}\}")
@@ -166,6 +171,26 @@ def load_no_rag_prompt(directory: Path = DEFAULT_PROMPTS_DIR) -> Prompt:
         "answer_no_rag_v1",
         placeholders=NO_RAG_PLACEHOLDERS,
         retry_placeholders=ANSWER_RETRY_PLACEHOLDERS,
+        directory=directory,
+    )
+
+
+def load_judge_faithfulness_prompt(directory: Path = DEFAULT_PROMPTS_DIR) -> Prompt:
+    """``judge_faithfulness_v1``: per claim, SUPPORTED or NOT_SUPPORTED (Tech §15.4)."""
+    return load_prompt(
+        "judge_faithfulness_v1",
+        placeholders=JUDGE_FAITHFULNESS_PLACEHOLDERS,
+        retry_placeholders=JUDGE_RETRY_PLACEHOLDERS,
+        directory=directory,
+    )
+
+
+def load_judge_correctness_prompt(directory: Path = DEFAULT_PROMPTS_DIR) -> Prompt:
+    """``judge_correctness_v1``: per answer, CORRECT, PARTIALLY_CORRECT or INCORRECT (§15.4)."""
+    return load_prompt(
+        "judge_correctness_v1",
+        placeholders=JUDGE_CORRECTNESS_PLACEHOLDERS,
+        retry_placeholders=JUDGE_RETRY_PLACEHOLDERS,
         directory=directory,
     )
 
