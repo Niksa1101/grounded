@@ -452,6 +452,11 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   baseline fail its own gate: the command says so and the Author decides. (3) The PRD §8 targets are constants in
   `evals/report.py` too (`met` / `not met` in the README); a change to PRD §8 must change both. The Groq daily budget of
   the first full run is the item above ("Judge budget of a full run").
+- **`eval_runs` insert on `main` (4.10c), waiting for the Author's go.** The step and `grounded eval record` are in `eval.yml`
+  but disabled: it writes to the production Neon `eval_runs` with the owner role, which AGENTS.md §5 and the ticket
+  reserve for the Author. To enable it, set the repository variable `EVAL_RECORD_RUNS` to `true`; the first row appears
+  after the next push to `main` whose eval got a verdict. Open points the Author may want to decide first: `status` is
+  the run's verdict on every row, `no_rag` stores `none` as `index_config_hash`, and a CI re-run adds rows (DB.md §4).
 - **CI eval cache scope (4.10b), open item.** The eval LLM cache of a PR run is visible to that PR only (GitHub scopes a
   cache to the ref that saved it; `main` cannot read a PR's), so after a merge that changed a prompt, a model or retrieval,
   the first `main` run pays for the changed calls once more (about 145K Groq tokens for a full judge run, against a

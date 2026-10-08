@@ -222,6 +222,10 @@ uv run grounded eval baseline --suite generation --results <promptfoo-output>.js
 ```
 
 ```bash
+uv run grounded eval record --suite generation --results <promptfoo-output>.json --branch main --report-url <run-url>   # a dry run: prints the eval_runs rows; --write inserts them with DATABASE_URL_DIRECT. CI on main only, behind EVAL_RECORD_RUNS (Tech §17)
+```
+
+```bash
 uv run grounded eval report   # the README's eval tables, from eval/baselines/*.json only; paste the output into the README block
 ```
 

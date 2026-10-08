@@ -208,6 +208,25 @@ jobs:
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/eval-comment.sh eval/results/comment.md
+      # DISABLED until the Author sets the repository variable EVAL_RECORD_RUNS to 'true' (4.10c, ticket
+      # 4.10, AGENTS.md §5): this is a write to the PRODUCTION eval_runs table with the owner role. It is
+      # the only step that sees DATABASE_URL_DIRECT, runs on a push to main only, never in a PR run, and
+      # records only a run the gate gave a verdict (not "could not run", not "did not run").
+      # tests/unit/test_ci_workflows.py pins these guards. The index hash is read from the job's own
+      # service database (DATABASE_URL); `--write` is what makes the command insert.
+      - name: Record the run in eval_runs
+        if: >-
+          github.event_name == 'push' && github.ref == 'refs/heads/main'
+          && vars.EVAL_RECORD_RUNS == 'true'
+          && (steps.report.outputs.status == 'pass' || steps.report.outputs.status == 'fail'
+          || steps.report.outputs.status == 'inconclusive')
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: >-
+          uv run --project backend --frozen grounded eval record --suite generation
+          --results eval/results/generation.json --branch "${{ github.ref_name }}"
+          --report-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          --write
       # Last, so the cache, the artifact and the comment are out even when the job fails here.
       - name: Verdict
         if: always()
