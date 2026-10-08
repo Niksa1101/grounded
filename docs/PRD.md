@@ -457,6 +457,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   reserve for the Author. To enable it, set the repository variable `EVAL_RECORD_RUNS` to `true`; the first row appears
   after the next push to `main` whose eval got a verdict. Open points the Author may want to decide first: `status` is
   the run's verdict on every row, `no_rag` stores `none` as `index_config_hash`, and a CI re-run adds rows (DB.md §4).
+- **The generation gate says `fail`, not `inconclusive`, when every generator call of a gated config failed (found in 4.10c).**
+  Such a config has no answer to name its index, so its `index_version` is `None`, and the comparability check of
+  `evaluate_generation_gate` ("run is not comparable with the baseline (index_version: ..., run None)") fails the run
+  before the inconclusive rule can apply, although 4.08's contract says "every case errored is inconclusive too". Seen
+  with a hand-built run in `test_eval_record.py`; the first two CI runs of `eval.yml` did not hit it (some Gemini calls
+  always answered). A total provider outage would therefore turn the job red as a quality fail. Not changed: the gate is
+  4.08's. A fix would skip the index comparison for a config with no answered case, with a test.
 - **CI eval cache scope (4.10b), open item.** The eval LLM cache of a PR run is visible to that PR only (GitHub scopes a
   cache to the ref that saved it; `main` cannot read a PR's), so after a merge that changed a prompt, a model or retrieval,
   the first `main` run pays for the changed calls once more (about 145K Groq tokens for a full judge run, against a
