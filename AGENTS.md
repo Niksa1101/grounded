@@ -230,6 +230,10 @@ uv run grounded eval report   # the README's eval tables, from eval/baselines/*.
 ```
 
 ```bash
+uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key <key>.json   # judge-human agreement and Cohen's kappa from the labeled sheet; refuses a missing or invalid label (Tech §15.4)
+```
+
+```bash
 cd frontend && npm run lint && npm run typecheck && npm run build
 ```
 

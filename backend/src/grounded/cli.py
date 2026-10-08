@@ -22,6 +22,15 @@ import uvicorn
 from psycopg.conninfo import conninfo_to_dict
 from pydantic import ValidationError
 
+from grounded.evals.agreement import (
+    DEFAULT_KEY,
+    DEFAULT_SHEET,
+    LabelError,
+    SheetError,
+    parse_sheet,
+    rate_items,
+    render_report,
+)
 from grounded.evals.ask_batch import (
     DEFAULT_POLICY,
     QuestionResult,
@@ -124,6 +133,7 @@ from grounded.retrieval.index import NoActiveIndexError
 from grounded.runtime import ProviderConfigError, open_runtime
 from grounded.schemas.api import AskRequest, AskResponse
 from grounded.schemas.eval import GoldenItem
+from grounded.schemas.judge_agreement import AgreementKey
 from grounded.settings import Settings, get_settings
 
 app = typer.Typer(no_args_is_help=True, help="Grounded command-line tools.")
@@ -1041,3 +1051,40 @@ def eval_report(
     except (OSError, ValueError) as exc:
         raise _fail(f"Cannot read the baselines: {exc}") from exc
     _echo_markdown(report)
+
+
+@eval_app.command("agreement")
+def eval_agreement(
+    labels: Annotated[
+        Path,
+        typer.Option(
+            help="The labeling sheet with the human_label column filled in.", show_default=False
+        ),
+    ] = DEFAULT_SHEET,
+    key: Annotated[
+        Path,
+        typer.Option(
+            help="The key of the sample (written by `eval export-verdicts`).", show_default=False
+        ),
+    ] = DEFAULT_KEY,
+) -> None:
+    """Judge-human agreement (Tech.md §15.4): exact agreement, Cohen's kappa and the confusion
+    matrices, overall, per kind, for the real items and for the controls, as Markdown with `n`.
+
+    Refuses (exit 1) a sheet with a missing, invalid or unknown label and lists every item at
+    fault. The output states whether the PRD §8 target (0.8) is met and decides nothing else.
+    """
+    try:
+        sheet = parse_sheet(labels.read_bytes())
+    except (OSError, SheetError) as exc:
+        raise _fail(f"Cannot read the labels {labels}: {exc}") from exc
+    try:
+        sample = AgreementKey.model_validate_json(key.read_bytes())
+    except (OSError, ValidationError) as exc:
+        raise _fail(f"Cannot read the key {key}: {exc}") from exc
+    try:
+        ratings = rate_items(sheet, sample)
+    except LabelError as exc:
+        problems = "\n".join(f"- {p}" for p in exc.problems)
+        raise _fail(f"Not computed, the labels do not match the key:\n{problems}") from exc
+    _echo_markdown(render_report(ratings, sample))
