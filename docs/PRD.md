@@ -441,6 +441,17 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   tuning against the golden set needs an explicit decision (AGENTS.md §13): a lexical query closer to BM25 (AND-first,
   or weighting rare terms), a smaller weight or a shorter list (`K_FTS`) for the lexical side, `RRF_K`. Any of them
   would be a separate PR that says it was tuned on the golden set.
+- The answer-cache key is built before generation, with the configured generator's `generator_model` and generation
+  parameters. Once the router falls back (Phase 7), an answer from the fallback provider would be stored under the
+  primary's key and served as the primary's for up to 30 days. Decide in Phase 7 (`router.py` is Author-owned): do
+  not cache a fallback answer, or key the row on the provider that answered (R.16).
+- `thinking_level` is read twice: by the Gemini adapter (`runtime.py`) and by `GenerationParams` for the cache key, and
+  it is hashed whatever the provider. Move it to the provider in Phase 4, when Groq arrives: each adapter exposes the
+  parameters that change its answer, and the key hashes those (R.16, Author's decision of 2026-10-07).
+- `strip_urls` (Tech §9.6) is a regex, not a Markdown parser: a URL between escaped backticks, or after a "fence" with
+  four spaces of indentation, or a `<scheme:…>` autolink other than http(s), passes it. The guarantee is planned for the
+  frontend (Phase 5): `react-markdown` with `a` and `img` disallowed (`unwrapDisallowed`), and claims and follow-up
+  questions rendered as plain text (R.16).
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
   (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
   null and not null. Tracked in ticket 9.06.

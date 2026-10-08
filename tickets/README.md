@@ -176,6 +176,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.13](phase-3/R.13-retry-feedback.md) | Compact retry feedback and the tokens of failed attempts | Build | G | done | [#61](https://github.com/Niksa1101/grounded/pull/61) |
 | [R.14](phase-3/R.14-answer-text-safety.md) | URLs in the answer, and the question escaped in the prompt | Build | G | done | [#62](https://github.com/Niksa1101/grounded/pull/62) |
 | [R.15](phase-3/R.15-review-polish.md) | Small hardening and documentation drift | Build | G | done | [#63](https://github.com/Niksa1101/grounded/pull/63) |
+| [R.16](phase-3/R.16-review-follow-up-fixes.md) | Fixes from the review of R.10–R.15 | Build | G | done | [#64](https://github.com/Niksa1101/grounded/pull/64) |
 | **4** | **[Generation eval + CI quality gate](phase-4/README.md)** | | | | |
 | [4.01](phase-4/4.01-decision-groq-promptfoo.md) | Decision: Groq and judge models, promptfoo version and test loading | Decision | D | todo | |
 | [4.02](phase-4/4.02-groq-provider.md) | `GroqProvider` adapter | Build | G | todo | |

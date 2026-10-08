@@ -293,6 +293,10 @@ class GeminiEmbedder:
             except (ProviderRateLimited, ProviderUnavailable, ProviderTimeout) as exc:
                 if isinstance(exc, ProviderRateLimited) and exc.is_quota:
                     raise
+                if attempt >= self._max_retries:
+                    # No retry left (always so on the request path): the server's own error, with
+                    # its Retry-After. The wait cap below only matters when a retry would follow.
+                    raise
                 server_delay = exc.retry_after_s if isinstance(exc, ProviderRateLimited) else None
                 if server_delay is not None and server_delay > self._max_retry_wait_s:
                     # Not "wait less": retrying before the server's deadline would break
@@ -308,8 +312,6 @@ class GeminiEmbedder:
                 delay = server_delay or self._backoff_s(attempt)
                 error = exc
             attempt += 1
-            if attempt > self._max_retries:
-                raise error
             logger.warning(
                 "embedding batch failed, retrying",
                 extra={"error": type(error).__name__, "attempt": attempt, "delay_s": delay},

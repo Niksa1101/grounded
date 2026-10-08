@@ -156,6 +156,12 @@ def test_other_bracketed_text_is_prose_and_left_alone() -> None:
         ("Also www.example.com/page, then more.", "Also, then more.", 1),
         ("Two: https://a.example and https://b.example", "Two: and", 2),
         ("No URL here, just [c1] and text.", "No URL here, just [c1] and text.", 0),
+        # The scheme and "www." are case-insensitive for a Markdown renderer, so they are here too.
+        ("Open HTTPS://Example.com/guide now.", "Open now.", 1),
+        ("Open Https://example.com now.", "Open now.", 1),
+        ("Visit WWW.example.com today.", "Visit today.", 1),
+        # A grouped marker is still a marker (invalid, removed and counted by the rewrite).
+        ("See [c1, c2](https://example.com).", "See [c1, c2].", 1),
     ],
 )
 def test_links_and_urls_are_removed_and_counted(text: str, expected: str, removed: int) -> None:
@@ -171,6 +177,7 @@ def test_links_and_urls_are_removed_and_counted(text: str, expected: str, remove
         ),
         ("Go to http://localhost:8000/items/5.", "Go to `http://localhost:8000/items/5`."),
         ("Bind <http://0.0.0.0:80> here.", "Bind `http://0.0.0.0:80` here."),
+        ("Open HTTP://LOCALHOST:8000/docs.", "Open `HTTP://LOCALHOST:8000/docs`."),
     ],
 )
 def test_loopback_urls_are_kept_as_code_and_not_counted(text: str, expected: str) -> None:
@@ -207,6 +214,13 @@ def test_a_link_around_a_marker_keeps_the_citation() -> None:
         f"{BASE_URL}#section-101",
         f"{BASE_URL}#section-102",
     ]
+
+
+def test_a_link_around_a_grouped_marker_is_an_invalid_marker_not_prose() -> None:
+    # Without the brackets "c1, c2" would reach the reader as text and escape the invalid count.
+    result = mapped("Use it [c1, c2](https://example.com). [c1]", claim("Use it.", "c1"))
+    assert result.answer_markdown == "Use it . [1]"
+    assert (result.removed_url_count, result.invalid_citation_count) == (1, 1)
 
 
 def test_url_removal_is_not_bad_output_and_applies_to_refusals_too() -> None:

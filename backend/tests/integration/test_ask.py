@@ -405,6 +405,20 @@ async def test_invalid_json_twice_is_a_502_after_exactly_two_calls(
     assert provider.remaining == 1
 
 
+async def test_bad_output_that_a_retry_cannot_fix_is_a_502_after_one_call(
+    test_database_url: str, index: Index
+) -> None:
+    # A blocked prompt (the adapter marks it not retryable) would be blocked again.
+    blocked = ProviderBadOutput("Gemini returned no candidate", retryable=False)
+    provider = FakeLLMProvider([blocked, good_answer()])
+    response = await ask(test_database_url, provider)
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "validation_failed"
+    assert len(provider.calls) == 1
+    assert provider.remaining == 1
+
+
 async def test_zero_valid_citations_twice_is_a_502_after_exactly_two_calls(
     test_database_url: str, index: Index
 ) -> None:

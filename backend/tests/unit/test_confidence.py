@@ -463,6 +463,77 @@ def test_a_chunk_found_by_one_list_cannot_pass_point_six_even_with_perfect_signa
     assert result.components["agreement"] == 0.0
 
 
+@pytest.mark.parametrize(
+    "weights",
+    [
+        pytest.param({}, id="defaults"),
+        pytest.param(
+            {
+                "confidence_w_self": 0.3,
+                "confidence_w_retrieval": 0.3,
+                "confidence_w_agreement": 0.21,
+                "confidence_w_citations": 0.2,
+                "confidence_w_rerank": 0.0,
+            },
+            id="near-ceiling",
+        ),
+        pytest.param(
+            {
+                "confidence_w_self": 0.2,
+                "confidence_w_retrieval": 0.3,
+                "confidence_w_agreement": 0.2,
+                "confidence_w_citations": 0.2,
+                "confidence_w_rerank": 0.1,
+            },
+            id="rerank-weighted",
+        ),
+        pytest.param(
+            {
+                "confidence_w_self": 0.0,
+                "confidence_w_retrieval": 1.0,
+                "confidence_w_agreement": 0.5,
+                "confidence_w_citations": 0.0,
+                "confidence_w_rerank": 0.0,
+            },
+            id="retrieval-heavy",
+        ),
+        pytest.param(
+            {
+                "confidence_w_self": 0.1,
+                "confidence_w_retrieval": 0.1,
+                "confidence_w_agreement": 0.5,
+                "confidence_w_citations": 0.6,
+                "confidence_w_rerank": 0.0,
+            },
+            id="citations-heavy",
+        ),
+    ],
+)
+@pytest.mark.parametrize("found_by", ["dense", "fts"])
+def test_the_settings_guard_computes_exactly_the_worst_case_of_the_heuristic(
+    weights: dict[str, float], found_by: str
+) -> None:
+    # ``Settings`` keeps its own copy of the invariant-4 formula (it cannot import this module).
+    # Equality, not ``<=``, pins it to the heuristic in both directions: a change that raises the
+    # worst case (the guard lets a bad config through) or lowers it (the guard rejects good ones)
+    # fails here. The worst case is reached by a list of one chunk: it is both the top and the
+    # bottom, at rank 1 with a perfect score, found by one list only.
+    settings = make_settings(**weights)
+    perfect = (
+        {"dense_rank": 1, "dense_distance": 0.0, "rrf_score": 1.0}
+        if found_by == "dense"
+        else {"fts_rank": 1, "fts_score": 12.0, "rrf_score": 1.0}
+    )
+    only = chunk(1, **perfect)
+    [result] = score_claims(
+        [claim("c1", self_confidence=1.0)],
+        {"c1": only},
+        [only],
+        config=ConfidenceConfig.from_settings(settings),
+    )
+    assert result.confidence == pytest.approx(settings.self_carry_worst_case())
+
+
 def test_the_confidence_is_the_weighted_mean_of_its_components() -> None:
     labels = labels_of(PROFILES["both_lists"], PROFILES["dense_only"])
     config = replace(CONFIG, w_rerank=0.3)

@@ -77,8 +77,8 @@ _CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
 _LINK = re.compile(r"!?\[([^\]\n]*)\]\(\s*<?[^)\s>]*>?(?:\s+\"[^\"]*\")?\s*\)")
 # ``<http://…>`` autolinks and bare ``http(s)://…`` / ``www.…`` URLs, with one space before them so
 # the removal does not leave a double space. Group 1 is the space, group 2 the URL.
-_URL = re.compile(r"( ?)<?((?:https?://|www\.)[^\s<>()\[\]`]+)>?")
-_MARKER_LABEL = re.compile(r"c\d+")
+# Case-insensitive, as the scheme and ``www.`` are for a Markdown renderer (``HTTPS://`` links too).
+_URL = re.compile(r"( ?)<?((?:https?://|www\.)[^\s<>()\[\]`]+)>?", re.IGNORECASE)
 _TRAILING_PUNCTUATION = ".,;:!?"
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "0.0.0.0", "::1"})
 
@@ -185,7 +185,8 @@ def strip_urls(markdown: str) -> tuple[str, int]:
         nonlocal removed
         removed += 1
         text = match[1]
-        return f"[{text}]" if _MARKER_LABEL.fullmatch(text) else text
+        # Any marker form, a group like ``c1, c2`` too: the rewrite then judges it as usual.
+        return f"[{text}]" if _MARKER.fullmatch(f"[{text}]") else text
 
     def url(match: re.Match[str]) -> str:
         nonlocal removed

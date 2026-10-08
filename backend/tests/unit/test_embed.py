@@ -492,6 +492,19 @@ async def test_the_request_path_raises_a_per_minute_rate_limit_without_sleeping(
     assert len(models.calls) == 1
 
 
+async def test_the_request_path_passes_on_a_long_server_wait_as_the_servers_own_error() -> None:
+    # No retry is left, so the ingest cap on waiting (EMBEDDING_MAX_RETRY_WAIT_S) plays no part and
+    # must not appear in the message a reader of the request log sees.
+    models = _FakeModels([_rate_limited(retry_delay="3600s", quota_id=_PER_MINUTE)])
+
+    with pytest.raises(ProviderRateLimited) as excinfo:
+        await _request_path_embedder(models).embed(["a"], "RETRIEVAL_QUERY")
+
+    assert "EMBEDDING_MAX_RETRY_WAIT_S" not in str(excinfo.value)
+    assert excinfo.value.retry_after_s == 3600.0
+    assert len(models.calls) == 1
+
+
 @pytest.mark.parametrize(
     ("error", "expected"),
     [

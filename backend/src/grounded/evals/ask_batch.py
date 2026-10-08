@@ -89,8 +89,8 @@ class QuestionResult(BaseModel):
     citation_count: int = 0
     min_confidence: float | None = None
     latency_total_ms: int | None = None
-    # From the response meta: every attempt of an answered question, a failed retry included. A
-    # question that failed has no response, so its cost is not in the batch total.
+    # From the response meta: every attempt of an answered question, a failed first one included.
+    # A question that failed has no response, so its cost is not in the batch total.
     shadow_cost_usd: float = 0.0
     rate_limit_waits: int = 0
     response: dict[str, Any] | None = None

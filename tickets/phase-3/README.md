@@ -55,5 +55,6 @@ with `n=30`, compared with the 2026-10-07 run, as information and not a baseline
 - [R.13 — Compact retry feedback and the tokens of failed attempts](R.13-retry-feedback.md)
 - [R.14 — URLs in the answer, and the question escaped in the prompt](R.14-answer-text-safety.md)
 - [R.15 — Small hardening and documentation drift](R.15-review-polish.md)
+- [R.16 — Fixes from the review of R.10–R.15](R.16-review-follow-up-fixes.md)
 
 Rules for working a ticket: [../README.md](../README.md).

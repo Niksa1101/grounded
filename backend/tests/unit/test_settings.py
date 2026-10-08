@@ -230,31 +230,29 @@ def test_confidence_weights_cannot_all_be_zero() -> None:
 
 
 @pytest.mark.parametrize(
-    "weights",
+    ("weights", "worst"),
     [
-        {},  # the defaults: (0.15 + 0.40*2/3 + 0.20/2) / 1.0 = 0.517
-        {  # close to the ceiling: (0.3 + 0.3*2/3 + 0.2/2) / 1.01 = 0.594
-            "confidence_w_self": 0.3,
-            "confidence_w_retrieval": 0.3,
-            "confidence_w_agreement": 0.21,
-            "confidence_w_citations": 0.2,
-            "confidence_w_rerank": 0.0,
-        },
+        ({}, (0.15 + 0.40 * 2 / 3 + 0.20 / 2) / 1.0),  # the defaults: 0.517
+        (  # close to the ceiling: 0.594
+            {
+                "confidence_w_self": 0.3,
+                "confidence_w_retrieval": 0.3,
+                "confidence_w_agreement": 0.21,
+                "confidence_w_citations": 0.2,
+                "confidence_w_rerank": 0.0,
+            },
+            (0.3 + 0.3 * 2 / 3 + 0.2 / 2) / 1.01,
+        ),
     ],
     ids=["defaults", "near-ceiling"],
 )
-def test_confidence_weights_under_the_ceiling_are_accepted(weights: dict[str, float]) -> None:
+def test_confidence_weights_under_the_ceiling_are_accepted(
+    weights: dict[str, float], worst: float
+) -> None:
+    # Accepted (no ValidationError), with the worst case written out by hand. That the formula
+    # matches the heuristic is pinned against ``score_claims`` in test_confidence.py.
     s = make_settings(**weights)
-    total = (
-        s.confidence_w_retrieval
-        + s.confidence_w_agreement
-        + s.confidence_w_citations
-        + s.confidence_w_self
-        + s.confidence_w_rerank
-    )
-    worst = (
-        s.confidence_w_self + s.confidence_w_retrieval * 2 / 3 + s.confidence_w_citations / 2
-    ) / total
+    assert s.self_carry_worst_case() == pytest.approx(worst)
     assert worst <= SELF_CARRY_CEILING
 
 
