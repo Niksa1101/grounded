@@ -247,6 +247,41 @@ def test_eval_mode_takes_its_own_llm_timeout_in_place_of_the_request_paths(
         make_settings(eval_llm_timeout_s=0)
 
 
+def test_the_eval_5xx_backoff_has_defaults_that_fit_the_default_total_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Tech §15.6: 4 retries from 5 s, doubling, are 5 + 10 + 20 + 40 = 75 s, under the 120 s bound
+    # of EVAL_MAX_TOTAL_WAIT_S, which leaves room for a per-minute 429 in the same call.
+    for name in ("EVAL_UNAVAILABLE_RETRIES", "EVAL_UNAVAILABLE_WAIT_S", "EVAL_MAX_TOTAL_WAIT_S"):
+        monkeypatch.delenv(name, raising=False)
+    s = make_settings()
+    assert (s.eval_unavailable_retries, s.eval_unavailable_wait_s) == (4, 5.0)
+    waits = [s.eval_unavailable_wait_s * 2**n for n in range(s.eval_unavailable_retries)]
+    assert waits == [5.0, 10.0, 20.0, 40.0]
+    assert sum(waits) < s.eval_max_total_wait_s
+
+
+def test_the_eval_5xx_backoff_can_be_tuned_or_turned_off() -> None:
+    s = make_settings(eval_unavailable_retries=0, eval_unavailable_wait_s=0)
+    assert (s.eval_unavailable_retries, s.eval_unavailable_wait_s) == (0, 0.0)
+    s = make_settings(eval_unavailable_retries=10, eval_unavailable_wait_s=1.5)
+    assert (s.eval_unavailable_retries, s.eval_unavailable_wait_s) == (10, 1.5)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"eval_unavailable_retries": -1},
+        {"eval_unavailable_retries": 11},  # more than ten doublings is a typo, not a policy
+        {"eval_unavailable_wait_s": -0.5},
+    ],
+    ids=["negative-retries", "too-many-retries", "negative-wait"],
+)
+def test_the_eval_5xx_backoff_settings_are_validated(overrides: dict[str, float]) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(**overrides)
+
+
 def test_the_judge_output_cap_is_its_own_positive_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     # Not LLM_MAX_OUTPUT_TOKENS: the cap is part of the eval cache key, so sharing it would drop the
     # cached judge verdicts whenever the generator's answer cap moved (Tech §11).
