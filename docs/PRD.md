@@ -467,6 +467,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   from `main`'s cache. Not built: handing the PR's cache file to the `main` run through an artifact, or running the
   `main` eval only when `backend/prompts`, retrieval or the eval config changed. Revisit after the first merges that
   change quality-affecting code.
+- **Transient 5xx in the eval path (found in the first `push`-to-`main` run, GitHub Actions run 37817266433).** Gemini
+  answered most `generateContent` calls of that run with `503` "high demand", 25 of 30 `hybrid` and 21 of 30 `no_rag`
+  cases were lost, and the run ended `inconclusive` (the 20% rule, Tech §15.5). The eval wrapper now waits out a
+  `ProviderUnavailable` with a doubling backoff inside the same bounded total as the 429 (Tech §15.6,
+  `EVAL_UNAVAILABLE_RETRIES`, `EVAL_UNAVAILABLE_WAIT_S`). Not verified against the real API (no real call was made for
+  the fix; the tests use scripted providers), and a spell of 503s longer than the 75 s of waits still costs the case:
+  whether 4 retries are enough is for the next real `main` run to show, and the two settings are the knobs.
 - The judge assertions (4.06) pay about a second of imports per judged assertion call, two per row, because `grounded.runtime`, where `open_judge` lives, imports the Gemini SDK. A module that builds the judge without it would cut that; not done, since it is small next to the 8K tokens-per-minute pacing.
 - A missing `GROQ_API_KEY` or `JUDGE_MODEL` is found by the first judged assertion of a real run (every judge component of the run is then `errored` with `ProviderConfigError`, and the run stops asking), after generator calls were spent. A check in the test generator, which runs first, would find it before any quota is used; the generator calls are cached, so the cost of the late discovery is one re-run, not lost quota.
 - ~~The answer cache (3.13) stores a finished answer, and its key did not include the confidence weights.~~ Closed in

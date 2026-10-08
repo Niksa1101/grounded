@@ -1,12 +1,13 @@
-"""Eval-mode wrappers around an ``LLMProvider``: the eval LLM cache and the 429 backoff (4.03).
+"""Eval-mode wrappers around an ``LLMProvider``: the eval LLM cache and the backoff (4.03).
 
 ``APP_ENV=eval`` puts two decorators in front of an adapter, outermost first:
 
 - ``CachingProvider`` stores each successful reply (raw text and usage) in
   ``.cache/llm_eval.sqlite`` and replays it for an identical call, so a re-run costs no quota and
   answers the same (Tech §11).
-- ``BackoffProvider`` waits out a per-minute 429 for the ``Retry-After`` the provider sent, within a
-  bounded total, and asks again. A daily quota, or a wait that would pass the bound, is raised.
+- ``BackoffProvider`` waits out a per-minute 429 for the ``Retry-After`` the provider sent, and a
+  transient 5xx (``ProviderUnavailable``: Gemini's "high demand" 503) for a doubling wait, within
+  one bounded total, and asks again. A daily quota, or a wait that would pass the bound, is raised.
 
 Both implement ``LLMProvider``, so the adapters stay as they are and the pipeline (and the judge,
 4.04) cannot tell a wrapped provider from a bare one. The generator and the judge go through the
@@ -46,7 +47,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from grounded.generation.params import adapter_params
 from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
 from grounded.infra.kvcache import KVCache
-from grounded.infra.provider_errors import ProviderRateLimited
+from grounded.infra.provider_errors import ProviderRateLimited, ProviderUnavailable
 from grounded.infra.timing import Clock
 from grounded.settings import Settings
 
@@ -62,13 +63,15 @@ class EvalStats:
     """Counters for one run: what the cache saved and how long the backoff waited.
 
     ``hits + misses`` is the number of ``generate`` calls. An entry that failed validation counts
-    in ``invalid_entries`` and in ``misses`` (a live call replaced it).
+    in ``invalid_entries`` and in ``misses`` (a live call replaced it). ``waited_s`` is the total
+    over both kinds of wait (a per-minute 429 and a transient 5xx).
     """
 
     hits: int = 0
     misses: int = 0
     invalid_entries: int = 0
     rate_limit_waits: int = 0
+    unavailable_waits: int = 0
     waited_s: float = 0.0
 
     def snapshot(self) -> EvalStats:
@@ -78,8 +81,8 @@ class EvalStats:
     def render(self) -> str:
         return (
             f"Eval LLM cache: {self.hits} hits, {self.misses} misses ({self.hits + self.misses} "
-            f"calls); rate-limit waits: {self.rate_limit_waits} ({self.waited_s:g}s); "
-            f"unusable entries replaced: {self.invalid_entries}"
+            f"calls); waits: {self.rate_limit_waits} rate-limit, {self.unavailable_waits} 5xx "
+            f"({self.waited_s:g}s); unusable entries replaced: {self.invalid_entries}"
         )
 
 
@@ -221,11 +224,14 @@ class CachingProvider:
 
 @dataclass(frozen=True, slots=True)
 class BackoffPolicy:
-    """Bounds on waiting out per-minute 429s, per ``generate`` call."""
+    """Bounds on waiting out per-minute 429s and transient 5xx, per ``generate`` call."""
 
-    max_total_wait_s: float  # ``EVAL_MAX_TOTAL_WAIT_S``
+    max_total_wait_s: float  # ``EVAL_MAX_TOTAL_WAIT_S``: one bound over both kinds of wait
     default_wait_s: float = 60.0  # a 429 with no Retry-After: the per-minute window (Tech §10)
-    max_retries: int = 3  # also ends a loop of tiny or zero waits, which the total would not
+    # 429 waits; also ends a loop of tiny or zero waits, which the total would not.
+    max_retries: int = 3
+    unavailable_retries: int = 4  # ``EVAL_UNAVAILABLE_RETRIES``: 5xx waits, 0 turns them off
+    unavailable_wait_s: float = 5.0  # ``EVAL_UNAVAILABLE_WAIT_S``: the first 5xx wait, doubling
 
 
 class BackoffExhaustedError(ProviderRateLimited):
@@ -244,11 +250,18 @@ class BackoffExhaustedError(ProviderRateLimited):
 
 
 class BackoffProvider:
-    """``LLMProvider`` that waits out per-minute 429s for the advertised ``Retry-After``.
+    """``LLMProvider`` that waits out per-minute 429s for the advertised ``Retry-After`` and
+    transient 5xx (``ProviderUnavailable``) for a wait that doubles from the policy's first one.
 
-    The total waited per call is bounded by the policy; the sleep function is injected so tests
-    never sleep. Only a 429 is handled: a 5xx, a timeout, bad output and a rejected request pass
-    through unchanged (and a failed call is not repeated here).
+    The total waited per call is bounded by the policy, one bound for both kinds: a retry whose
+    wait would pass it is not taken. The sleep function is injected so tests never sleep. A 5xx
+    that is still there after the retries or the bound is raised as the original
+    ``ProviderUnavailable``, not wrapped in a new type: the gate, the judge and ``ask --golden``
+    already know that kind as a provider-side 5xx (Tech §15.3), and a ``BackoffExhaustedError`` is
+    a ``ProviderRateLimited``, which a 5xx is not. A timeout, bad output, a rejected request and a
+    daily quota pass through unchanged (and a failed call is not repeated here).
+
+    The 5xx wait is ours, not the server's: a ``ProviderUnavailable`` carries no ``Retry-After``.
     """
 
     def __init__(
@@ -277,7 +290,8 @@ class BackoffProvider:
         timeout_s: float,
     ) -> GenerationResult[T]:
         waited_s = 0.0
-        retries = 0
+        retries = 0  # waits taken on a 429
+        unavailable_retries = 0  # waits taken on a 5xx; the next one is the first, doubled so often
         while True:
             try:
                 return await self._inner.generate(
@@ -316,6 +330,37 @@ class BackoffProvider:
                     extra={"provider": self.name, "wait_s": wait_s, "retry": retries},
                 )
                 await self._sleep(wait_s)
+            except ProviderUnavailable:
+                wait_s = self._policy.unavailable_wait_s * (1 << unavailable_retries)
+                give_up = self._unavailable_give_up(unavailable_retries, wait_s, waited_s)
+                if give_up is not None:
+                    logger.warning(
+                        "transient 5xx not waited out, raising it",
+                        extra={
+                            "provider": self.name,
+                            "reason": give_up,
+                            "retries": unavailable_retries,
+                            "waited_s": waited_s,
+                        },
+                    )
+                    raise
+                unavailable_retries += 1
+                waited_s += wait_s
+                self._stats.unavailable_waits += 1
+                self._stats.waited_s += wait_s
+                logger.info(
+                    "provider unavailable, waiting before asking again",
+                    extra={"provider": self.name, "wait_s": wait_s, "retry": unavailable_retries},
+                )
+                await self._sleep(wait_s)
+
+    def _unavailable_give_up(self, retries: int, wait_s: float, waited_s: float) -> str | None:
+        """Why the next 5xx retry is not taken (for the log), or ``None`` to wait and ask again."""
+        if retries >= self._policy.unavailable_retries:
+            return "retries used up"
+        if waited_s + wait_s > self._policy.max_total_wait_s:
+            return "total wait bound"
+        return None
 
 
 # --- Wiring ---------------------------------------------------------------------------------------
@@ -336,7 +381,11 @@ class EvalLLM:
         self.stats = EvalStats()
         self._settings = settings
         self._cache = cache
-        self._policy = BackoffPolicy(max_total_wait_s=settings.eval_max_total_wait_s)
+        self._policy = BackoffPolicy(
+            max_total_wait_s=settings.eval_max_total_wait_s,
+            unavailable_retries=settings.eval_unavailable_retries,
+            unavailable_wait_s=settings.eval_unavailable_wait_s,
+        )
         self._sleep = sleep
         self._clock = clock
 

@@ -1,4 +1,4 @@
-"""The eval LLM cache and the 429 backoff (4.03, Tech §11 and §15.6).
+"""The eval LLM cache and the backoff on a 429 and on a transient 5xx (4.03, Tech §11 and §15.6).
 
 No network, no database and no real sleeping: the providers are scripted fakes, the sleep is
 recorded, and the clock is driven by hand."""
@@ -77,6 +77,10 @@ class TickClock:
 
 def limited(retry_after_s: float | None, *, quota: bool = False) -> ProviderRateLimited:
     return ProviderRateLimited("429", retry_after_s=retry_after_s, is_quota=quota)
+
+
+def unavailable() -> ProviderUnavailable:
+    return ProviderUnavailable("Gemini API 503 UNAVAILABLE: high demand")
 
 
 def fake(*script: Any, **kwargs: Any) -> FakeLLMProvider:
@@ -395,8 +399,15 @@ def backoff(
     stats: EvalStats | None = None,
     max_total_wait_s: float = 120.0,
     max_retries: int = 3,
+    unavailable_retries: int = 4,
+    unavailable_wait_s: float = 5.0,
 ) -> BackoffProvider:
-    policy = BackoffPolicy(max_total_wait_s=max_total_wait_s, max_retries=max_retries)
+    policy = BackoffPolicy(
+        max_total_wait_s=max_total_wait_s,
+        max_retries=max_retries,
+        unavailable_retries=unavailable_retries,
+        unavailable_wait_s=unavailable_wait_s,
+    )
     return BackoffProvider(inner, policy, stats=stats or EvalStats(), sleep=sleeps)
 
 
@@ -493,7 +504,6 @@ async def test_the_bound_is_per_call() -> None:
 @pytest.mark.parametrize(
     "error",
     [
-        ProviderUnavailable("503"),
         ProviderTimeout("late"),
         ProviderBadOutput("bad", raw="{", validation_error="x"),
         ProviderRequestRejected("bad key", status_code=401),
@@ -509,6 +519,188 @@ async def test_every_other_error_passes_through_unchanged(error: ProviderError) 
     assert info.value is error
     assert sleeps.waited == []
     assert len(inner.calls) == 1
+
+
+# --- The backoff: a transient 5xx ---------------------------------------------------------------
+#
+# 2026-10-08, the first CI run on main: Gemini answered most generateContent calls with 503 "high
+# demand" and 46 of 60 cases were lost to a capacity blip a few seconds of waiting would have
+# ridden out. The eval path waits for it (the request path never does, Tech §9.5), inside the same
+# bounded total as the 429.
+
+
+async def test_a_503_waits_the_first_wait_and_asks_again() -> None:
+    inner, sleeps, stats = fake(unavailable(), ANSWER), Sleeps(), EvalStats()
+
+    result = await call(backoff(inner, sleeps, stats=stats))
+
+    assert result.parsed == ANSWER
+    assert sleeps.waited == [5.0]
+    assert len(inner.calls) == 2
+    assert (stats.unavailable_waits, stats.rate_limit_waits, stats.waited_s) == (1, 0, 5.0)
+
+
+async def test_the_waits_double_and_the_default_sequence_fits_the_default_bound() -> None:
+    inner, sleeps, stats = fake(*[unavailable()] * 4, ANSWER), Sleeps(), EvalStats()
+
+    result = await call(backoff(inner, sleeps, stats=stats))
+
+    assert result.parsed == ANSWER
+    assert sleeps.waited == [5.0, 10.0, 20.0, 40.0]  # 75 s, under the default 120 s bound
+    assert len(inner.calls) == 5
+    assert (stats.unavailable_waits, stats.waited_s) == (4, 75.0)
+
+
+async def test_the_first_wait_is_a_setting() -> None:
+    sleeps = Sleeps()
+    await call(backoff(fake(unavailable(), unavailable(), ANSWER), sleeps, unavailable_wait_s=1.5))
+    assert sleeps.waited == [1.5, 3.0]
+
+
+@pytest.mark.parametrize("retries", [1, 2, 4])
+async def test_when_the_retries_run_out_the_original_error_is_raised(retries: int) -> None:
+    errors = [unavailable() for _ in range(retries + 1)]
+    inner, sleeps, stats = fake(*errors, ANSWER), Sleeps(), EvalStats()
+
+    with pytest.raises(ProviderUnavailable) as info:
+        await call(backoff(inner, sleeps, stats=stats, unavailable_retries=retries))
+
+    # The kind stays ProviderUnavailable (not a rate-limit subclass): the gate's tag table, the
+    # judge and `ask --golden` already treat it as a provider-side 5xx.
+    assert info.value is errors[-1]
+    assert type(info.value) is ProviderUnavailable
+    assert len(sleeps.waited) == retries
+    assert len(inner.calls) == retries + 1  # the call and its retries, then it gave up
+    assert (stats.unavailable_waits, stats.waited_s) == (retries, sum(sleeps.waited))
+
+
+@pytest.mark.parametrize(
+    ("bound", "expected_waits"),
+    [
+        (4.0, []),  # even the first wait (5 s) would pass the bound
+        (5.0, [5.0]),  # exactly the bound is allowed
+        (20.0, [5.0, 10.0]),  # a third wait of 20 s would make 35 s
+        (35.0, [5.0, 10.0, 20.0]),
+    ],
+)
+async def test_the_total_wait_bound_stops_the_retries_early(
+    bound: float, expected_waits: list[float]
+) -> None:
+    errors = [unavailable() for _ in range(5)]
+    inner, sleeps = fake(*errors, ANSWER), Sleeps()
+
+    with pytest.raises(ProviderUnavailable) as info:
+        await call(backoff(inner, sleeps, max_total_wait_s=bound))
+
+    assert type(info.value) is ProviderUnavailable
+    assert sleeps.waited == expected_waits
+    assert len(inner.calls) == len(expected_waits) + 1
+    assert info.value is errors[len(expected_waits)]
+
+
+async def test_zero_retries_turn_the_5xx_backoff_off() -> None:
+    error = unavailable()
+    inner, sleeps, stats = fake(error, ANSWER), Sleeps(), EvalStats()
+
+    with pytest.raises(ProviderUnavailable) as info:
+        await call(backoff(inner, sleeps, stats=stats, unavailable_retries=0))
+
+    assert info.value is error
+    assert sleeps.waited == []
+    assert len(inner.calls) == 1
+    assert stats.unavailable_waits == 0
+
+
+async def test_a_429_and_a_503_share_one_bound_across_a_call() -> None:
+    # 60 s for the 429, then the 503 waits count from the same 70 s: 5 s fits (65), the doubled
+    # 10 s does not (75). The 5xx sequence starts over at 5 s whatever came before it.
+    inner, sleeps, stats = (
+        fake(limited(60.0), unavailable(), unavailable(), ANSWER),
+        Sleeps(),
+        EvalStats(),
+    )
+
+    with pytest.raises(ProviderUnavailable):
+        await call(backoff(inner, sleeps, stats=stats, max_total_wait_s=70.0))
+
+    assert sleeps.waited == [60.0, 5.0]
+    assert (stats.rate_limit_waits, stats.unavailable_waits, stats.waited_s) == (1, 1, 65.0)
+
+
+async def test_503_waits_can_use_up_the_bound_before_a_429() -> None:
+    inner, sleeps = fake(unavailable(), unavailable(), limited(60.0), ANSWER), Sleeps()
+
+    with pytest.raises(BackoffExhaustedError) as info:
+        await call(backoff(inner, sleeps, max_total_wait_s=70.0))
+
+    # 5 + 10 = 15 s waited on the 503s; the 60 s of the 429 would make 75 s.
+    assert sleeps.waited == [5.0, 10.0]
+    assert info.value.waited_s == 15.0
+    assert len(inner.calls) == 3
+
+
+async def test_a_429_and_a_503_in_one_call_both_get_through_within_the_bound() -> None:
+    inner, sleeps, stats = (
+        fake(unavailable(), limited(60.0), unavailable(), ANSWER),
+        Sleeps(),
+        EvalStats(),
+    )
+
+    result = await call(backoff(inner, sleeps, stats=stats))
+
+    assert result.parsed == ANSWER
+    assert sleeps.waited == [5.0, 60.0, 10.0]  # 75 s in all; the 5xx waits keep doubling
+    assert (stats.rate_limit_waits, stats.unavailable_waits, stats.waited_s) == (1, 2, 75.0)
+
+
+async def test_the_5xx_bound_is_per_call() -> None:
+    sleeps = Sleeps()
+    provider = backoff(
+        fake(unavailable(), ANSWER, unavailable(), OTHER_ANSWER), sleeps, max_total_wait_s=5.0
+    )
+
+    await call(provider)
+    await call(provider, user="a second call")  # starts with a fresh allowance and a fresh 5 s
+
+    assert sleeps.waited == [5.0, 5.0]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        ProviderTimeout("late"),
+        ProviderBadOutput("bad", raw="{", validation_error="x"),
+        ProviderRequestRejected("bad key", status_code=401),
+        limited(30.0, quota=True),
+    ],
+    ids=["timeout", "bad-output", "rejected", "daily-quota"],
+)
+async def test_a_503_followed_by_a_non_retryable_error_stops_at_that_error(
+    error: ProviderError,
+) -> None:
+    inner, sleeps = fake(unavailable(), error, ANSWER), Sleeps()
+
+    with pytest.raises(type(error)) as info:
+        await call(backoff(inner, sleeps))
+
+    assert info.value is error  # the original, untouched
+    assert sleeps.waited == [5.0]  # the 503 was waited out; the next error was not
+    assert len(inner.calls) == 2
+
+
+async def test_the_5xx_settings_reach_the_policy_through_the_kit(tmp_path: Path) -> None:
+    sleeps = Sleeps()
+    settings = make_settings(
+        **EVAL_SETTINGS, cache_dir=tmp_path, eval_unavailable_retries=1, eval_unavailable_wait_s=2.0
+    )
+    async with AsyncExitStack() as stack:
+        provider = EvalLLM.open(settings, stack, sleep=sleeps).wrap(
+            fake(unavailable(), unavailable(), ANSWER)
+        )
+        with pytest.raises(ProviderUnavailable):
+            await call(provider)
+
+    assert sleeps.waited == [2.0]  # one retry, the first wait
 
 
 # --- Both together, and the kit -----------------------------------------------------------------
@@ -530,6 +722,41 @@ async def test_a_waited_out_reply_is_cached_and_the_replay_calls_nothing(tmp_pat
     stats = eval_llm.stats
     assert (stats.hits, stats.misses, stats.rate_limit_waits, stats.waited_s) == (1, 1, 1, 3.0)
     assert (tmp_path / LLM_EVAL_CACHE_FILE).is_file()
+
+
+async def test_a_reply_that_came_after_5xx_waits_is_cached_and_the_replay_calls_nothing(
+    tmp_path: Path,
+) -> None:
+    sleeps = Sleeps()
+    settings = make_settings(**EVAL_SETTINGS, cache_dir=tmp_path)
+    async with AsyncExitStack() as stack:
+        eval_llm = EvalLLM.open(settings, stack, sleep=sleeps)
+        inner = fake(unavailable(), unavailable(), ANSWER)
+        provider = eval_llm.wrap(inner)
+
+        first = await call(provider)
+        second = await call(provider)
+
+    assert (len(inner.calls), sleeps.waited) == (3, [5.0, 10.0])
+    assert (first.cache_hit, second.cache_hit) == (False, True)
+    stats = eval_llm.stats
+    assert (stats.hits, stats.misses, stats.unavailable_waits, stats.waited_s) == (1, 1, 2, 15.0)
+
+
+async def test_a_5xx_that_was_not_recovered_is_not_cached(kv: KVCache) -> None:
+    inner, sleeps = fake(unavailable(), unavailable(), ANSWER), Sleeps()
+    provider = caching(backoff(inner, sleeps, unavailable_retries=1), kv)
+
+    with pytest.raises(ProviderUnavailable):
+        await call(provider)
+    assert len(kv) == 0  # the failure left nothing behind
+
+    live = await call(provider)  # the identical call asks the provider again, and now succeeds
+    assert (live.cache_hit, live.parsed) == (False, ANSWER)
+    assert len(kv) == 1
+
+    assert (await call(provider)).cache_hit  # and only that success is replayed
+    assert len(inner.calls) == 3
 
 
 async def test_the_generator_and_the_judge_share_one_cache_and_one_set_of_counters(
@@ -557,12 +784,16 @@ async def test_a_wrapped_provider_keeps_the_name_and_model_of_the_adapter(tmp_pa
 
 
 def test_the_summary_reads_and_a_snapshot_is_a_copy() -> None:
-    stats = EvalStats(hits=4, misses=6, invalid_entries=1, rate_limit_waits=2, waited_s=61.5)
+    stats = EvalStats(
+        hits=4, misses=6, invalid_entries=1, rate_limit_waits=2, unavailable_waits=3, waited_s=96.5
+    )
     before = stats.snapshot()
     stats.hits += 1
+    stats.unavailable_waits += 1
 
-    assert before.hits == 4
+    assert (before.hits, before.unavailable_waits) == (4, 3)
+    # waited_s is the total over both kinds of wait, so it follows both counts.
     assert stats.render() == (
-        "Eval LLM cache: 5 hits, 6 misses (11 calls); rate-limit waits: 2 (61.5s); "
+        "Eval LLM cache: 5 hits, 6 misses (11 calls); waits: 2 rate-limit, 4 5xx (96.5s); "
         "unusable entries replaced: 1"
     )
