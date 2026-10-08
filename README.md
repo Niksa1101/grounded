@@ -68,15 +68,30 @@ than the generator, and the judge's agreement with human labels is published.
 | *PRD §8 target (hybrid)* |  |  | ≥ 0.80 | — | ≥ 0.60 | ≥ 0.65 | — |
 | *hybrid vs target* |  |  | not met | — | met | met | — |
 
-**Generation baseline:** not committed yet (`eval/baselines/generation.json`).
+**Generation baseline** (`eval/baselines/generation.json`): golden set v1 (sha256 8f084817), index 0.141.1@4949e8a3, generator gemini / gemini-3.5-flash-lite (prompts: no_rag answer_no_rag_v1@5f725a9d, hybrid answer_v1@08cc49e5), judge groq / openai/gpt-oss-120b (judge_correctness_v1@1bde5fe4, judge_faithfulness_v1@84103412), promptfoo 0.123.1, git 2a7d381, 2026-10-08.
+
+| Metric | no_rag | hybrid | Target (PRD §8) | hybrid vs target |
+|---|---:|---:|---:|---:|
+| Questions asked | 30 | 30 |  |  |
+| Faithfulness | — | 1.000 (n=23) | ≥ 0.90 | met |
+| Answer correctness | 0.633 (n=30) | 0.900 (n=30) | ≥ 0.75 | met |
+| Refusal accuracy | 0.867 (n=30) | 0.933 (n=30) | ≥ 0.90 | met |
+| Schema first-try validity | 1.000 (n=30) | 1.000 (n=30) | ≥ 0.97 | met |
+| Citation validity | — | 1.000 (n=30) | — | — |
+| Citation precision | — | 0.633 (n=23) | — | — |
+| RAG value: correctness(hybrid) - correctness(no_rag) | — | +0.267 (n=30 vs 30) | > 0 | met |
+| Latency p50 / p95, ms (warm) | 1769 / 2117 (n=26) | 1901 / 2584 (n=26) |  |  |
+| Shadow cost per 1k questions, USD | $1.0064 (n=30) | $1.6855 (n=30) |  |  |
 
 `—`: not applicable or not scored. `n` is the number of questions a metric was scored on (not-applicable and unscored questions are left out). Met / not met compares the unrounded value with the target of PRD §8. `k` is the length of the list a retrieval mode returns (`K_DENSE`, `K_FTS` or `K_FUSED`); MRR runs over it.
 <!-- eval-report:end -->
 
 Every number above is pasted from `uv run grounded eval report` (run in `backend/`), which reads only
 `eval/baselines/*.json`; a test fails if this block drifts from them, so a baseline PR re-pastes it.
-**Generation table: _TBD_ until the first generation baseline is committed (ticket 4.09b).** Until then
-the block says so, and no generation number is written by hand. Hybrid + rerank joins in Phase 6.
+**The generation table is the first baseline (ticket 4.09b):** one full run of the golden set through `no_rag` and
+`hybrid`, judged by Groq `openai/gpt-oss-120b`. Faithfulness is claim-level (it grades the claims of an answer, not its
+whole text) and stays unvalidated until the judge–human agreement is published (4.11). No generation number is written
+by hand. Hybrid + rerank joins in Phase 6.
 Judge–human agreement: _TBD_ (4.11). Golden set: `v1`, 25 answerable questions (retrieval n = 25, one
 question = 0.04) and 5 unanswerable ones. Shadow cost is real token counts × paid list prices (dated in
 `backend/pricing.toml`); the demo itself runs on free tiers.

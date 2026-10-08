@@ -436,6 +436,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - Groq `reasoning_effort` for `openai/gpt-oss-120b` accepts `low`, `medium` and `high` (default `medium`), and Groq's reasoning page says the reasoning chains "are part of the token output". With 8K TPM, `low` saves a lot of tokens per judge call but may change verdict quality. Decided in 4.02: the `Settings` field `GROQ_REASONING_EFFORT`, default `low`. The judge agreement (4.11) shows whether the choice hurt.
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
 - **Judge budget of a full run (4.06, for 4.09).** The 4.06 run on 3 questions made 10 judge calls: a faithfulness call whose claim cites three chunks took about 1.9K input tokens, a correctness call about 1.3K. Extrapolated to the 30 golden questions (about 25 answered `hybrid` answers with 2-3 claims each, and 60 correctness calls), a full run needs roughly 180K tokens against the free plan's 200K per day. That is an estimate from two answers, not a measurement, and it leaves no room for retries or a second attempt: 4.09 should read the account's Limits page first, expect a TPD stop to be possible, and rely on the eval cache to finish on the next day.
+- **Judge budget of the first full run, measured (4.09b, 2026-10-08).** One full run (30 questions, both configs, `-j 1`,
+  Groq Free Plan) made 103 live judge calls (the eval cache replayed 10 more from earlier tickets), about 144.6K Groq
+  tokens (133,436 input + 11,144 output, 4,943 of the output reasoning tokens), below the 180K estimate above and
+  inside the 200K per day. It waited out 68 per-minute 429s (457 s of `Retry-After`) and took 12 min 55 s; the Gemini
+  generator made 54 live calls (about 110K tokens) with no 429 and no timeout. These come from the run's log and eval
+  cache (gitignored), not from a committed file. The day's headroom was small (earlier tickets had already spent part of
+  it), so a second full run with a changed prompt on the same day is not safe; re-running the identical command is free.
 - **Generation baseline tooling (4.09a), open items.** (1) A generation baseline row's `git_sha` is the repository's HEAD
   when `grounded eval baseline` runs, not when promptfoo ran (promptfoo's file does not record it), so the baseline PR
   must write it from the checkout that ran the eval, before any other commit. A check of the results file's date
