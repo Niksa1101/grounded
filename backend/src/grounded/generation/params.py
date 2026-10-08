@@ -2,7 +2,10 @@
 
 ``GenerationParams`` is read from ``Settings`` once, in the pipeline. The pipeline passes
 ``temperature`` and ``max_output_tokens`` to every call, and the answer cache key hashes all of
-them, so the call and the key can never read different values. Without them in the key, changing
+them, so for those two the call and the key can never read different values. ``thinking_level`` is
+the exception: the Gemini adapter reads ``GEMINI_THINKING_LEVEL`` itself when ``runtime.py`` builds
+it, from the same ``Settings``, so the two agree within a process but are two readings (it moves to
+the provider in Phase 4, PRD §12). Without these in the key, changing
 ``GEMINI_THINKING_LEVEL`` or ``LLM_TEMPERATURE`` would serve up to 30 days of answers made with the
 old values (Phase 3 review #3).
 
