@@ -44,6 +44,20 @@ PowerShell, the CI form, the flags, what each variable is for and the result for
   case): leave it out of every mean, like a not-applicable one.
 - The golden set is never edited by this run; `tests_loader.py` only reads it.
 
+## In CI (`eval.yml`)
+
+A PR runs the generation eval when it carries the `run-eval` label (add the label, or push to a PR that has it); a push
+to `main` and a manual run (`workflow_dispatch`) run it too. The job sets up the same database and caches as
+`retrieval-eval`, runs the command above with the pinned model IDs, and lets `grounded eval gate` decide: pass and
+**inconclusive** succeed (inconclusive is labeled as such and is not a pass), a quality fail and a gate that could not
+run fail the job. The result is in the job summary, in one PR comment (found by `<!-- grounded-eval -->`, updated on
+every push) and in the `generation-eval-report` artifact (promptfoo HTML and JSON, the gate's Markdown, the log).
+
+The eval LLM cache is saved by PR runs too (key `llm-eval-pr-<number>-…`, with `main`'s cache as the fallback), so a
+second push to the same PR replays what the first one paid for. Quota: one full judge run is about 145K of the 200K
+Groq tokens of a day, so check the day's headroom before adding the label and never re-run a stopped run hoping for a
+different result. Details: [docs/Tech.md §17](../docs/Tech.md).
+
 ## Baselines and the report
 
 Baseline rows are copied from a run by a tool, never typed (AGENTS.md §7), and only a PR titled

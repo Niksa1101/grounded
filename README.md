@@ -121,8 +121,12 @@ n = 25, so differences under one question (0.04) are not claims either way.
   `grounded eval gate` blocking a drop of more than one question's worth on hybrid Recall@5, MRR or nDCG@5). The
   metrics table is in the job summary. A cold embedding cache with no key or quota is reported as an **infrastructure
   failure** (exit code 3), never as a quality result; `warm-cache.yml` seeds the cache.
-- **PRs labeled `run-eval` and `main`:** full promptfoo generation eval, a PR comment with a diff table, and a blocking gate.
-- Runs dominated by free-tier quota errors are reported as **inconclusive**, not as failures.
+- **PRs labeled `run-eval` and `main`:** the full promptfoo generation eval (`eval.yml`: the 30 golden questions through
+  `no_rag` and `hybrid`, a judge on another provider, `grounded eval gate` against `eval/baselines/generation.json`).
+  The PR gets **one comment** with the metric table, `n` and the verdict, updated on every push and never duplicated;
+  the promptfoo HTML and JSON report is a downloadable artifact; a quality fail blocks.
+- Runs dominated by free-tier quota errors are reported as **inconclusive**, not as failures: the comment, the job
+  summary and a warning annotation say so, and an inconclusive run is never shown as a pass.
 
 A deliberately broken fusion (the dense term dropped from the RRF score) blocked by the retrieval gate
 ([run](https://github.com/Niksa1101/grounded/actions/runs/37453667731), closed PR
