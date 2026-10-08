@@ -118,6 +118,8 @@ async def test_a_second_run_makes_no_provider_call_and_costs_the_same_on_paper(e
     assert first.response is not None
     assert second.response is not None
     assert second.inner.calls == []
+    # The call's timeout is the eval one (EVAL_LLM_TIMEOUT_S), not the request path's 12 s.
+    assert [call.timeout_s for call in first.inner.calls] == [40.0]
     assert (first.stats.hits, first.stats.misses) == (0, 1)
     assert (second.stats.hits, second.stats.misses) == (1, 0)
     # Same answer, same tokens and shadow cost: cost and latency accounting works on cached runs.

@@ -386,7 +386,7 @@ class AskPipeline:
             schema=LLMAnswer,
             temperature=self._generation.temperature,
             max_output_tokens=self._generation.max_output_tokens,
-            timeout_s=self._settings.llm_timeout_s,
+            timeout_s=self._settings.call_timeout_s,
         )
 
     def _check_embedder(self, index: IndexVersion) -> None:

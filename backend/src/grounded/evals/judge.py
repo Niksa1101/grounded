@@ -93,7 +93,7 @@ class JudgeConfig:
     @classmethod
     def from_settings(cls, settings: Settings) -> JudgeConfig:
         return cls(
-            max_output_tokens=settings.judge_max_output_tokens, timeout_s=settings.llm_timeout_s
+            max_output_tokens=settings.judge_max_output_tokens, timeout_s=settings.call_timeout_s
         )
 
 

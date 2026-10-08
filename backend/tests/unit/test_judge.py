@@ -739,3 +739,12 @@ async def test_an_opened_judge_can_share_the_generators_eval_kit(tmp_path: Path)
             await judge.judge_claim(0, CLAIM, [SOURCE])
 
         assert (kit.stats.hits, kit.stats.misses) == (0, 1)  # one set of counters for both
+
+
+def test_a_judge_call_takes_the_eval_timeout_in_eval_mode() -> None:
+    # Groq at low reasoning effort answers in seconds, but a rare slow reply must not end as a
+    # provider-side timeout (it would count toward `inconclusive`): same rule as the generator.
+    in_eval = JudgeConfig.from_settings(make_settings(**EVAL_SETTINGS))
+    in_dev = JudgeConfig.from_settings(make_settings())
+
+    assert (in_eval.timeout_s, in_dev.timeout_s) == (40.0, 12.0)
