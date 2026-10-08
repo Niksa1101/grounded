@@ -1,0 +1,23 @@
+# Save the embeddings cache under a fresh key (Tech.md §17, PRD D45). Call it as the last step of an
+# eval job, with `if: always() && github.event_name == 'push'`: only main saves it (a cache saved on
+# a PR branch is invisible to main), and `always()` keeps the vectors paid for before a quota stop.
+#
+# Next to ./.github/actions/eval-index, which restores it. The key is derived here from Settings
+# again instead of being passed in, so it also works when eval-index failed half-way (a quota stop
+# on the ingest is exactly when this step matters). A key is immutable, so it ends in the run id
+# and attempt: a re-run keeps its run id and would otherwise hit its first attempt's key.
+name: Save the embeddings cache
+description: Save .cache/embeddings.sqlite under embeddings-<model>-<dim>-<run id>-<attempt>.
+
+runs:
+  using: composite
+  steps:
+    - name: Read the settings the cache is keyed on
+      id: cfg
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/.github/scripts/cache-keys.sh" >> "$GITHUB_OUTPUT"
+    - name: Save the embeddings cache
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .cache/embeddings.sqlite
+        key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}-${{ github.run_attempt }}
