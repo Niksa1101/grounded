@@ -30,6 +30,10 @@ class GenerationResult[T: BaseModel](BaseModel):
     provider: str
     model: str
     latency_ms: int = Field(ge=0)
+    # True only for a result the eval LLM cache served (4.03, Tech §15.6). Its ``usage`` is the
+    # original call's, so tokens and shadow cost add up on a cached run; its ``latency_ms`` is the
+    # cache lookup, not a provider latency, so latency statistics must skip it.
+    cache_hit: bool = False
 
 
 class LLMProvider(Protocol):

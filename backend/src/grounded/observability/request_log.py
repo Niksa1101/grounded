@@ -99,6 +99,9 @@ class RequestTrace:
     output_tokens: int | None = None
     validation_retries: int = 0
     cache_hit: bool = False  # answered from the answer cache (3.13): no embedding, no LLM call
+    # Generation attempts the eval LLM cache served (4.03). No column: only eval runs have any, and
+    # they read it from the trace to leave a cached latency out of the latency statistics.
+    llm_cache_hits: int = 0
     citation_count: int | None = None
     invalid_citation_count: int | None = None
     dropped_claim_count: int | None = None

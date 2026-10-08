@@ -39,6 +39,7 @@ from pydantic import BaseModel, ValidationError
 
 from grounded.evals.retrieval_runner import RESULTS_DIR
 from grounded.generation.pipeline import IndexMismatchError
+from grounded.generation.providers.eval_wrappers import BackoffExhaustedError
 from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderError,
@@ -234,6 +235,10 @@ def _cannot_wait(
     """Why this 429 ends the run instead of being waited out, or ``None`` to wait and ask again."""
     if exc.is_quota:
         return "daily quota exhausted"
+    if isinstance(exc, BackoffExhaustedError):
+        # APP_ENV=eval already waited, within its own bound (4.03): waiting again here would double
+        # that bound for the same question.
+        return f"rate limited after the eval backoff gave up ({exc.waited_s:g}s waited)"
     if wait_s > policy.max_wait_s:
         return f"Retry-After {wait_s:g}s is over the {policy.max_wait_s:g}s limit"
     if waits >= policy.max_rate_limit_retries:

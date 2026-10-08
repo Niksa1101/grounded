@@ -28,6 +28,10 @@ class NetworkBlockedError(RuntimeError):
     """Raised by the conftest network guard when a test tries to reach a non-local host."""
 
 
+# What APP_ENV=eval needs besides itself: one generator provider, not the default two (4.03).
+EVAL_SETTINGS: dict[str, Any] = {"app_env": "eval", "generator_providers": ["gemini"]}
+
+
 def make_settings(**overrides: Any) -> Settings:
     """Settings for tests: ignores any developer .env, but still honors real env vars (CI)."""
     return Settings(_env_file=None, **{"app_env": "test", **overrides})  # pyright: ignore[reportCallIssue]

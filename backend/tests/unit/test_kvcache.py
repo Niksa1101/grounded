@@ -29,6 +29,22 @@ def test_first_value_wins(cache: KVCache) -> None:
     assert cache.get_many(["a"]) == {"a": b"first"}
 
 
+def test_delete_removes_keys_so_a_new_value_can_take_their_place(cache: KVCache) -> None:
+    cache.put_many({"a": b"old", "b": b"keep"})
+    cache.delete_many(["a", "never-there"])  # an absent key is ignored
+    assert cache.get_many(["a", "b"]) == {"b": b"keep"}
+    cache.put_many({"a": b"new"})  # the first-value-wins rule no longer applies: the row is gone
+    assert cache.get_many(["a"]) == {"a": b"new"}
+
+
+def test_delete_spans_several_queries(cache: KVCache) -> None:
+    items = {f"k{i}": b"v" for i in range(1201)}
+    cache.put_many(items)
+    cache.delete_many([*items])
+    assert len(cache) == 0
+    cache.delete_many([])  # nothing to do, no error
+
+
 def test_lookup_spans_several_queries(cache: KVCache) -> None:
     # More keys than one SELECT binds (500), including across the batch boundaries.
     items = {f"k{i}": str(i).encode() for i in range(1201)}

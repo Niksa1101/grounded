@@ -345,6 +345,7 @@ class AskPipeline:
             try:
                 result = await self._generate(prompt, attempt_user)
                 trace.add_usage(result.usage)
+                trace.llm_cache_hits += int(result.cache_hit)
                 mapped = map_citations(
                     result.parsed, labels, titles, require_citations=require_citations
                 )

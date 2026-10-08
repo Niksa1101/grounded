@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_max_output_tokens: int = Field(default=800, gt=0)
     llm_timeout_s: float = Field(default=12.0, gt=0)  # each generation attempt (Tech.md §6)
+    # Eval mode only (Tech §15.6): the most seconds one LLM call (generator or judge) may spend
+    # waiting out per-minute 429s. The eval path may wait; the request path never does.
+    eval_max_total_wait_s: float = Field(default=120.0, gt=0)
 
     rerank_provider: RerankProvider = "none"
     rerank_model: str | None = None
@@ -180,6 +183,8 @@ class Settings(BaseSettings):
         self._check_confidence()
         if self.app_env == "prod":
             self._check_prod()
+        if self.app_env == "eval":
+            self._check_eval()
         return self
 
     def self_carry_worst_case(self) -> float:
@@ -243,6 +248,27 @@ class Settings(BaseSettings):
             raise ValueError(f"APP_ENV=prod requires explicit {', '.join(missing)}")
         if self.allow_direct_api:
             raise ValueError("ALLOW_DIRECT_API must be false in prod")
+
+    def _check_eval(self) -> None:
+        """Refuse, at startup, a config that would make an eval run unreproducible or unfair.
+
+        Not silently corrected: a run that quietly used another provider list or temperature would
+        produce numbers nobody could explain (Tech §15.6, AGENTS.md §6.5). The rest of eval mode
+        (answer cache off, SQLite caches on, ``source='eval'``) needs no setting.
+        """
+        if len(self.generator_providers) != 1:
+            raise ValueError(
+                "APP_ENV=eval takes exactly one provider in GENERATOR_PROVIDERS, the primary "
+                f"(got {','.join(self.generator_providers)}): fallback is off in eval, because the "
+                "fallback provider is the judge. Set GENERATOR_PROVIDERS=gemini"
+            )
+        if self.generator_providers[0] == "groq":
+            raise ValueError(
+                "APP_ENV=eval cannot use groq as the generator: the judge runs on Groq and must "
+                "be a different provider (AGENTS.md §6.5). Set GENERATOR_PROVIDERS=gemini"
+            )
+        if self.llm_temperature != 0.0:
+            raise ValueError("APP_ENV=eval requires LLM_TEMPERATURE=0 (reproducible runs)")
 
     @property
     def migration_database_url(self) -> SecretStr:
