@@ -7,6 +7,7 @@ The eval harness that gates quality-affecting PRs (see [docs/Tech.md](../docs/Te
 | `golden/` | versioned golden set (`golden_set.vN.jsonl`) and the labeling guide | Phase 1 |
 | `baselines/` | committed baseline metrics; changed only by an `eval: update baseline (<reason>)` PR | Phase 1 (retrieval), Phase 4 (generation) |
 | `promptfoo/` | generation eval: `promptfooconfig.yaml` and three thin shims (`provider.py`, `asserts.py`, `tests_loader.py`) over `backend/src/grounded/evals/promptfoo_*.py`, which is where the code is linted, type-checked and tested | Phase 4 (4.05, 4.06) |
+| `judge_agreement/` | the judge-human agreement sheet (the Author's labels) and how it was drawn | Phase 4 (4.11) |
 | `results/` | run outputs, **gitignored** | — |
 
 Metric numbers in the README, PRs and baselines come only from committed eval output. Never edit them by hand.
@@ -84,3 +85,17 @@ not met, the RAG value) from `baselines/*.json` only. The README block between i
 differ, so a baseline PR re-pastes it.
 
 `grounded eval retrieval --write-baseline` refuses to put rows from different setups (golden-set version or bytes, index config) into one baseline file. To add or refresh a config after such a change, run every config together, e.g. `--config dense --config fts --write-baseline`.
+
+## Judge agreement
+
+PRD FR-22 asks for the judge's agreement with a human, measured on at least 10 verdicts. The Author labels a sheet
+(`judge_agreement/v1.csv`, `human_label` column) without seeing any verdict, and then:
+
+```bash
+uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key <key>.json
+```
+
+It prints exact agreement and Cohen's kappa (overall, per kind, real items only, controls only), the confusion matrices,
+the disagreements and the PRD §8 target (0.8) as Markdown with `n` in every row. It refuses, listing every item, a sheet
+with a missing or invalid label. The key is the file that says what each `item_id` is and what the judge said; it is
+kept out of the repository until the labels are in. Details: [docs/Tech.md §15.4](../docs/Tech.md).
