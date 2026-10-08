@@ -8,7 +8,8 @@
 #
 # Run it from main only: a cache saved on any other branch is invisible to PRs. The caches are
 # derived data, never committed or uploaded by hand (AGENTS.md §11).
-# Keep the seeding steps in step with the retrieval-eval job in ci.yml.
+# Keep the seeding steps in step with the composite action ./.github/actions/eval-index, which the
+# retrieval-eval job in ci.yml and eval.yml use.
 name: warm-cache
 
 on:

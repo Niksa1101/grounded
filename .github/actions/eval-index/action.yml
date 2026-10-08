@@ -1,0 +1,97 @@
+# The setup that every CI eval job shares: install the backend, restore the caches, migrate the
+# service database and ingest the pinned corpus into it (Tech.md §17). Used by `retrieval-eval` in
+# ci.yml and by `eval` in eval.yml, so the two cannot drift.
+#
+# What the calling job has to provide, because a composite action cannot declare it:
+#   - the checkout (this action is read from it);
+#   - the pgvector `services: db` container on port 5433 (a `services` block is job-level);
+#   - the env `APP_ENV: test`, `DATABASE_URL` (the service) and `TIKTOKEN_CACHE_DIR`
+#     (`<workspace>/.cache/tiktoken`). They stay in the job so that its later steps see them too.
+#
+# Caches (PRD D45): `restore` only here, in every run. A cache saved on a PR branch is invisible to
+# main and to other PRs, and the save step of actions/cache runs only if the job succeeded. The
+# corpus clone is saved by this action when the caller says so (a push to main); the embeddings
+# are saved at the end of the job by ./.github/actions/save-embeddings, after the eval has embedded
+# its questions too.
+#
+# Paths are absolute or `working-directory` is set on every `run` step, because a job's
+# `defaults.run.working-directory` is not something to rely on inside a composite action.
+name: Eval index
+description: Install the backend, restore the CI caches, migrate the service database and ingest the pinned corpus.
+
+inputs:
+  gemini-api-key:
+    description: >-
+      GEMINI_API_KEY, for the chunks and questions the embeddings cache does not have. Blank is
+      the same as unset (what an unset GitHub secret looks like).
+    required: false
+    default: ""
+  save-corpus:
+    description: "'true' to save the corpus clone cache when this run cloned it (a push to main)."
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      with:
+        enable-cache: true
+        cache-dependency-glob: backend/uv.lock
+    - name: Install dependencies
+      shell: bash
+      working-directory: backend
+      run: uv sync --frozen
+    - name: Read the settings the caches are keyed on
+      id: cfg
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/.github/scripts/cache-keys.sh" >> "$GITHUB_OUTPUT"
+    - name: Restore the corpus clone
+      id: corpus-cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .cache/corpus
+        key: corpus-${{ steps.cfg.outputs.fastapi_ref }}
+    # Vectors are keyed by sha256(text), so the file only grows and any earlier one is a valid
+    # starting point. A cache key is immutable, hence the run id; restore-keys takes the newest.
+    - name: Restore the embeddings cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .cache/embeddings.sqlite
+        key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-
+    # The same absolute path as the backend job in ci.yml: the path is part of a cache's version,
+    # so both jobs share the one entry only if they spell it alike.
+    - name: Restore tiktoken cache
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ github.workspace }}/.cache/tiktoken
+        key: tiktoken-${{ steps.cfg.outputs.tokenizer_encoding }}-v1
+    - name: Migrate
+      shell: bash
+      working-directory: backend
+      run: uv run grounded migrate
+    # Exit 3 is an infrastructure failure (no key on a cold cache, or the daily embedding quota),
+    # named in the job summary by embedding-step.sh; the calling job fails here and goes no further.
+    - name: Ingest and activate the index
+      id: ingest
+      shell: bash
+      working-directory: backend
+      env:
+        GEMINI_API_KEY: ${{ inputs.gemini-api-key }}
+      run: >-
+        bash "$GITHUB_WORKSPACE/.github/scripts/embedding-step.sh" "grounded ingest"
+        uv run grounded ingest --ref "${{ steps.cfg.outputs.fastapi_ref }}" --activate
+    # The clone is saved once per tag (the key is immutable) and only after ingest got past it:
+    # exit 0, or 3 (the quota stopped it while embedding). An interrupted clone must never be
+    # saved under that key.
+    - name: Save the corpus clone
+      if: >-
+        always() && inputs.save-corpus == 'true'
+        && steps.corpus-cache.outputs.cache-hit != 'true'
+        && (steps.ingest.outputs.exit_code == '0' || steps.ingest.outputs.exit_code == '3')
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: .cache/corpus
+        key: corpus-${{ steps.cfg.outputs.fastapi_ref }}

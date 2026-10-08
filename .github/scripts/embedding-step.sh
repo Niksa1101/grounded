@@ -8,6 +8,8 @@
 # Tech.md §17). That is the provider's side, not a result about quality, so the summary names it.
 # Any other non-zero exit is reported as a plain failure of the step. The step fails either way, so
 # the gate step after it never runs and nothing is skipped or green by accident (AGENTS.md §7).
+# The same script serves the retrieval eval (ci.yml) and the generation eval (eval.yml), so its
+# headings name the step through the title and not the eval.
 #
 # The exit code is also written to the step output `exit_code`, for the cache-save conditions.
 set -uo pipefail
@@ -25,13 +27,13 @@ echo "exit_code=$code" >> "$GITHUB_OUTPUT"
 if [ "$code" -ne 0 ]; then
   {
     if [ "$code" -eq 3 ]; then
-      echo "### ⚠️ Retrieval eval: infrastructure failure, not a quality result"
+      echo "### ⚠️ Infrastructure failure, not a quality result"
       echo
       echo "**$title** could not get embeddings: no \`GEMINI_API_KEY\` on a cold cache, or the daily"
       echo "quota is spent. There is no gate verdict. Run the \`warm-cache\` workflow, or re-run this"
       echo "job after the quota resets (midnight Pacific); cached texts are not sent again."
     else
-      echo "### ❌ Retrieval eval: \`$title\` failed (exit $code)"
+      echo "### ❌ \`$title\` failed (exit $code)"
       echo
       echo "The eval did not run, so there is no gate verdict."
     fi
