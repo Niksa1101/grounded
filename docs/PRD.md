@@ -436,6 +436,15 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - Groq `reasoning_effort` for `openai/gpt-oss-120b` accepts `low`, `medium` and `high` (default `medium`), and Groq's reasoning page says the reasoning chains "are part of the token output". With 8K TPM, `low` saves a lot of tokens per judge call but may change verdict quality. Decided in 4.02: the `Settings` field `GROQ_REASONING_EFFORT`, default `low`. The judge agreement (4.11) shows whether the choice hurt.
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
 - **Judge budget of a full run (4.06, for 4.09).** The 4.06 run on 3 questions made 10 judge calls: a faithfulness call whose claim cites three chunks took about 1.9K input tokens, a correctness call about 1.3K. Extrapolated to the 30 golden questions (about 25 answered `hybrid` answers with 2-3 claims each, and 60 correctness calls), a full run needs roughly 180K tokens against the free plan's 200K per day. That is an estimate from two answers, not a measurement, and it leaves no room for retries or a second attempt: 4.09 should read the account's Limits page first, expect a TPD stop to be possible, and rely on the eval cache to finish on the next day.
+- **Generation baseline tooling (4.09a), open items.** (1) A generation baseline row's `git_sha` is the repository's HEAD
+  when `grounded eval baseline` runs, not when promptfoo ran (promptfoo's file does not record it), so the baseline PR
+  must write it from the checkout that ran the eval, before any other commit. A check of the results file's date
+  against HEAD's commit date would catch a mistake; not built. (2) The first `hybrid` thresholds are the table of Tech
+  §15.5 as a constant (`evals/generation_baseline.py:INITIAL_THRESHOLDS`), copied once into the baseline file, which the
+  Author approves in the baseline PR. A floor above what the first run measures (faithfulness 0.85) makes the new
+  baseline fail its own gate: the command says so and the Author decides. (3) The PRD §8 targets are constants in
+  `evals/report.py` too (`met` / `not met` in the README); a change to PRD §8 must change both. The Groq daily budget of
+  the first full run is the item above ("Judge budget of a full run").
 - The judge assertions (4.06) pay about a second of imports per judged assertion call, two per row, because `grounded.runtime`, where `open_judge` lives, imports the Gemini SDK. A module that builds the judge without it would cut that; not done, since it is small next to the 8K tokens-per-minute pacing.
 - A missing `GROQ_API_KEY` or `JUDGE_MODEL` is found by the first judged assertion of a real run (every judge component of the run is then `errored` with `ProviderConfigError`, and the run stops asking), after generator calls were spent. A check in the test generator, which runs first, would find it before any quota is used; the generator calls are cached, so the cost of the late discovery is one re-run, not lost quota.
 - ~~The answer cache (3.13) stores a finished answer, and its key did not include the confidence weights.~~ Closed in

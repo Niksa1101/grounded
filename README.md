@@ -57,28 +57,31 @@ Golden set: 30 hand-curated questions (25 answerable, 5 deliberately unanswerabl
 relevance labels. Retrieval metrics are deterministic. Generation metrics use an LLM judge on a *different* provider
 than the generator, and the judge's agreement with human labels is published.
 
-| Config | Recall@5 | MRR | nDCG@5 | Faithfulness | Correctness | Refusal acc. | p95 latency | $ / 1k questions* |
-|---|---|---|---|---|---|---|---|---|
-| no_rag (LLM only) | — | — | — | — | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| dense | 0.76 | 0.71 | 0.70 | | | | | |
-| fts | 0.58 | 0.43 | 0.47 | | | | | |
-| hybrid (RRF) | 0.74 | 0.66 | 0.66 | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-| hybrid + rerank | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ | _TBD_ |
-
-\* Shadow cost: real token counts × paid list prices (dated in `backend/pricing.toml`); the demo itself runs on free tiers.
-
-Judge–human agreement: _TBD_ · Golden set: `v1`, retrieval n = 25 (answerable questions; 1 question = 0.04) · Numbers come from `eval/baselines/*.json`, rounded to 2 decimals.
-
-### Retrieval ablation
-
-Retrieval only (no LLM), golden set `v1`, index `0.141.1`, n = 25 answerable questions. `k` is the length of the list
-the mode returns (`K_DENSE`, `K_FTS` or `K_FUSED`; MRR runs over it). Copied from `eval/baselines/retrieval.json`.
+<!-- eval-report:start -->
+**Retrieval ablation** (`eval/baselines/retrieval.json`; retrieval only, no LLM): golden set v1 (sha256 8f084817), index 0.141.1@4949e8a3, embedding gemini-embedding-001 (768 dims), git 18fd399, 2026-10-01.
 
 | Config | n | k | Recall@5 | Recall@10 | MRR | nDCG@5 | nDCG@10 |
-|---|---|---|---|---|---|---|---|
-| dense | 25 | 20 | 0.76 | 0.92 | 0.71 | 0.70 | 0.75 |
-| fts | 25 | 20 | 0.58 | 0.70 | 0.43 | 0.47 | 0.51 |
-| hybrid (RRF) | 25 | 40 | 0.74 | 0.78 | 0.66 | 0.66 | 0.68 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| dense | 25 | 20 | 0.760 | 0.920 | 0.714 | 0.698 | 0.752 |
+| fts | 25 | 20 | 0.580 | 0.700 | 0.435 | 0.466 | 0.513 |
+| hybrid | 25 | 40 | 0.740 | 0.780 | 0.657 | 0.665 | 0.685 |
+| *PRD §8 target (hybrid)* |  |  | ≥ 0.80 | — | ≥ 0.60 | ≥ 0.65 | — |
+| *hybrid vs target* |  |  | not met | — | met | met | — |
+
+**Generation baseline:** not committed yet (`eval/baselines/generation.json`).
+
+`—`: not applicable or not scored. `n` is the number of questions a metric was scored on (not-applicable and unscored questions are left out). Met / not met compares the unrounded value with the target of PRD §8. `k` is the length of the list a retrieval mode returns (`K_DENSE`, `K_FTS` or `K_FUSED`); MRR runs over it.
+<!-- eval-report:end -->
+
+Every number above is pasted from `uv run grounded eval report` (run in `backend/`), which reads only
+`eval/baselines/*.json`; a test fails if this block drifts from them, so a baseline PR re-pastes it.
+**Generation table: _TBD_ until the first generation baseline is committed (ticket 4.09b).** Until then
+the block says so, and no generation number is written by hand. Hybrid + rerank joins in Phase 6.
+Judge–human agreement: _TBD_ (4.11). Golden set: `v1`, 25 answerable questions (retrieval n = 25, one
+question = 0.04) and 5 unanswerable ones. Shadow cost is real token counts × paid list prices (dated in
+`backend/pricing.toml`); the demo itself runs on free tiers.
+
+### Retrieval ablation: reading
 
 **Reading: hybrid did not beat dense here.** That misses the Phase 2 target (hybrid ≥ dense on Recall@5 and MRR).
 Per-question evidence from the results file of that run:
@@ -89,7 +92,7 @@ Per-question evidence from the results file of that run:
   Four questions that dense answers at rank 1 drop to rank 2 to 4 (q001, q002, q028, q039).
 - **Recall@10 (−0.14) is the largest loss, 4 questions** (q015, q016, q026, q043): dense had a labelled section at
   rank 3 to 10, FTS did not retrieve it, and in the fused list it falls to rank 11 to 20.
-- **FTS alone is the weak side** (Recall@5 0.58, MRR 0.43). Its OR query with `ts_rank_cd` is not BM25. For q016 and
+- **FTS alone is the weak side** (the lowest Recall@5 and MRR in the table). Its OR query with `ts_rank_cd` is not BM25. For q016 and
   q026 none of the labelled sections is in its top 20. RRF gives both lists the same weight, so a chunk that both
   lists put at a middle rank outranks one that only dense puts first. This is what the rows are consistent with; no
   experiment here isolates it.
@@ -216,6 +219,10 @@ cd frontend && npm run lint && npm run typecheck && npm run build
 
 ```bash
 uv run grounded eval retrieval --config dense --config fts --config hybrid
+```
+
+```bash
+uv run grounded eval report   # the tables above, from the committed eval/baselines/*.json
 ```
 
 ```bash

@@ -167,7 +167,7 @@ class GenerationThreshold(BaseModel):
 
 class GenerationBaselineEntry(BaseModel):
     """One config's row in ``eval/baselines/generation.json``. Numbers are copied from a run
-    (``--write-baseline``, 4.09), never typed; ``thresholds`` is the hand-written part.
+    (``grounded eval baseline``, 4.09), never typed; ``thresholds`` is the hand-written part.
 
     ``metrics`` are the per-question means and ``n`` the questions each was scored on (a metric
     with no scored question has no entry in either). A config with ``thresholds`` is **gated**,
@@ -196,6 +196,14 @@ class GenerationBaselineEntry(BaseModel):
     git_sha: str | None
     git_dirty: bool
     date: datetime
+    # Reported, never gated (Tech §15.5), copied from the run's summary (4.09a) so that the eval
+    # report can show them next to the quality metrics. A row written without them (or from a run
+    # that had no warm, non-cached case) has ``None`` and ``0``: the report prints "—", never a 0.
+    latency_p50_ms: float | None = None
+    latency_p95_ms: float | None = None
+    n_latency: int = Field(default=0, ge=0)  # warm, answered, non-cached cases
+    cost_per_1k_usd: float | None = Field(default=None, ge=0)
+    n_cost: int = Field(default=0, ge=0)  # answered cases
 
     @model_validator(mode="after")
     def _check_metrics(self) -> Self:
@@ -204,4 +212,14 @@ class GenerationBaselineEntry(BaseModel):
         unknown = sorted(set(self.thresholds) - set(self.metrics))
         if unknown:
             raise ValueError(f"thresholds for metrics the row doesn't have: {', '.join(unknown)}")
+        return self
+
+    @model_validator(mode="after")
+    def _check_reported(self) -> Self:
+        if (self.latency_p50_ms is None) != (self.latency_p95_ms is None) or (
+            self.latency_p50_ms is None
+        ) != (self.n_latency == 0):
+            raise ValueError("latency p50, p95 and n_latency exist together, or not at all")
+        if (self.cost_per_1k_usd is None) != (self.n_cost == 0):
+            raise ValueError("cost_per_1k_usd and n_cost exist together, or not at all")
         return self
