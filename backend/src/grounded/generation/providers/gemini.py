@@ -46,6 +46,7 @@ from pydantic import BaseModel, ValidationError
 from grounded.generation.providers.base import GenerationResult, Usage
 from grounded.infra.gemini_errors import map_api_error
 from grounded.infra.provider_errors import (
+    TRUNCATED_FEEDBACK,
     ProviderBadOutput,
     ProviderTimeout,
     ProviderUnavailable,
@@ -54,12 +55,6 @@ from grounded.infra.provider_errors import (
 from grounded.settings import GeminiThinkingLevel
 
 logger = logging.getLogger(__name__)
-
-# The retry feedback for a reply cut off at the output limit (it fills the prompt's ``{{error}}``).
-TRUNCATED_FEEDBACK = (
-    "the answer was cut off at the output token limit before the JSON was complete; "
-    "write a shorter answer with fewer, shorter claims"
-)
 
 # The finish reasons of a content filter (``google-genai`` 2.25.0 ``FinishReason``, checked on
 # 2026-10-07). ``RECITATION`` is left out: a resampled answer may quote less, so the retry can help.

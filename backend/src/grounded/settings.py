@@ -25,6 +25,9 @@ RerankProvider = Literal["none", "cohere"]
 # Gemini 3.x is controlled by a level, not a token budget (PRD D46, Tech §4). Which levels a model
 # accepts differs (3.7/3.8 reject "minimal"), so the model is checked by the API, not here.
 GeminiThinkingLevel = Literal["minimal", "low", "medium", "high"]
+# ``openai/gpt-oss-120b`` on Groq takes these three (default ``medium``); ``none`` and ``default``
+# are for Qwen only, and any other value is a 400 (PRD D48, Tech §9.1).
+GroqReasoningEffort = Literal["low", "medium", "high"]
 
 # Matches infra/docker-compose.yml (DB.md §2). Convenient for local dev; prod must set its own.
 _LOCAL_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/grounded"
@@ -83,6 +86,10 @@ class Settings(BaseSettings):
     groq_model: str | None = None
     judge_model: str | None = None
     gemini_thinking_level: GeminiThinkingLevel = "minimal"
+    # Reasoning tokens are billed as output, count inside LLM_MAX_OUTPUT_TOKENS and against the free
+    # plan's 8K tokens per minute, so the default is the smallest effort (Tech §9.1, PRD §12). The
+    # judge agreement (4.11) shows whether it costs verdict quality.
+    groq_reasoning_effort: GroqReasoningEffort = "low"
     llm_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     llm_max_output_tokens: int = Field(default=800, gt=0)
     llm_timeout_s: float = Field(default=12.0, gt=0)  # each generation attempt (Tech.md §6)

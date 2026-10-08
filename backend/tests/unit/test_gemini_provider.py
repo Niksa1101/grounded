@@ -1,6 +1,9 @@
-"""``GeminiProvider`` against recorded-shape fixtures and a fake SDK client (no network).
+"""What is specific to ``GeminiProvider``: thinking tokens and levels, finish reasons, the content
+filter, and the schema conversion.
 
-``generate_success.json`` and ``generate_invalid_output.json`` are REAL recordings (2026-10-07,
+The behavior it shares with ``GroqProvider`` (success, usage, bad output, error mapping, timeouts,
+the retry) is in ``test_provider_contract.py``. ``generate_success.json`` and
+``generate_invalid_output.json`` are REAL recordings (2026-10-07,
 ``tests/fixtures/gemini/record_generate_fixture.py``). The three error fixtures (429 per minute, 429
 daily quota, 500) are still SYNTHETIC (``"_synthetic": true``): those errors can't be produced on
 demand without hammering the quota. Their shapes come from the SDK's own error types.
@@ -8,150 +11,53 @@ demand without hammering the quota. Their shapes come from the SDK's own error t
 
 from __future__ import annotations
 
-import asyncio
 import json
-from collections.abc import Sequence
-from pathlib import Path
 from typing import Any, cast
 
-import httpx
 import pytest
-from google import genai
-from google.genai import errors as genai_errors
 from google.genai import types as genai_types
 from pydantic import BaseModel
 
 from grounded.generation.providers.base import LLMProvider
-from grounded.generation.providers.gemini import (
-    TRUNCATED_FEEDBACK,
-    GeminiProvider,
-    to_gemini_schema,
-)
-from grounded.infra.provider_errors import (
-    ProviderBadOutput,
-    ProviderRateLimited,
-    ProviderRequestRejected,
-    ProviderTimeout,
-    ProviderUnavailable,
-)
+from grounded.generation.providers.gemini import to_gemini_schema
+from grounded.infra.provider_errors import TRUNCATED_FEEDBACK, ProviderBadOutput
 from grounded.schemas.llm import LLMAnswer
 from grounded.settings import GeminiThinkingLevel
-
-FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "gemini"
-MODEL = "gemini-3.5-flash-lite"
-
-
-def _fixture(name: str) -> dict[str, Any]:
-    return json.loads((FIXTURES / f"generate_{name}.json").read_text(encoding="utf-8"))
-
-
-def _response(name: str) -> genai_types.GenerateContentResponse:
-    return genai_types.GenerateContentResponse.model_validate(_fixture(name)["response"])
-
-
-def _api_error(name: str) -> genai_errors.APIError:
-    fixture = _fixture(name)
-    code, body = fixture["status_code"], fixture["body"]
-    response = httpx.Response(code, json=body, headers=fixture["headers"])
-    cls = genai_errors.ServerError if code >= 500 else genai_errors.ClientError
-    return cls(code, body, response)
-
-
-# --- A fake SDK client ---------------------------------------------------------------------------
-
-
-class _NeverReturns:
-    """A script step that hangs until the provider's own timeout cancels it."""
-
-
-type _Step = BaseException | genai_types.GenerateContentResponse | _NeverReturns
-
-
-class _FakeModels:
-    def __init__(self, script: Sequence[_Step]) -> None:
-        self.script = list(script)
-        self.calls: list[dict[str, Any]] = []
-
-    async def generate_content(
-        self, *, model: str, contents: str, config: genai_types.GenerateContentConfig
-    ) -> genai_types.GenerateContentResponse:
-        self.calls.append({"model": model, "contents": contents, "config": config})
-        step = self.script.pop(0)
-        if isinstance(step, BaseException):
-            raise step
-        if isinstance(step, _NeverReturns):
-            await asyncio.Event().wait()
-        assert isinstance(step, genai_types.GenerateContentResponse)
-        return step
-
-
-class _FakeClient:
-    def __init__(self, models: _FakeModels) -> None:
-        self.closed = False
-        client = self
-
-        class Aio:
-            def __init__(self) -> None:
-                self.models = models
-
-            async def aclose(self) -> None:
-                client.closed = True
-
-        self.aio = Aio()
-
-
-class _Clock:
-    """Each reading moves 0.25 s, so a call that reads it twice took exactly 250 ms."""
-
-    def __init__(self) -> None:
-        self.now = 0.0
-
-    def __call__(self) -> float:
-        self.now += 0.25
-        return self.now
+from tests.provider_rigs import (
+    GEMINI_MODEL,
+    FakeGeminiClient,
+    FakeGeminiModels,
+    GeminiRig,
+    gemini_response,
+)
 
 
 def _provider(
-    *steps: _Step, level: GeminiThinkingLevel = "minimal"
-) -> tuple[GeminiProvider, _FakeModels, _FakeClient]:
-    models = _FakeModels(steps)
-    client = _FakeClient(models)
-    provider = GeminiProvider(
-        cast(genai.Client, client), model=MODEL, thinking_level=level, clock=_Clock()
-    )
-    return provider, models, client
+    *steps: genai_types.GenerateContentResponse, level: GeminiThinkingLevel = "minimal"
+) -> tuple[LLMProvider, FakeGeminiModels, FakeGeminiClient]:
+    rig = GeminiRig(*steps, thinking_level=level)
+    return rig.provider, rig.models, rig.client
 
 
-async def _generate(provider: LLMProvider, *, timeout_s: float = 12.0) -> Any:
+async def _generate(provider: LLMProvider) -> Any:
     return await provider.generate(
         system="SYSTEM",
         user="USER",
         schema=LLMAnswer,
         temperature=0.0,
         max_output_tokens=800,
-        timeout_s=timeout_s,
+        timeout_s=12.0,
     )
 
 
-# --- Success: parsing, usage, request -----------------------------------------------------------
-
-
-async def test_a_valid_response_is_parsed_into_the_schema() -> None:
-    provider, _, _ = _provider(_response("success"))
-    result = await _generate(provider)
-    assert isinstance(result.parsed, LLMAnswer)
-    assert result.parsed.status == "answered"
-    assert result.parsed.claims[0].citation_ids == ["c1"]
-    assert LLMAnswer.model_validate_json(result.raw_text) == result.parsed
-    assert (result.provider, result.model) == ("gemini", MODEL)
-    assert result.latency_ms == 250
+# --- Usage, request -----------------------------------------------------------------------------
 
 
 async def test_usage_counts_thinking_tokens_as_output() -> None:
     # Recording: 91 prompt, 143 candidates. At level ``minimal`` Gemini reported no thoughts, so the
     # 40 here is set on the response to exercise the rule: thoughts are kept out of the candidates
     # count but billed as output, so output_tokens is their sum.
-    response = _response("success")
+    response = gemini_response("success")
     assert response.usage_metadata is not None
     response.usage_metadata.thoughts_token_count = 40
     provider, _, _ = _provider(response)
@@ -161,7 +67,7 @@ async def test_usage_counts_thinking_tokens_as_output() -> None:
 
 async def test_missing_thoughts_count_means_no_thinking() -> None:
     # The recording is exactly this case: at level ``minimal`` the usage has no thoughts count.
-    response = _response("success")
+    response = gemini_response("success")
     assert response.usage_metadata is not None
     assert response.usage_metadata.thoughts_token_count is None
     provider, _, _ = _provider(response)
@@ -169,20 +75,12 @@ async def test_missing_thoughts_count_means_no_thinking() -> None:
     assert (usage.output_tokens, usage.thinking_tokens) == (143, 0)
 
 
-async def test_missing_usage_metadata_counts_zero_tokens() -> None:
-    response = _response("success")
-    response.usage_metadata = None
-    provider, _, _ = _provider(response)
-    usage = (await _generate(provider)).usage
-    assert (usage.input_tokens, usage.output_tokens, usage.thinking_tokens) == (0, 0, 0)
-
-
 async def test_the_request_carries_the_settings_and_the_schema() -> None:
-    provider, models, _ = _provider(_response("success"), level="low")
+    provider, models, _ = _provider(gemini_response("success"), level="low")
     await _generate(provider)
     [call] = models.calls
     config = call["config"]
-    assert (call["model"], call["contents"]) == (MODEL, "USER")
+    assert (call["model"], call["contents"]) == (GEMINI_MODEL, "USER")
     assert config.system_instruction == "SYSTEM"
     assert (config.temperature, config.max_output_tokens) == (0.0, 800)
     assert config.response_mime_type == "application/json"
@@ -202,58 +100,16 @@ async def test_the_request_carries_the_settings_and_the_schema() -> None:
 async def test_every_configured_thinking_level_maps_to_the_sdk_enum(
     level: GeminiThinkingLevel, expected: genai_types.ThinkingLevel
 ) -> None:
-    provider, models, _ = _provider(_response("success"), level=level)
+    provider, models, _ = _provider(gemini_response("success"), level=level)
     await _generate(provider)
     assert models.calls[0]["config"].thinking_config.thinking_level == expected
-
-
-async def test_aclose_closes_the_sdk_client() -> None:
-    provider, _, client = _provider()
-    await provider.aclose()
-    assert client.closed
 
 
 # --- Bad output ---------------------------------------------------------------------------------
 
 
-async def test_a_schema_valid_but_constraint_violating_answer_is_bad_output() -> None:
-    # The citation label ``c12`` breaks a pattern Gemini never saw (it is not sent), so only the
-    # Pydantic validation after the call can catch it (AGENTS.md §6.2).
-    response = _response("success")
-    assert response.candidates
-    parts = response.candidates[0].content.parts if response.candidates[0].content else []
-    assert parts
-    parts[0].text = (
-        '{"status": "answered", "answer_markdown": "Use add_task [c12].", "claims": '
-        '[{"text": "Use add_task.", "citation_ids": ["c12"], "self_confidence": 1.0}], '
-        '"follow_up_questions": []}'
-    )
-    provider, _, _ = _provider(response)
-    with pytest.raises(ProviderBadOutput) as caught:
-        await _generate(provider)
-    # Compact feedback for the retry (Phase 3 review #5): the field and the rule, no echo of the
-    # rejected value, no Pydantic link.
-    assert caught.value.validation_error == (
-        "claims.0.citation_ids.0: String should match pattern '^c[1-9]$'"
-    )
-    assert caught.value.raw.startswith('{"status"')
-    # The bad reply was billed: its usage travels on the error (recording: 91 in, 143 out).
-    assert (caught.value.input_tokens, caught.value.output_tokens) == (91, 143)
-
-
-async def test_the_recorded_truncated_answer_is_bad_output() -> None:
-    # Real recording: ``max_output_tokens`` far too small, so the JSON is cut off mid-string.
-    provider, _, _ = _provider(_response("invalid_output"))
-    with pytest.raises(ProviderBadOutput, match="MAX_TOKENS") as caught:
-        await _generate(provider)
-    # The retry is told why, not only that the JSON broke (Phase 3 review #5).
-    assert caught.value.validation_error == TRUNCATED_FEEDBACK
-    # Recording: 91 prompt and 5 candidate tokens, billed although the reply is unusable.
-    assert (caught.value.input_tokens, caught.value.output_tokens) == (91, 5)
-
-
 async def test_a_truncated_answer_is_bad_output_and_names_the_finish_reason() -> None:
-    response = _response("success")
+    response = gemini_response("success")
     assert response.candidates
     response.candidates[0].finish_reason = genai_types.FinishReason.MAX_TOKENS
     parts = response.candidates[0].content.parts if response.candidates[0].content else []
@@ -266,24 +122,14 @@ async def test_a_truncated_answer_is_bad_output_and_names_the_finish_reason() ->
     assert caught.value.retryable  # a shorter answer can fit
 
 
-async def test_text_that_is_not_json_is_bad_output() -> None:
-    response = genai_types.GenerateContentResponse(
-        candidates=[
-            genai_types.Candidate(
-                content=genai_types.Content(parts=[genai_types.Part(text="Sorry, no JSON.")])
-            )
-        ]
-    )
-    provider, _, _ = _provider(response)
-    with pytest.raises(ProviderBadOutput) as caught:
+async def test_the_recorded_cut_off_reply_names_the_finish_reason() -> None:
+    provider, _, _ = _provider(gemini_response("invalid_output"))
+    with pytest.raises(ProviderBadOutput, match="MAX_TOKENS"):
         await _generate(provider)
-    assert caught.value.raw == "Sorry, no JSON."
-    assert caught.value.validation_error.startswith("output: Invalid JSON")
-    assert (caught.value.input_tokens, caught.value.output_tokens) == (0, 0)  # no usage reported
 
 
 async def test_thought_parts_are_not_part_of_the_answer() -> None:
-    text = _response("success").candidates[0].content.parts[0].text  # type: ignore[index, union-attr]
+    text = gemini_response("success").candidates[0].content.parts[0].text  # type: ignore[index, union-attr]
     response = genai_types.GenerateContentResponse(
         candidates=[
             genai_types.Candidate(
@@ -321,7 +167,7 @@ async def test_a_blocked_prompt_with_no_candidate_is_bad_output() -> None:
 async def test_an_answer_stopped_by_a_content_filter_is_bad_output_without_a_retry(
     reason: str,
 ) -> None:
-    response = _response("success")
+    response = gemini_response("success")
     assert response.candidates
     response.candidates[0].finish_reason = genai_types.FinishReason[reason]
     response.candidates[0].content = genai_types.Content(parts=[])
@@ -329,56 +175,6 @@ async def test_an_answer_stopped_by_a_content_filter_is_bad_output_without_a_ret
     with pytest.raises(ProviderBadOutput, match=reason) as caught:
         await _generate(provider)
     assert not caught.value.retryable
-
-
-# --- Error mapping ------------------------------------------------------------------------------
-
-
-async def test_a_per_minute_429_is_rate_limited_with_the_server_delay() -> None:
-    provider, _, _ = _provider(_api_error("429_per_minute"))
-    with pytest.raises(ProviderRateLimited) as caught:
-        await _generate(provider)
-    assert (caught.value.retry_after_s, caught.value.is_quota) == (53.0, False)
-
-
-async def test_a_daily_quota_429_is_flagged_as_quota() -> None:
-    provider, _, _ = _provider(_api_error("429_daily_quota"))
-    with pytest.raises(ProviderRateLimited) as caught:
-        await _generate(provider)
-    assert caught.value.is_quota is True
-
-
-async def test_a_500_is_unavailable() -> None:
-    provider, _, _ = _provider(_api_error("500"))
-    with pytest.raises(ProviderUnavailable, match="500"):
-        await _generate(provider)
-
-
-async def test_a_bad_request_is_rejected_without_a_retry_hint() -> None:
-    body = {"error": {"code": 400, "message": "bad key", "status": "INVALID_ARGUMENT"}}
-    error = genai_errors.ClientError(400, body, httpx.Response(400, json=body))
-    provider, _, _ = _provider(error)
-    with pytest.raises(ProviderRequestRejected) as caught:
-        await _generate(provider)
-    assert caught.value.status_code == 400
-
-
-async def test_a_call_that_hangs_times_out() -> None:
-    provider, _, _ = _provider(_NeverReturns())
-    with pytest.raises(ProviderTimeout):
-        await _generate(provider, timeout_s=0.01)
-
-
-async def test_an_httpx_timeout_is_a_provider_timeout() -> None:
-    provider, _, _ = _provider(httpx.ReadTimeout("slow"))
-    with pytest.raises(ProviderTimeout):
-        await _generate(provider)
-
-
-async def test_a_transport_failure_is_unavailable() -> None:
-    provider, _, _ = _provider(httpx.ConnectError("reset"))
-    with pytest.raises(ProviderUnavailable):
-        await _generate(provider)
 
 
 # --- Schema conversion --------------------------------------------------------------------------

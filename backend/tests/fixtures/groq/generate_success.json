@@ -1,0 +1,43 @@
+{
+ "_recorded": {
+  "date": "2026-10-08",
+  "model": "openai/gpt-oss-120b",
+  "reasoning_effort": "low",
+  "temperature": 0.0,
+  "note": "recorded before to_groq_schema dropped the schema constraints (the request carried them); the reply shape does not depend on that. id replaced by a placeholder, timings removed"
+ },
+ "status_code": 200,
+ "headers": {
+  "x-ratelimit-limit-requests": "1000",
+  "x-ratelimit-limit-tokens": "8000",
+  "x-ratelimit-remaining-requests": "999",
+  "x-ratelimit-remaining-tokens": "7354",
+  "x-ratelimit-reset-requests": "1m26.4s",
+  "x-ratelimit-reset-tokens": "4.845s"
+ },
+ "body": {
+  "id": "chatcmpl-REDACTED",
+  "object": "chat.completion",
+  "created": 1791448144,
+  "model": "openai/gpt-oss-120b",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "role": "assistant",
+     "content": "{\n  \"status\": \"answered\",\n  \"answer_markdown\": \"To add a background task in FastAPI, declare a parameter of type `BackgroundTasks` in your path operation function and then call its `add_task()` method with the function you want to run later. The task will be executed after the response has been sent to the client.\\n\\n```python\\nfrom fastapi import FastAPI, BackgroundTasks\\n\\napp = FastAPI()\\n\\ndef write_log(message: str):\\n    with open(\\\"log.txt\\\", \\\"a\\\") as f:\\n        f.write(message + \\\"\\\\n\\\")\\n\\n@app.post(\\\"/items/\\\")\\nasync def create_item(item: dict, background_tasks: BackgroundTasks):\\n    # schedule the background task\\n    background_tasks.add_task(write_log, f\\\"Item created: {item}\\\")\\n    return {\\\"message\\\": \\\"Item received\\\"}\\n```\\n\\nIn this example, `write_log` will run in the background after the response is returned.\",\n  \"claims\": [\n    {\n      \"text\": \"Declare a parameter of type BackgroundTasks and call add_task() on it. Tasks run after the response is sent.\",\n      \"citation_ids\": [\"c1\"],\n      \"self_confidence\": 0.99\n    }\n  ],\n  \"follow_up_questions\": []\n}"
+    },
+    "finish_reason": "stop"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 376,
+   "completion_tokens": 323,
+   "total_tokens": 699,
+   "completion_tokens_details": {
+    "reasoning_tokens": 27
+   }
+  },
+  "service_tier": "on_demand"
+ }
+}

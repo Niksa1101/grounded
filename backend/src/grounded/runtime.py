@@ -21,6 +21,7 @@ from grounded.generation.prompts import load_answer_prompt, load_no_rag_prompt
 from grounded.generation.providers.base import LLMProvider
 from grounded.generation.providers.fake import StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
+from grounded.generation.providers.groq import GroqProvider
 from grounded.infra.db import create_pool
 from grounded.infra.timing import Clock
 from grounded.ingest.embed import Embedder
@@ -55,8 +56,8 @@ def build_provider(settings: Settings) -> LLMProvider:
             raise ProviderConfigError("the fake provider must not be used with APP_ENV=prod")
         return StubLLMProvider()
     raise ProviderConfigError(
-        f"no adapter for provider {name!r} yet; set GENERATOR_PROVIDERS=gemini "
-        "(or fake for local runs)"
+        f"provider {name!r} cannot be the generator yet (the router arrives in Phase 7); "
+        "set GENERATOR_PROVIDERS=gemini (or fake for local runs)"
     )
 
 
@@ -73,6 +74,22 @@ def _build_gemini(settings: Settings) -> GeminiProvider:
     return GeminiProvider(
         genai.Client(api_key=key), model=model, thinking_level=settings.gemini_thinking_level
     )
+
+
+def build_groq_provider(settings: Settings, *, model: str | None) -> GroqProvider:
+    """A Groq adapter for ``model``: ``GROQ_MODEL`` for the fallback generator (Phase 7),
+    ``JUDGE_MODEL`` for the judge (4.04). ``GENERATOR_PROVIDERS`` cannot select it before the router
+    exists. The caller owns the provider and closes it (``aclose``)."""
+    key = settings.groq_api_key.get_secret_value().strip() if settings.groq_api_key else ""
+    pinned = (model or "").strip()
+    if not key:
+        raise ProviderConfigError("GROQ_API_KEY must be set to use the groq provider")
+    if not pinned:
+        raise ProviderConfigError(
+            "the Groq model must be set to a pinned model ID (GROQ_MODEL or JUDGE_MODEL; "
+            "PRD D48: openai/gpt-oss-120b)"
+        )
+    return GroqProvider.create(key, model=pinned, reasoning_effort=settings.groq_reasoning_effort)
 
 
 @asynccontextmanager
