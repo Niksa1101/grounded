@@ -10,6 +10,7 @@ import io
 import json
 import sys
 from collections.abc import Coroutine
+from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -25,6 +26,7 @@ from pydantic import ValidationError
 from grounded.evals.agreement import (
     DEFAULT_KEY,
     DEFAULT_SHEET,
+    DEFAULT_VIEW,
     LabelError,
     SheetError,
     parse_sheet,
@@ -79,6 +81,15 @@ from grounded.evals.golden import (
     sample_sections,
     type_counts,
 )
+from grounded.evals.judge import Judge
+from grounded.evals.judge_export import ControlVerdicts, ask_controls, export
+from grounded.evals.judge_sample import (
+    DEFAULT_MAX_OVERLAP,
+    DEFAULT_SEED,
+    SampleError,
+    SampleItem,
+    SampleParams,
+)
 from grounded.evals.report import build_report
 from grounded.evals.retrieval_runner import (
     RETRIEVAL_BASELINE,
@@ -130,7 +141,7 @@ from grounded.ingest.types import ChunkingConfig
 from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalConfig, RetrievalMode
 from grounded.retrieval.index import NoActiveIndexError
-from grounded.runtime import ProviderConfigError, open_runtime
+from grounded.runtime import ProviderConfigError, open_judge, open_runtime
 from grounded.schemas.api import AskRequest, AskResponse
 from grounded.schemas.eval import GoldenItem
 from grounded.schemas.judge_agreement import AgreementKey
@@ -1088,3 +1099,124 @@ def eval_agreement(
         problems = "\n".join(f"- {p}" for p in exc.problems)
         raise _fail(f"Not computed, the labels do not match the key:\n{problems}") from exc
     _echo_markdown(render_report(ratings, sample))
+
+
+@eval_app.command("export-verdicts")
+def eval_export_verdicts(
+    results: Annotated[
+        Path, typer.Option(help="promptfoo's JSON output of the real run to draw the sample from.")
+    ],
+    seed: Annotated[int, typer.Option(help="Seed of the draw.")] = DEFAULT_SEED,
+    faithfulness: Annotated[
+        int, typer.Option(min=0, help="Faithfulness items, the controls included.")
+    ] = 10,
+    correctness: Annotated[int, typer.Option(min=0, help="Correctness items.")] = 10,
+    controls: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            help="Synthetic negative controls among the faithfulness items: a real claim with the "
+            "sources of a claim from another question. Their verdict is a real judge call.",
+        ),
+    ] = 4,
+    max_overlap: Annotated[
+        float,
+        typer.Option(
+            min=0, max=1, help="Most of a control claim's content words its sources may share."
+        ),
+    ] = DEFAULT_MAX_OVERLAP,
+    out: Annotated[Path, typer.Option(help="The blind sheet (CSV).", show_default=False)] = (
+        DEFAULT_SHEET
+    ),
+    view_out: Annotated[
+        Path, typer.Option(help="The blind view (Markdown).", show_default=False)
+    ] = (DEFAULT_VIEW),
+    key_out: Annotated[
+        Path,
+        typer.Option(
+            help="The key: what each item is and the judge's verdict.", show_default=False
+        ),
+    ] = DEFAULT_KEY,
+    git_sha: Annotated[
+        str | None,
+        typer.Option(help="The commit that produced the results file (it does not record one)."),
+    ] = None,
+    judge: Annotated[
+        bool,
+        typer.Option(
+            "--judge/--no-judge",
+            help="Ask the real judge for the controls' verdicts (up to --controls calls; an "
+            "eval-cache hit is free). --no-judge leaves them pending; re-run to complete them.",
+        ),
+    ] = True,
+) -> None:
+    """Draw the judge-agreement sample from a real run and write the files (Tech.md §15.4, 4.11a).
+
+    Writes the blind sheet and view (no verdict in them: they depend only on the seed and the
+    results file) and the key (kept out of the repository until the Author has labeled). Needs
+    APP_ENV=eval, GENERATOR_PROVIDERS=gemini, GROQ_API_KEY and JUDGE_MODEL only for the control
+    calls. Safe to re-run: it asks only for the verdicts the key lacks, and never overwrites a
+    sheet that has labels. Exit 1 if the key is incomplete because the judge could not be asked.
+    """
+    settings = get_settings()
+    configure_logging(settings.log_level)
+    try:
+        raw = results.read_bytes()
+        params = SampleParams(seed, faithfulness, correctness, controls, max_overlap)
+    except (OSError, SampleError) as exc:
+        raise _fail(f"Cannot export: {exc}") from exc
+
+    def open_eval_judge() -> AbstractAsyncContextManager[Judge]:
+        if settings.app_env != "eval":
+            raise ProviderConfigError(
+                "the controls are judged in eval mode: set APP_ENV=eval and "
+                "GENERATOR_PROVIDERS=gemini"
+            )
+        return open_judge(settings)
+
+    def ask(todo: list[SampleItem]) -> ControlVerdicts:
+        return _run_async(ask_controls(todo, open_eval_judge))
+
+    try:
+        report = export(
+            raw,
+            params,
+            sheet_path=out,
+            view_path=view_out,
+            key_path=key_out,
+            results_name=results.name,
+            git_sha=git_sha,
+            ask=ask if judge else None,
+        )
+    except (SampleError, OSError) as exc:
+        raise _fail(f"Cannot export: {exc}") from exc
+
+    sample = report.key.sample
+    typer.echo(f"Results {sample.results_file}: sha256 {sample.results_sha256}")
+    typer.echo(
+        f"  promptfoo {sample.promptfoo_version}, run of {sample.run_date:%Y-%m-%d %H:%M} UTC, "
+        f"golden set {sample.golden_set_version} (sha256 {sample.golden_set_sha256[:12]}), "
+        f"judge {sample.judge_provider} {sample.judge_model}"
+    )
+    typer.echo("  rubrics: " + ", ".join(sorted(sample.judge_prompt_versions.values())))
+    typer.echo("Population the run offers (kind, config: verdicts):")
+    for kind, per_config in sorted(sample.population.items()):
+        for config, counts in sorted(per_config.items()):
+            shown = ", ".join(f"{verdict} {n}" for verdict, n in sorted(counts.items()))
+            typer.echo(f"  {kind}, {config}: {sum(counts.values())} ({shown})")
+    typer.echo(
+        f"Sample (seed {sample.seed}): {len(report.key.items)} items = {sample.faithfulness} "
+        f"faithfulness ({sample.controls} synthetic controls) + {sample.correctness} correctness"
+    )
+    typer.echo(f"Sheet {out} ({report.sheet}); view {view_out}; key {key_out}")
+    done = len(report.key.items) - len(report.key.pending)
+    typer.echo(f"Key: {done} of {len(report.key.items)} items have a judge verdict")
+    if report.asked:
+        typer.echo(f"  judge calls made now: {report.asked}")
+    if report.stopped is not None:
+        raise _fail(
+            f"The judge could not be asked ({report.stopped.kind}: {report.stopped.detail}). "
+            "The sheet and the view are final; run this command again later to complete the key."
+        )
+    if report.key.pending:
+        typer.echo("  pending: run again without --no-judge to complete the key.")

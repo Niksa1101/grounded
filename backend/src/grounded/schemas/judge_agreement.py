@@ -20,7 +20,7 @@ from typing import Literal, Self, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from grounded.schemas.judge import CorrectnessLabel, FaithfulnessLabel
+from grounded.schemas.judge import CorrectnessLabel, FaithfulnessJudgment, FaithfulnessLabel
 
 Kind = Literal["faithfulness", "correctness"]
 ItemSource = Literal["real", "control"]
@@ -46,6 +46,21 @@ class JudgeRecord(BaseModel):
     judge_model: str
     decided_locally: bool = False
     cache_hit: bool = False
+
+    @classmethod
+    def from_claim(cls, judgment: FaithfulnessJudgment) -> Self:
+        """The record of a claim judged now. Only a judgment with a verdict has one."""
+        if judgment.verdict is None or judgment.reason is None:
+            raise ValueError("an errored judgment has no verdict to record")
+        return cls(
+            verdict=judgment.verdict,
+            reason=judgment.reason,
+            prompt_version=judgment.prompt_version,
+            judge_provider=judgment.judge_provider,
+            judge_model=judgment.judge_model,
+            decided_locally=judgment.decided_locally,
+            cache_hit=judgment.cache_hit,
+        )
 
 
 class ControlInfo(BaseModel):
