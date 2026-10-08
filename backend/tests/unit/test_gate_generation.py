@@ -1,9 +1,9 @@
 """The generation gate (Tech.md §15.5, ticket 4.07).
 
-The spec tests of ``evaluate_generation_gate`` (ticket 4.08, ``xfail(strict=True)`` until then)
-state *behavior*: hand-built runs and baselines, and the verdicts and numbers worked out on paper in
-the comments. They do not re-implement the aggregation. The rest is boilerplate and already green:
-the Markdown report, the exit code and the CLI wrapper with the gate function scripted.
+The spec tests of ``evaluate_generation_gate`` (written in 4.07, green since the implementation of
+4.08) state *behavior*: hand-built runs and baselines, and the verdicts and numbers worked out on
+paper in the comments. They do not re-implement the aggregation. The rest is boilerplate: the
+Markdown report, the exit code and the CLI wrapper with the gate function scripted.
 """
 
 from __future__ import annotations
@@ -43,8 +43,6 @@ from grounded.schemas.generation_eval import (
     GenerationThreshold,
     MetricResult,
 )
-
-spec = pytest.mark.xfail(strict=True, reason="Author implements in 4.08")
 
 NOW = datetime(2026, 10, 8, 12, 0, 0, tzinfo=UTC)
 SHA = "8f0848177a5cb5a8ef649ee211ab9afb7f9bc07c73d37b37cbf3ef554e1abcb2"  # the recorded samples'
@@ -264,7 +262,6 @@ def reason_mentioning(report: GenerationGateReport, *words: str) -> bool:
 # --- Spec: thresholds (Tech §15.5) ---------------------------------------------------------------
 
 
-@spec
 def test_a_run_equal_to_the_baseline_passes() -> None:
     report = gate_hybrid([case(i) for i in range(1, 11)])
     assert report.status == "pass"
@@ -272,7 +269,6 @@ def test_a_run_equal_to_the_baseline_passes() -> None:
     assert {name for name, row in rows_of(report, "hybrid").items() if row.passed} == GATED_METRICS
 
 
-@spec
 def test_a_run_better_than_the_baseline_passes() -> None:
     # correctness: baseline 0.7, the run scores 1.0 on all ten questions.
     report = gate_hybrid([case(i) for i in range(1, 11)], {**PERFECT, "correctness": 0.7})
@@ -319,7 +315,6 @@ BOUNDARIES = [
 ]
 
 
-@spec
 @pytest.mark.parametrize(
     ("metric", "baseline", "values", "current", "threshold", "passes"), BOUNDARIES
 )
@@ -342,7 +337,6 @@ def test_each_threshold_at_just_inside_and_just_outside_the_boundary(
     )
 
 
-@spec
 @pytest.mark.parametrize("metric", sorted(GATED_METRICS))
 def test_one_failing_metric_fails_the_suite(metric: str) -> None:
     report = gate_hybrid(series(metric, [0.0] * 10))
@@ -350,7 +344,6 @@ def test_one_failing_metric_fails_the_suite(metric: str) -> None:
     assert [n for n, row in rows_of(report, "hybrid").items() if row.passed is False] == [metric]
 
 
-@spec
 def test_rows_carry_baseline_current_delta_threshold_and_the_runs_n() -> None:
     # correctness: 15 of 20 questions fully right = 0.75, baseline 0.80, so >= 0.72 and -0.05.
     report = gate_hybrid(series("correctness", ones(15, 20)), {**PERFECT, "correctness": 0.80})
@@ -363,7 +356,6 @@ def test_rows_carry_baseline_current_delta_threshold_and_the_runs_n() -> None:
     assert (row.passed, row.n) == (True, 20)  # the run's n, not the baseline's 30
 
 
-@spec
 def test_only_metrics_with_a_threshold_are_gated() -> None:
     baseline = entry(thresholds={"faithfulness": GATED["faithfulness"]})
     report = evaluate_generation_gate(
@@ -377,7 +369,6 @@ def test_only_metrics_with_a_threshold_are_gated() -> None:
 # --- Spec: the inconclusive rule -----------------------------------------------------------------
 
 
-@spec
 @pytest.mark.parametrize(
     ("total", "errored", "inconclusive"),
     [
@@ -435,7 +426,6 @@ PROVIDER_REASONS: dict[str, Callable[[int], GenerationCase]] = {
 }
 
 
-@spec
 @pytest.mark.parametrize("make", PROVIDER_REASONS.values(), ids=PROVIDER_REASONS.keys())
 def test_a_quota_a_5xx_or_a_timeout_of_the_generator_or_the_judge_counts(
     make: Callable[[int], GenerationCase],
@@ -462,7 +452,6 @@ QUALITY_MISSES: dict[str, tuple[Callable[[int], GenerationCase], str]] = {
 }
 
 
-@spec
 @pytest.mark.parametrize(("make", "category"), QUALITY_MISSES.values(), ids=QUALITY_MISSES.keys())
 def test_a_bad_output_or_a_harness_bug_is_not_a_provider_reason(
     make: Callable[[int], GenerationCase], category: str
@@ -476,14 +465,12 @@ def test_a_bad_output_or_a_harness_bug_is_not_a_provider_reason(
     assert report.status != "inconclusive"
 
 
-@spec
 def test_a_case_with_several_provider_errors_counts_once() -> None:
     report = gate_hybrid(some_failing(10, 2, both_judge_metrics_down))  # 2 of 10, not 4 of 10
     assert summary_of(report, "hybrid").errors.provider == 2
     assert summary_of(report, "hybrid").inconclusive is False
 
 
-@spec
 def test_inconclusive_shows_the_metrics_with_n_but_gates_nothing() -> None:
     # Ten cases, three lost to 5xx (30%); the seven that ran have collapsed correctness.
     cases = [case(i, error=generator_failed("ProviderUnavailable")) for i in (1, 2, 3)]
@@ -500,7 +487,6 @@ def test_inconclusive_shows_the_metrics_with_n_but_gates_nothing() -> None:
     assert summary_of(report, "hybrid").inconclusive is True
 
 
-@spec
 def test_a_run_where_every_case_errored_is_inconclusive_and_does_not_divide_by_zero() -> None:
     report = gate_hybrid(
         [case(i, error=generator_failed("ProviderRateLimited")) for i in range(1, 11)]
@@ -519,7 +505,6 @@ def test_a_run_where_every_case_errored_is_inconclusive_and_does_not_divide_by_z
     )
 
 
-@spec
 def test_a_reported_only_config_never_changes_the_status_even_when_it_is_inconclusive() -> None:
     run = make_run(
         {
@@ -539,7 +524,6 @@ def test_a_reported_only_config_never_changes_the_status_even_when_it_is_inconcl
     assert {row.passed for row in rows_of(report, "no_rag").values()} == {None}
 
 
-@spec
 def test_a_failing_gated_config_beats_an_inconclusive_one() -> None:
     run = make_run(
         {
@@ -557,7 +541,6 @@ def test_a_failing_gated_config_beats_an_inconclusive_one() -> None:
 # --- Spec: n, N/A, macro, errors -----------------------------------------------------------------
 
 
-@spec
 def test_n_excludes_the_cases_that_errored_for_that_metric() -> None:
     # Ten cases. q001: the generator hit a 5xx (no metric at all). q002: the judge timed out on
     # correctness only. 2 of 10 is exactly 20%: not inconclusive. Correctness is scored on
@@ -581,7 +564,6 @@ def test_n_excludes_the_cases_that_errored_for_that_metric() -> None:
     assert summary.inconclusive is False
 
 
-@spec
 def test_n_faithfulness_is_its_own_count_next_to_n_because_not_applicable_is_left_out() -> None:
     # Ten answers. q008..q010 are refusals: faithfulness N/A. The seven others: 1, 1, 1, 1, 0.5,
     # 0.5, 0 = 5.0 / 7 = 0.714. As a 1 the three would give 8 / 10 = 0.8, as a 0, 5 / 10 = 0.5.
@@ -596,7 +578,6 @@ def test_n_faithfulness_is_its_own_count_next_to_n_because_not_applicable_is_lef
     assert (summary.n_faithfulness, summary.n) == (7, 10)
 
 
-@spec
 def test_a_question_weighs_the_same_whatever_its_claim_count_so_faithfulness_is_macro() -> None:
     # Per question: 1 of 1 claim, 1 of 4, 3 of 3, 0 of 2. Macro: (1 + 0.25 + 1 + 0) / 4 = 0.5625.
     # Micro (claims pooled) would be 5 / 10 = 0.5.
@@ -610,7 +591,6 @@ def test_a_question_weighs_the_same_whatever_its_claim_count_so_faithfulness_is_
     assert rows_of(report, "hybrid")["faithfulness"].current == pytest.approx(0.5625)
 
 
-@spec
 def test_not_applicable_is_neither_zero_nor_one_for_any_metric() -> None:
     # citation_precision: 1.0, 0.0 and two N/A = 0.5 over n = 2 (0.75 if N/A were 1, 0.25 if 0).
     cases = [
@@ -623,7 +603,6 @@ def test_not_applicable_is_neither_zero_nor_one_for_any_metric() -> None:
     assert (row.current, row.n, row.passed) == (pytest.approx(0.5), 2, None)  # reported only
 
 
-@spec
 def test_a_metric_that_is_not_applicable_to_every_case_has_no_value_and_n_zero() -> None:
     # no_rag: faithfulness is N/A everywhere. Reported, never 0 and never 1.
     run = make_run(
@@ -641,7 +620,6 @@ def test_a_metric_that_is_not_applicable_to_every_case_has_no_value_and_n_zero()
     assert summary_of(report, "no_rag").n_faithfulness == 0
 
 
-@spec
 def test_a_generator_bad_output_stays_in_n_and_counts_against_schema_validity() -> None:
     # Ten questions, three of them ProviderBadOutput: schema_first_try is 7 / 10 = 0.7 over n = 10
     # (< 0.95: fail); the other metrics are scored on the seven that produced an answer.
@@ -658,7 +636,6 @@ def test_a_generator_bad_output_stays_in_n_and_counts_against_schema_validity() 
     assert (summary.n, summary.errors.generator_bad_output, summary.errors.provider) == (10, 3, 0)
 
 
-@spec
 @pytest.mark.parametrize(("bad", "passes"), [(1, True), (2, False)], ids=["1-of-20", "2-of-20"])
 def test_one_generator_bad_output_in_twenty_is_exactly_at_the_schema_floor(
     bad: int, passes: bool
@@ -669,7 +646,6 @@ def test_one_generator_bad_output_in_twenty_is_exactly_at_the_schema_floor(
     assert (row.n, row.passed) == (20, passes)
 
 
-@spec
 def test_a_judge_bad_output_leaves_that_metric_unscored_and_is_not_counted() -> None:
     # Four of ten answers could not be judged for faithfulness (bad output after the retry): 40%
     # would be inconclusive if it counted. Faithfulness is scored on the other six.
@@ -687,7 +663,6 @@ def test_a_judge_bad_output_leaves_that_metric_unscored_and_is_not_counted() -> 
     assert report.status == "pass"
 
 
-@spec
 def test_a_harness_bug_is_unscored_and_reported() -> None:
     cases = [
         precision_malformed(i) if i <= 2 else case(i, citation_precision=1.0) for i in range(1, 11)
@@ -702,7 +677,6 @@ def test_a_harness_bug_is_unscored_and_reported() -> None:
 # --- Spec: reported-only configs and the other fail-closed cases ---------------------------------
 
 
-@spec
 def test_a_config_without_thresholds_is_reported_but_never_gated() -> None:
     run = make_run(
         {
@@ -727,7 +701,6 @@ def test_a_config_without_thresholds_is_reported_but_never_gated() -> None:
     assert (extra.baseline, extra.delta, extra.threshold, extra.passed) == (None, None, None, None)
 
 
-@spec
 def test_a_gated_config_missing_from_the_results_fails_with_its_name() -> None:
     report = evaluate_generation_gate(
         make_run({"no_rag": [case(1)]}),
@@ -737,7 +710,6 @@ def test_a_gated_config_missing_from_the_results_fails_with_its_name() -> None:
     assert reason_mentioning(report, "hybrid")
 
 
-@spec
 def test_a_gated_metric_the_run_never_scored_fails_with_the_config_and_metric_name() -> None:
     # A run without judge assertions: faithfulness is gated by the baseline but nobody scored it.
     cases = [
@@ -756,14 +728,12 @@ def test_a_gated_metric_the_run_never_scored_fails_with_the_config_and_metric_na
     assert rows_of(report, "hybrid")["correctness"].passed is True  # the others are still checked
 
 
-@spec
 def test_a_gated_metric_that_is_not_applicable_everywhere_fails_instead_of_passing() -> None:
     report = gate_hybrid([case(i, faithfulness=NA) for i in range(1, 11)])
     assert report.status == "fail"
     assert reason_mentioning(report, "hybrid", "faithfulness")
 
 
-@spec
 def test_a_baseline_that_gates_nothing_fails() -> None:
     report = evaluate_generation_gate(
         make_run({"hybrid": [case(1)], "no_rag": [case(1)]}),
@@ -780,7 +750,6 @@ MISMATCHES = [
 ]
 
 
-@spec
 @pytest.mark.parametrize("differs", MISMATCHES)
 def test_a_run_from_another_golden_set_or_index_fails_with_a_reason(
     differs: dict[str, Any],
@@ -793,7 +762,6 @@ def test_a_run_from_another_golden_set_or_index_fails_with_a_reason(
     assert rows_of(report, "hybrid") == {}
 
 
-@spec
 def test_a_changed_prompt_model_or_retrieval_config_is_compared_not_refused() -> None:
     # Catching what a prompt or model change did is the gate's job.
     run = make_run(
@@ -808,7 +776,6 @@ def test_a_changed_prompt_model_or_retrieval_config_is_compared_not_refused() ->
     assert rows_of(report, "hybrid")["correctness"].passed is False
 
 
-@spec
 @pytest.mark.parametrize(
     ("make", "kind"),
     [
@@ -857,7 +824,6 @@ def latency_cases() -> list[GenerationCase]:
     return [*clean, *cached, *cold, *lost]
 
 
-@spec
 def test_latency_percentiles_leave_out_cold_starts_cache_hits_and_failures() -> None:
     # 24 warm latencies 100..2400, nearest rank: p50 = rank ceil(0.5 * 24) = 12 -> 1200 and
     # p95 = rank ceil(0.95 * 24) = 23 -> 2300. Pooling the 3 cache hits and the cold start (28
@@ -871,7 +837,6 @@ def test_latency_percentiles_leave_out_cold_starts_cache_hits_and_failures() -> 
     assert (summary.cases, summary.n, summary.errors.provider) == (29, 28, 1)  # one 5xx
 
 
-@spec
 def test_cost_per_1k_is_the_mean_over_answered_cases_cache_hits_included() -> None:
     # 28 answered cases at $0.001 each (the cache hits and the cold start stay in) = $1.00 per 1k.
     # The lost case spent $0.1 before it failed: not part of it (it would give about $4.41).
@@ -879,7 +844,6 @@ def test_cost_per_1k_is_the_mean_over_answered_cases_cache_hits_included() -> No
     assert summary.cost_per_1k_usd == pytest.approx(1.0)
 
 
-@spec
 def test_a_run_with_no_warm_case_has_no_latency_but_still_a_cost() -> None:
     cases = [case(i, cold_start=True) for i in range(1, 4)] + [
         case(i, llm_cache_hits=2) for i in range(4, 7)
@@ -889,7 +853,6 @@ def test_a_run_with_no_warm_case_has_no_latency_but_still_a_cost() -> None:
     assert summary.cost_per_1k_usd == pytest.approx(1.0)
 
 
-@spec
 def test_latency_and_cost_are_never_gated() -> None:
     slow = [case(i, latency_ms=60000.0, cost_usd=5.0) for i in range(1, 11)]
     report = gate_hybrid(slow)
@@ -901,7 +864,6 @@ def test_latency_and_cost_are_never_gated() -> None:
 # --- Spec: determinism and the recorded runs -----------------------------------------------------
 
 
-@spec
 def test_the_same_inputs_give_the_same_report_with_rows_sorted_by_config_then_metric() -> None:
     run = make_run({"no_rag": [case(1)], "hybrid": [case(i) for i in range(1, 11)]})
     baseline = {"hybrid": entry(), "no_rag": entry(thresholds={})}
@@ -921,7 +883,6 @@ def recorded_baseline(run: GenerationRun) -> dict[str, GenerationBaselineEntry]:
     }
 
 
-@spec
 def test_the_recorded_run_with_the_judge_is_inconclusive_for_hybrid() -> None:
     # hybrid, 7 questions: provider errors on q015 (judge timeout), q047 (quota, then skipped) and
     # q049 (skipped) = 3 of 7 > 20%. q008's faithfulness was a judge bad output (not counted).
@@ -948,7 +909,6 @@ def test_the_recorded_run_with_the_judge_is_inconclusive_for_hybrid() -> None:
     assert (no_rag["correctness"].current, no_rag["correctness"].n) == (pytest.approx(0.1), 5)
 
 
-@spec
 def test_the_recorded_run_without_a_judge_keeps_the_generator_bad_output_in_n() -> None:
     # hybrid: q008 is a generator bad output, q015 a backoff, q047 a quota, q049 skipped: 3 of 7
     # provider errors (inconclusive). schema_first_try: q003, q007, q045 = 1.0 and q008 = 0 -> 0.75.
@@ -966,7 +926,6 @@ def test_the_recorded_run_without_a_judge_keeps_the_generator_bad_output_in_n() 
     assert (rows["refusal_correctness"].current, rows["refusal_correctness"].n) == (1.0, 3)
 
 
-@spec
 def test_the_cli_gates_a_recorded_run_end_to_end(tmp_path: Path) -> None:
     run = parse_results(JUDGED.read_bytes())
     baseline = tmp_path / "generation.json"
@@ -1248,3 +1207,184 @@ def test_gate_help_names_the_options_and_both_suites() -> None:
     plain = re.sub(r"\x1b\[[0-9;]*m", "", result.output)
     for option in ("--suite", "--results", "--baseline", "generation"):
         assert option in plain
+
+
+# --- 4.08: edge cases the spec did not name, and the real CLI on the recorded samples -------------
+
+
+@pytest.mark.parametrize(
+    ("metric", "tolerance", "lowest_percent"),
+    [("correctness", 0.08, 50), ("refusal_correctness", 0.07, 50), ("faithfulness", 0.05, 90)],
+)
+def test_a_drop_of_exactly_the_tolerance_passes_for_every_baseline_and_one_question_more_fails(
+    metric: str, tolerance: float, lowest_percent: int
+) -> None:
+    # Baselines 0.50, 0.51 .. 1.00 over 100 questions: a drop of exactly the tolerance is
+    # 100 * tolerance questions fewer, and baseline - tolerance is floating point for most of
+    # them (0.8 - 0.08 is 0.7200000000000001). Faithfulness starts at 0.90, where baseline - 0.05
+    # is not below its floor of 0.85.
+    drop = round(tolerance * 100)
+    for percent in range(lowest_percent, 101):
+        baseline = {**PERFECT, metric: percent / 100}
+        at = gate_hybrid(series(metric, ones(percent - drop, 100)), baseline)
+        below = gate_hybrid(series(metric, ones(percent - drop - 1, 100)), baseline)
+        assert rows_of(at, "hybrid")[metric].passed is True, percent
+        assert rows_of(below, "hybrid")[metric].passed is False, percent
+
+
+def test_a_gated_config_with_no_cases_is_inconclusive_and_does_not_divide_by_zero() -> None:
+    report = gate_hybrid([])
+
+    assert report.status == "inconclusive"
+    summary = summary_of(report, "hybrid")
+    assert (summary.cases, summary.n, summary.inconclusive) == (0, 0, True)
+    assert {(row.current, row.n, row.passed) for row in report.rows} == {(None, 0, None)}
+
+
+def test_a_config_whose_answers_carry_no_index_version_is_not_comparable() -> None:
+    run = make_run({"hybrid": [case(i) for i in range(1, 11)]}, index_version=None)
+    report = evaluate_generation_gate(run, {"hybrid": entry()})
+
+    assert report.status == "fail"
+    assert reason_mentioning(report, "hybrid", "index_version")
+    assert rows_of(report, "hybrid") == {}
+    assert summary_of(report, "hybrid").cases == 10  # the summary is still reported
+
+
+def test_reasons_come_in_config_order() -> None:
+    report = evaluate_generation_gate(
+        make_run({"other": [case(1)]}),
+        {"zeta": entry(), "alpha": entry(), "other": entry(thresholds={})},
+    )
+    assert [reason.split(":")[0] for reason in report.reasons] == ["alpha", "zeta"]
+
+
+def test_a_case_is_counted_in_every_category_it_has_an_error_for_and_once_in_each() -> None:
+    both = case(
+        1,
+        faithfulness=judge_down(),
+        correctness=judge_down("ProviderUnavailable"),
+        citation_precision=metric_failed("ProviderBadOutput", provider_side=False),
+    )
+    report = gate_hybrid([both, *[case(i) for i in range(2, 11)]])
+
+    errors = summary_of(report, "hybrid").errors
+    assert (errors.provider, errors.judge_bad_output) == (1, 1)
+    assert summary_of(report, "hybrid").n == 9
+
+
+def test_a_generator_bad_output_alone_gives_schema_first_try_a_row() -> None:
+    run = make_run(
+        {
+            "hybrid": [case(i) for i in range(1, 11)],
+            "no_rag": [case(i, error=generator_failed("ProviderBadOutput")) for i in (1, 2, 3)],
+        }
+    )
+    report = evaluate_generation_gate(
+        run, {"hybrid": entry(), "no_rag": entry({"correctness": 0.5}, thresholds={})}
+    )
+
+    rows = rows_of(report, "no_rag")
+    assert (rows["schema_first_try"].current, rows["schema_first_try"].n) == (0.0, 3)
+    assert (rows["correctness"].current, rows["correctness"].n) == (None, 0)
+
+
+def test_the_gate_cannot_run_reasons_name_each_kind_with_its_configs_and_counts() -> None:
+    def rejected(index: int) -> GenerationCase:
+        return case(index, error=generator_failed("ProviderRequestRejected"))
+
+    def no_index(index: int) -> GenerationCase:
+        return case(index, error=generator_failed("NoActiveIndexError"))
+
+    # The kinds are found anywhere in the run, in a reported-only config too.
+    run = make_run(
+        {
+            "hybrid": [rejected(1), rejected(2), no_index(3), *[case(i) for i in range(4, 11)]],
+            "no_rag": [rejected(1), *[case(i) for i in range(2, 11)]],
+        }
+    )
+    with pytest.raises(GateCannotRunError) as info:
+        evaluate_generation_gate(run, {"hybrid": entry(), "no_rag": entry(thresholds={})})
+
+    first, second = info.value.reasons
+    assert first.startswith("NoActiveIndexError: 1 case(s) (hybrid 1): ")
+    assert second.startswith("ProviderRequestRejected: 3 case(s) (hybrid 2, no_rag 1): ")
+
+
+# The recorded judge sample cut to the four questions that no provider error touched, so each of
+# its configs is conclusive. Scripted models: the numbers prove nothing about quality.
+ANSWERED = {"q003", "q007", "q008", "q045"}
+GOLDEN_OUTPUT = Path(__file__).resolve().parents[1] / "fixtures" / "gate"
+# hybrid on those four: faithfulness 0.5 over n = 2, correctness 0.875, refusal 1.0, schema 1.0.
+HYBRID_BASELINE = {
+    "faithfulness": 0.5,
+    "correctness": 0.875,
+    "refusal_correctness": 1.0,
+    "schema_first_try": 1.0,
+}
+WITHOUT_FLOOR = {**GATED, "faithfulness": GenerationThreshold(tolerance=0.05)}
+
+
+def write_answered_results(tmp_path: Path) -> Path:
+    document = json.loads(JUDGED.read_bytes())
+    rows = document["results"]["results"]
+    document["results"]["results"] = [r for r in rows if r["metadata"]["golden"]["id"] in ANSWERED]
+    path = tmp_path / "answered.json"
+    path.write_text(json.dumps(document), encoding="utf-8")
+    return path
+
+
+def write_recorded_baseline(tmp_path: Path, hybrid_rules: dict[str, GenerationThreshold]) -> Path:
+    rows = {
+        "hybrid": entry(HYBRID_BASELINE, thresholds=hybrid_rules),
+        "no_rag": entry({"correctness": 0.125}, thresholds={}, index_version="none"),
+    }
+    path = tmp_path / "generation.json"
+    path.write_text(
+        json.dumps({name: row.model_dump(mode="json") for name, row in rows.items()}),
+        encoding="utf-8",
+    )
+    return path
+
+
+@pytest.mark.parametrize(
+    ("golden", "rules", "code"),
+    [
+        pytest.param("generation_pass.md", WITHOUT_FLOOR, 0, id="pass"),
+        pytest.param("generation_fail.md", GATED, 1, id="fail-faithfulness-below-its-floor"),
+    ],
+)
+def test_the_cli_prints_the_pull_request_comment_for_a_conclusive_recorded_run(
+    tmp_path: Path, golden: str, rules: dict[str, GenerationThreshold], code: int
+) -> None:
+    result = gate(write_answered_results(tmp_path), write_recorded_baseline(tmp_path, rules))
+
+    assert result.exit_code == code, result.output
+    assert result.output == (GOLDEN_OUTPUT / golden).read_text(encoding="utf-8")
+    assert all(line == line.rstrip() for line in result.output.splitlines())  # no trailing spaces
+
+
+def test_the_cli_prints_the_inconclusive_notice_first_and_exits_0_for_the_full_recorded_run(
+    tmp_path: Path,
+) -> None:
+    result = gate(JUDGED, write_recorded_baseline(tmp_path, GATED))
+
+    assert result.exit_code == 0, result.output
+    assert result.output == (GOLDEN_OUTPUT / "generation_inconclusive.md").read_text("utf-8")
+    assert result.output.splitlines()[2].startswith("> ⚠️ **hybrid: inconclusive.**")
+
+
+def test_the_cli_exits_2_when_the_recorded_run_shows_a_rejected_key(tmp_path: Path) -> None:
+    raw = JUDGED.read_text(encoding="utf-8")
+    assert raw.count('"kind":"ProviderTimeout"') == 2  # hybrid's and no_rag's q015 correctness
+    rejected = tmp_path / "rejected.json"
+    rejected.write_text(
+        raw.replace('"kind":"ProviderTimeout"', '"kind":"ProviderRequestRejected"'),
+        encoding="utf-8",
+    )
+
+    result = gate(rejected, write_recorded_baseline(tmp_path, GATED))
+
+    assert result.exit_code == 2
+    assert "The gate could not run:" in result.output
+    assert "- ProviderRequestRejected: 2 case(s) (hybrid 1, no_rag 1): " in result.output

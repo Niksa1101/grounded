@@ -3,7 +3,8 @@
 **Author-owned** (AGENTS.md §3): ``evaluate_gate`` was written in ticket 2.10 at the Author's
 explicit request. The spec tests are in ``tests/unit/test_gate.py``. The generation part is the
 second function, ``evaluate_generation_gate``: its contract and spec tests are ticket 4.07
-(``tests/unit/test_gate_generation.py``), the implementation is 4.08.
+(``tests/unit/test_gate_generation.py``); the Author delegated the implementation to the Agent
+("write it", 4.08), who explained it line by line in the PR.
 
 Everything that is not one of the two gate functions is boilerplate that decides nothing: the report
 types, the Markdown and the CLI exit code.
@@ -11,13 +12,23 @@ types, the Markdown and the CLI exit code.
 
 from __future__ import annotations
 
+import math
+from collections import Counter
 from collections.abc import Mapping
+from fractions import Fraction
 from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 
 from grounded.schemas.eval import RetrievalBaselineEntry, RetrievalRun, RetrievalRunInfo
-from grounded.schemas.generation_eval import GenerationBaselineEntry, GenerationRun
+from grounded.schemas.generation_eval import (
+    ErrorInfo,
+    GenerationBaselineEntry,
+    GenerationCase,
+    GenerationRun,
+    GenerationRunInfo,
+    GenerationThreshold,
+)
 
 GateStatus = Literal["pass", "fail", "inconclusive"]
 
@@ -287,8 +298,8 @@ def evaluate_generation_gate(
     """Compare ``run`` with ``baseline`` (the rows of ``eval/baselines/generation.json``).
 
     **Author-owned** (AGENTS.md §3). 4.07 wrote this contract and the spec tests
-    (``tests/unit/test_gate_generation.py``, strict ``xfail``); 4.08 implements it. What is marked
-    *decided* is the Author's of 2026-10-08. Pure: no I/O, no clock, no logging.
+    (``tests/unit/test_gate_generation.py``); 4.08 implements it, at the Author's "write it". What
+    is marked *decided* is the Author's of 2026-10-08. Pure: no I/O, no clock, no logging.
 
     **Cases and configs.** A case is one golden question asked of one config (``GenerationCase``).
     Everything below is per config; configs never mix. ``cases`` is how many a config has.
@@ -330,8 +341,8 @@ def evaluate_generation_gate(
     is). The denominator is *the config's own cases*, not all configs' (proposed in 4.07, the
     Author may veto: the PR comment needs a verdict per config, and ``no_rag`` and ``hybrid`` fail
     differently). Zero cases, or every case errored, is inconclusive too, without dividing by zero.
-    An inconclusive config still gets its rows, with ``current`` and ``n``, but ``passed`` is
-    ``None``: nothing of it is gated, and ``ConfigSummary.inconclusive`` says so.
+    An inconclusive config still gets its rows, with ``current`` and ``n``, but ``passed`` and
+    ``threshold`` are ``None``: nothing of it is gated, and ``ConfigSummary.inconclusive`` says so.
 
     **The gate could not run.** ``ProviderRequestRejected`` or ``ProviderConfigError`` anywhere in
     the run (generator or judge: a refused key, a missing judge model) raises ``GateCannotRunError``
@@ -349,8 +360,9 @@ def evaluate_generation_gate(
 
     **Rows.** One per config and metric, sorted by config, then metric: every metric seen in any
     case of the config plus every metric of its baseline row (so an all-errored config still lists
-    its metrics, as not available). ``n`` is the metric's own, ``delta`` is ``current - baseline``,
-    and a metric the baseline lacks has ``baseline`` ``None``.
+    its metrics, as not available), plus ``schema_first_try`` when a generator bad output gave it
+    a score. ``n`` is the metric's own, ``delta`` is ``current - baseline``, and a metric the
+    baseline lacks has ``baseline`` ``None``.
 
     **Fail closed, with a reason and never an exception** (but ``GateCannotRunError``). Each of
     these makes the status ``fail`` and adds a ``reasons`` line that names the config:
@@ -381,7 +393,311 @@ def evaluate_generation_gate(
       cache hit stays in, Tech §15.3; a failed call's partial spend and the judge's cost do not).
       No such case: ``None``.
     """
-    raise NotImplementedError("Author implements in 4.08")
+    unrunnable = _cannot_run_reasons(run)
+    if unrunnable:
+        raise GateCannotRunError(unrunnable)
+
+    rows: list[GateRow] = []
+    reasons: list[str] = []
+    summaries: list[ConfigSummary] = []
+    gated_configs = 0
+
+    # Sorted, so the same inputs always give the same row, summary and reason order.
+    for name in sorted(baseline.keys() | run.configs.keys()):
+        entry = baseline.get(name)
+        result = run.configs.get(name)
+        gated = entry is not None and bool(entry.thresholds)
+        if gated:
+            gated_configs += 1
+
+        if result is None:
+            if gated:
+                reasons.append(f"{name}: gated config is missing from the run")
+            continue
+
+        summary = _summarize(name, result.cases, gated=gated)
+        summaries.append(summary)
+
+        if entry is not None and gated:
+            differences = _generation_setup_differences(run.info, result.index_version, entry)
+            if differences:
+                reasons.append(
+                    f"{name}: run is not comparable with the baseline ({differences}); "
+                    "numbers scored on another golden set or index prove nothing"
+                )
+                continue
+
+        # An inconclusive config is shown but not judged: its rows get no threshold and no verdict.
+        enforced = gated and not summary.inconclusive
+        for row in _config_rows(name, result.cases, entry, enforced=enforced):
+            rows.append(row)
+            if row.current is None and row.passed is False:
+                reasons.append(f"{name}: gated metric {row.metric} has no scored case")
+
+    if gated_configs == 0:
+        reasons.append("no config in the baseline is gated: the gate would check nothing")
+
+    return GenerationGateReport(
+        status=_status(rows, reasons, summaries), rows=rows, reasons=reasons, configs=summaries
+    )
+
+
+# --- Helpers of evaluate_generation_gate ---------------------------------------------------------
+
+_FAITHFULNESS: Final = "faithfulness"
+_SCHEMA_FIRST_TRY: Final = "schema_first_try"
+
+# Error kinds (``ErrorInfo.kind``, the exception's class name) that count toward ``inconclusive``.
+# ``BackoffExhaustedError`` is also found through its base class, ``ProviderRateLimited``.
+_PROVIDER_KINDS: Final = frozenset(
+    {
+        "ProviderRateLimited",
+        "BackoffExhaustedError",
+        "ProviderUnavailable",
+        "ProviderTimeout",
+        "EmbedderUnavailableError",
+    }
+)
+# A bug in the harness, not in the system under test: the metric is unscored and reported.
+_HARNESS_KINDS: Final = frozenset({"MalformedInput", "AssertionFailed"})
+
+_CANNOT_RUN_HINTS: Final = {
+    "ProviderRequestRejected": "a provider refused the request (a rejected key?)",
+    "ProviderConfigError": "a provider is not configured (a missing key or judge model?)",
+}
+_UNNAMED_KIND_HINT: Final = (
+    "not a provider failure: the setup is at fault (index, database, harness)"
+)
+
+_Category = Literal[
+    "provider", "generator_bad_output", "judge_bad_output", "malformed_input", "cannot_run"
+]
+
+
+def _category(error: ErrorInfo) -> _Category:
+    """Which bucket an error belongs to. Anything this does not name is ``cannot_run``: an error
+    nobody classified must stop the gate, not be counted as a quality result."""
+    if error.kind in _PROVIDER_KINDS or "ProviderRateLimited" in error.bases:
+        return "provider"
+    if error.kind == "ProviderBadOutput":
+        return "generator_bad_output" if error.stage == "generator" else "judge_bad_output"
+    if error.kind in _HARNESS_KINDS:
+        return "malformed_input"
+    return "cannot_run"
+
+
+def _case_errors(case: GenerationCase) -> list[ErrorInfo]:
+    """Every error of a case: the generator's (then it has no metrics) or its errored metrics'."""
+    errors: list[ErrorInfo] = [] if case.error is None else [case.error]
+    errors.extend(result.error for result in case.metrics.values() if result.error is not None)
+    return errors
+
+
+def _is_generator_bad_output(case: GenerationCase) -> bool:
+    return case.error is not None and _category(case.error) == "generator_bad_output"
+
+
+def _cannot_run_reasons(run: GenerationRun) -> list[str]:
+    """One line per error kind that shows the gate cannot run, anywhere in the run (every config,
+    gated or not): what was found, how many cases, in which configs. Empty when the run is fine."""
+    found: Counter[tuple[str, str]] = Counter()  # (kind, config) -> cases
+    for name, result in sorted(run.configs.items()):
+        for case in result.cases:
+            kinds = {e.kind for e in _case_errors(case) if _category(e) == "cannot_run"}
+            for kind in kinds:
+                found[kind, name] += 1
+    return [
+        _cannot_run_line(kind, {c: n for (k, c), n in found.items() if k == kind})
+        for kind in sorted({kind for kind, _ in found})
+    ]
+
+
+def _cannot_run_line(kind: str, cases_per_config: Mapping[str, int]) -> str:
+    where = ", ".join(f"{config} {count}" for config, count in sorted(cases_per_config.items()))
+    hint = _CANNOT_RUN_HINTS.get(kind, _UNNAMED_KIND_HINT)
+    return f"{kind}: {sum(cases_per_config.values())} case(s) ({where}): {hint}"
+
+
+def _count_errors(cases: list[GenerationCase]) -> ErrorCounts:
+    """Cases per category. A case is counted once per category, however many errors it has there,
+    and in every category it has an error for."""
+    found = [{_category(error) for error in _case_errors(case)} for case in cases]
+    return ErrorCounts(
+        provider=sum("provider" in categories for categories in found),
+        generator_bad_output=sum("generator_bad_output" in categories for categories in found),
+        judge_bad_output=sum("judge_bad_output" in categories for categories in found),
+        malformed_input=sum("malformed_input" in categories for categories in found),
+    )
+
+
+def _is_inconclusive(provider_errors: int, cases: int) -> bool:
+    """More than ``MAX_PROVIDER_ERROR_RATE`` of the cases errored for provider reasons. Exactly the
+    rate is not. No cases is inconclusive too, and nothing divides by it.
+
+    The comparison is between exact fractions, so "exactly the rate" is an exact tie that no
+    rounding decides: the float ``0.2`` is not one fifth (it is a hair above), while the fraction
+    read from the text ``"0.2"`` is.
+    """
+    if cases == 0:
+        return True
+    return Fraction(provider_errors, cases) > Fraction(str(MAX_PROVIDER_ERROR_RATE))
+
+
+def _mean(values: list[float]) -> float | None:
+    """``None`` for no values (never 0 or 1). ``fsum`` is exact, so the order of the cases cannot
+    move the last digit."""
+    return math.fsum(values) / len(values) if values else None
+
+
+def _nearest_rank(sorted_values: list[float], percent: int) -> float | None:
+    """The value at rank ``ceil(percent / 100 * m)`` of the ``m`` sorted values. ``None`` for no
+    values. The ceiling is computed in integers, so no float can move the rank."""
+    if not sorted_values:
+        return None
+    rank = (percent * len(sorted_values) + 99) // 100
+    return sorted_values[rank - 1]
+
+
+def _metric_values(cases: list[GenerationCase], metric: str) -> list[float]:
+    """The per-question values of ``metric``, one for each case where it was *scored*. N/A and
+    errored metrics, and cases whose generator failed, have none: they are out of the mean and
+    out of ``n``. The exception is a generator ``ProviderBadOutput`` (a quality miss, decided):
+    the answer was not valid on the first try, so it is a scored 0.0 for ``schema_first_try``."""
+    values: list[float] = []
+    for case in cases:
+        result = case.metrics.get(metric)
+        if result is not None and result.value is not None:  # a value exists only when scored
+            values.append(result.value)
+    if metric == _SCHEMA_FIRST_TRY:
+        values.extend(0.0 for case in cases if _is_generator_bad_output(case))
+    return values
+
+
+def _summarize(config: str, cases: list[GenerationCase], *, gated: bool) -> ConfigSummary:
+    """Counts, latency and cost of one config (reported, never gated)."""
+    errors = _count_errors(cases)
+    # Warm, answered cases only: a cold start pays for the pool and the embedder, and a cache hit
+    # has no provider latency (Tech §15.3).
+    latencies = sorted(
+        case.latency_ms
+        for case in cases
+        if case.error is None
+        and case.latency_ms is not None
+        and not case.cold_start
+        and case.llm_cache_hits == 0
+    )
+    # Cost keeps cache hits (they replay the original usage) but not a failed call's partial spend.
+    mean_cost = _mean([case.cost_usd for case in cases if case.error is None])
+    return ConfigSummary(
+        config=config,
+        gated=gated,
+        inconclusive=_is_inconclusive(errors.provider, len(cases)),
+        cases=len(cases),
+        n=len(cases) - errors.provider,
+        n_faithfulness=len(_metric_values(cases, _FAITHFULNESS)),
+        errors=errors,
+        n_latency=len(latencies),
+        latency_p50_ms=_nearest_rank(latencies, 50),
+        latency_p95_ms=_nearest_rank(latencies, 95),
+        cost_per_1k_usd=None if mean_cost is None else 1000 * mean_cost,
+    )
+
+
+def _generation_setup_differences(
+    info: GenerationRunInfo, index_version: str | None, entry: GenerationBaselineEntry
+) -> str:
+    """The setup fields where the run and the baseline row disagree, empty when they match. Only
+    what makes numbers incomparable: not the prompt, the model or the retrieval config."""
+    differences: list[str] = []
+    if info.golden_set_version != entry.golden_set_version:
+        differences.append(
+            f"golden_set_version: baseline {entry.golden_set_version}, "
+            f"run {info.golden_set_version}"
+        )
+    if info.golden_set_sha256 != entry.golden_set_sha256:
+        differences.append(
+            f"golden_set_sha256: baseline {entry.golden_set_sha256[:12]}, "
+            f"run {info.golden_set_sha256[:12]}"
+        )
+    if index_version != entry.index_version:
+        differences.append(f"index_version: baseline {entry.index_version}, run {index_version}")
+    return ", ".join(differences)
+
+
+def _config_rows(
+    config: str,
+    cases: list[GenerationCase],
+    entry: GenerationBaselineEntry | None,
+    *,
+    enforced: bool,
+) -> list[GateRow]:
+    """One row per metric, sorted by name: every metric seen in a case, every metric of the
+    baseline row (so a metric nobody scored still shows up, as not available), and
+    ``schema_first_try`` when a generator bad output gave it a score."""
+    names = {metric for case in cases for metric in case.metrics}
+    if entry is not None:
+        names.update(entry.metrics)
+    if any(_is_generator_bad_output(case) for case in cases):
+        names.add(_SCHEMA_FIRST_TRY)
+    return [
+        _generation_row(config, metric, _metric_values(cases, metric), entry, enforced=enforced)
+        for metric in sorted(names)
+    ]
+
+
+def _generation_row(
+    config: str,
+    metric: str,
+    values: list[float],
+    entry: GenerationBaselineEntry | None,
+    *,
+    enforced: bool,
+) -> GateRow:
+    """The row of one metric. ``enforced`` is true for a gated config that is not inconclusive;
+    only then does a thresholded metric get a threshold and a verdict."""
+    current = _mean(values)
+    baseline = None if entry is None else entry.metrics.get(metric)
+    delta = None if current is None or baseline is None else current - baseline
+    rule = None if entry is None else entry.thresholds.get(metric)
+
+    threshold = None
+    passed = None
+    # A thresholded metric always has a baseline value: the baseline row validates that.
+    if enforced and rule is not None and baseline is not None:
+        threshold = _threshold(rule, baseline)
+        # No value (n == 0) fails: a gate that cannot see the metric must not pass it.
+        passed = current is not None and current >= threshold - _EPSILON
+    return GateRow(
+        config=config,
+        metric=metric,
+        baseline=baseline,
+        current=current,
+        delta=delta,
+        threshold=threshold,
+        passed=passed,
+        n=len(values),
+    )
+
+
+def _threshold(rule: GenerationThreshold, baseline: float) -> float:
+    """The lowest passing value: the higher of the floor and ``baseline - tolerance``, over the
+    parts that are set (the rule validates that at least one is)."""
+    candidates: list[float] = []
+    if rule.floor is not None:
+        candidates.append(rule.floor)
+    if rule.tolerance is not None:
+        candidates.append(baseline - rule.tolerance)
+    return max(candidates)
+
+
+def _status(rows: list[GateRow], reasons: list[str], summaries: list[ConfigSummary]) -> GateStatus:
+    """``fail`` beats ``inconclusive`` beats ``pass``: a regression that was seen is not hidden by a
+    config that could not be judged. A reported-only config never changes the status."""
+    if reasons or any(row.passed is False for row in rows):
+        return "fail"
+    if any(summary.gated and summary.inconclusive for summary in summaries):
+        return "inconclusive"
+    return "pass"
 
 
 # --- Generation report: Markdown (boilerplate: it decides nothing) -------------------------------
