@@ -202,7 +202,15 @@ uv run grounded eval gate --suite retrieval --results <results-file>.json
 ```
 
 ```bash
-npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1   # needs PROMPTFOO_PYTHON and --no-cache: Tech §15.3
+# From the repository root, after `uv sync` in backend/. Git Bash on Windows, Linux and macOS (PowerShell form and CI form: Tech §15.3).
+# Uses the real providers and quota; for a run with no network add GENERATOR_PROVIDERS=fake GEMINI_API_KEY= (Tech §15.3).
+export PROMPTFOO_PYTHON="$(uv run --project backend python -c 'import sys; print(sys.executable)')"
+PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 \
+  npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1 --no-cache -o eval/results/<name>.json
+```
+
+```bash
+EVAL_QUESTION_IDS=q003,q045,q036 <the promptfoo command above>   # a smoke run on a few golden questions
 ```
 
 ```bash

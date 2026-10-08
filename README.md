@@ -219,8 +219,12 @@ uv run grounded eval retrieval --config dense --config fts --config hybrid
 ```
 
 ```bash
-npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1
+export PROMPTFOO_PYTHON="$(uv run --project backend python -c 'import sys; print(sys.executable)')"
+npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1 --no-cache -o eval/results/<name>.json
 ```
+
+The generation eval runs the real pipeline and uses provider quota; the exact command for each shell and for CI, the
+smoke-run switches and what the assertions score are in [docs/Tech.md §15.3](docs/Tech.md).
 
 ## Roadmap
 

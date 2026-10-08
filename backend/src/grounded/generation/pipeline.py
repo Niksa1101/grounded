@@ -18,7 +18,8 @@ today is marked below.
 - ``RequestTrace`` (3.12) is filled as the stages run: versions, usage, retries and citation counts
   for the ``request_logs`` row, and the stage timings and shadow cost for ``meta``. The pipeline
   never writes the row itself (the route does, and the error handlers for the failures), so a
-  request that raises still leaves its trace behind.
+  request that raises still leaves its trace behind. The trace also keeps the retrieval (section
+  ids in rank order) and the labelled context chunks, which only the eval harness reads (4.05).
 - ``AskMode.NO_RAG`` (3.11) is the Phase 4 baseline: no embedding, no index lookup, no retrieval,
   the sibling prompt ``answer_no_rag_v1`` and no zero-citations check (there is nothing to cite, so
   the check would send every answer to the retry). It is reachable from ``grounded ask --mode
@@ -200,6 +201,8 @@ class AskPipeline:
                     context = build_context(chunks, k_context=self._cfg.k_context)
                     titles = await chunk_titles(conn, [c.chunk_id for c in context.labels.values()])
             labels = context.labels
+            trace.retrieved_section_ids = [chunk.section_id for chunk in chunks]
+            trace.context_chunks = dict(context.labels)
             # The connection went back to the pool before the (slow) LLM call. The question is
             # escaped like chunk text, so it cannot open a fake <source> block of its own.
             user = prompt.render_user(question=escape_content(question), sources=context.text)

@@ -40,6 +40,7 @@ from grounded.generation.providers.base import Usage
 from grounded.infra.hashing import question_hash
 from grounded.infra.timing import Clock, StageTimer
 from grounded.observability.cost import Pricing
+from grounded.retrieval.types import RetrievedChunk
 from grounded.schemas.api import ErrorCode
 from grounded.schemas.llm import AnswerStatus
 
@@ -102,6 +103,13 @@ class RequestTrace:
     # Generation attempts the eval LLM cache served (4.03). No column: only eval runs have any, and
     # they read it from the trace to leave a cached latency out of the latency statistics.
     llm_cache_hits: int = 0
+    # What retrieval returned (section ids, rank order) and what the model could cite (label ->
+    # chunk). The eval harness scores citations and judges claims against this text (4.05, Tech
+    # §15.3). No column, not in the response, empty in ``no_rag``.
+    retrieved_section_ids: list[str] = field(default_factory=lambda: list[str]())
+    context_chunks: dict[str, RetrievedChunk] = field(
+        default_factory=lambda: dict[str, RetrievedChunk]()
+    )
     citation_count: int | None = None
     invalid_citation_count: int | None = None
     dropped_claim_count: int | None = None
