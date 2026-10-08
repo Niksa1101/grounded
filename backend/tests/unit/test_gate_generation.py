@@ -1251,6 +1251,174 @@ def test_a_config_whose_answers_carry_no_index_version_is_not_comparable() -> No
     assert summary_of(report, "hybrid").cases == 10  # the summary is still reported
 
 
+# --- A config with no answered case has no index to compare (found in 4.10c) ----------------------
+#
+# ``index_version`` is read from the answers' metadata, and a failed call carries none, so a config
+# whose every generator call failed has ``index_version`` None: "unknown", not "different". The
+# golden set is the run's identity, not the answers', so it is still compared.
+
+
+def run_with_unnamed_index(
+    configs: dict[str, list[GenerationCase]], *unnamed: str, **identity: Any
+) -> GenerationRun:
+    """A run in which the ``unnamed`` configs have no index version, as a config whose calls all
+    failed has in a parsed results file (every other config keeps ``INDEX``)."""
+    run = make_run(configs, **identity)
+    return run.model_copy(
+        update={
+            "configs": {
+                name: result.model_copy(update={"index_version": None})
+                if name in unnamed
+                else result
+                for name, result in run.configs.items()
+            }
+        }
+    )
+
+
+TOTAL_OUTAGES: dict[str, Callable[[int], GenerationCase]] = {
+    "5xx": lambda i: case(i, error=generator_failed("ProviderUnavailable")),
+    "per-minute-limit": lambda i: case(i, error=generator_failed("ProviderRateLimited")),
+    "daily-quota": lambda i: case(i, error=generator_failed("ProviderRateLimited", is_quota=True)),
+    "timeout": lambda i: case(i, error=generator_failed("ProviderTimeout")),
+    "backoff-exhausted": lambda i: case(
+        i,
+        error=generator_failed(
+            "BackoffExhaustedError", bases=("ProviderRateLimited", "ProviderError")
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("make", TOTAL_OUTAGES.values(), ids=TOTAL_OUTAGES.keys())
+def test_a_total_provider_outage_of_a_gated_config_is_inconclusive_not_a_fail(
+    make: Callable[[int], GenerationCase],
+) -> None:
+    run = run_with_unnamed_index({"hybrid": [make(i) for i in range(1, 11)]}, "hybrid")
+    assert run.configs["hybrid"].index_version is None
+    report = evaluate_generation_gate(run, {"hybrid": entry()})
+
+    assert report.status == "inconclusive"
+    assert exit_code(report) == 0
+    assert report.reasons == []  # nothing failed closed: the setup is not what differs
+    summary = summary_of(report, "hybrid")
+    assert (summary.inconclusive, summary.gated) == (True, True)
+    assert (summary.cases, summary.n, summary.n_faithfulness) == (10, 0, 0)
+    assert summary.errors.provider == 10
+    rows = rows_of(report, "hybrid")
+    assert set(rows) == GATED_METRICS  # listed from the baseline row, as not available
+    for metric_row in rows.values():
+        assert (metric_row.current, metric_row.delta, metric_row.n) == (None, None, 0)
+        assert (metric_row.threshold, metric_row.passed) == (None, None)  # nothing is gated
+    notice = "hybrid: inconclusive.** 10 of 10 cases (100.0%) errored for provider reasons"
+    assert notice in render_generation_markdown(report)
+
+
+@pytest.mark.parametrize(
+    "differs",
+    [
+        pytest.param({"index_version": "0.141.1@deadbeef"}, id="another-index"),
+        pytest.param({"index_version": None}, id="answers-carry-no-index"),
+        pytest.param({"info": {"golden_set_version": "v2"}}, id="another-golden-version"),
+        pytest.param({"info": {"golden_set_sha256": "b" * 64}}, id="another-golden-sha256"),
+    ],
+)
+def test_a_config_with_an_answered_case_still_fails_closed_even_when_it_is_inconclusive(
+    differs: dict[str, Any],
+) -> None:
+    # Nine of ten calls down is inconclusive, but the one answer exists, so it names its index (or
+    # should): a setup that differs from the baseline's is a reason, not a verdict to wait out.
+    cases = [case(i, error=generator_failed("ProviderTimeout")) for i in range(1, 10)]
+    run = make_run({"hybrid": [*cases, case(10)]}, **differs)
+    report = evaluate_generation_gate(run, {"hybrid": entry()})
+
+    assert report.status == "fail"
+    assert exit_code(report) == 1
+    assert reason_mentioning(report, "hybrid", "not comparable")
+    assert rows_of(report, "hybrid") == {}
+    assert summary_of(report, "hybrid").inconclusive is True  # still reported
+
+
+@pytest.mark.parametrize(
+    ("differs", "word"),
+    [
+        pytest.param({"golden_set_version": "v2"}, "golden_set_version", id="version"),
+        pytest.param({"golden_set_sha256": "b" * 64}, "golden_set_sha256", id="sha256"),
+    ],
+)
+def test_a_total_outage_on_another_golden_set_still_fails_closed_naming_only_the_golden_set(
+    differs: dict[str, Any], word: str
+) -> None:
+    # The golden set comes from the run's own info, not from the answers, so an outage does not
+    # hide a mismatch. The missing index is "unknown", so it is not named as a difference.
+    cases = [case(i, error=generator_failed("ProviderUnavailable")) for i in range(1, 11)]
+    run = run_with_unnamed_index({"hybrid": cases}, "hybrid", info=differs)
+    report = evaluate_generation_gate(run, {"hybrid": entry()})
+
+    assert report.status == "fail"
+    assert reason_mentioning(report, "hybrid", "not comparable", word)
+    assert not reason_mentioning(report, "index_version")
+    assert rows_of(report, "hybrid") == {}
+    assert summary_of(report, "hybrid").inconclusive is True
+
+
+@pytest.mark.parametrize("index", [INDEX, None], ids=["index-named", "index-unnamed"])
+def test_a_generator_bad_output_on_every_case_is_a_quality_failure_not_inconclusive(
+    index: str | None,
+) -> None:
+    # Ten answers the model got wrong: schema_first_try is 0 over n = 10, and the other gated
+    # metrics have no scored case. Whether the config names its index makes no difference.
+    cases = [case(i, error=generator_failed("ProviderBadOutput")) for i in range(1, 11)]
+    report = evaluate_generation_gate(
+        make_run({"hybrid": cases}, index_version=index), {"hybrid": entry()}
+    )
+
+    assert report.status == "fail"
+    summary = summary_of(report, "hybrid")
+    assert (summary.inconclusive, summary.cases, summary.n) == (False, 10, 10)
+    assert (summary.errors.provider, summary.errors.generator_bad_output) == (0, 10)
+    rows = rows_of(report, "hybrid")
+    assert (rows["schema_first_try"].current, rows["schema_first_try"].n) == (0.0, 10)
+    assert rows["schema_first_try"].passed is False
+    for metric in GATED_METRICS - {"schema_first_try"}:
+        assert (rows[metric].current, rows[metric].n, rows[metric].passed) == (None, 0, False)
+    assert reason_mentioning(report, "hybrid", "faithfulness", "no scored case")
+    assert not reason_mentioning(report, "index_version")
+
+
+def test_a_reported_only_config_with_a_total_outage_does_not_change_the_status() -> None:
+    cases = [case(i, error=generator_failed("ProviderRateLimited", is_quota=True)) for i in (1, 2)]
+    run = run_with_unnamed_index(
+        {"hybrid": [case(i) for i in range(1, 11)], "no_rag": cases}, "no_rag"
+    )
+    report = evaluate_generation_gate(
+        run, {"hybrid": entry(), "no_rag": entry({"correctness": 0.6}, thresholds={})}
+    )
+
+    assert report.status == "pass"
+    assert (summary_of(report, "no_rag").inconclusive, summary_of(report, "no_rag").gated) == (
+        True,
+        False,
+    )
+    assert report.reasons == []
+    assert {row.passed for row in rows_of(report, "no_rag").values()} == {None}
+
+
+def test_a_total_outage_of_the_gated_config_is_inconclusive_beside_a_healthy_reported_one() -> None:
+    run = run_with_unnamed_index(
+        {
+            "hybrid": [case(i, error=generator_failed("ProviderTimeout")) for i in range(1, 11)],
+            "no_rag": [case(i) for i in range(1, 11)],
+        },
+        "hybrid",
+    )
+    report = evaluate_generation_gate(
+        run, {"hybrid": entry(), "no_rag": entry({"correctness": 0.6}, thresholds={})}
+    )
+    assert report.status == "inconclusive"
+    assert report.reasons == []
+
+
 def test_reasons_come_in_config_order() -> None:
     report = evaluate_generation_gate(
         make_run({"other": [case(1)]}),

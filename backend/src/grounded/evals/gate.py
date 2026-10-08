@@ -25,6 +25,7 @@ from grounded.schemas.generation_eval import (
     ErrorInfo,
     GenerationBaselineEntry,
     GenerationCase,
+    GenerationConfigResult,
     GenerationRun,
     GenerationRunInfo,
     GenerationThreshold,
@@ -343,6 +344,8 @@ def evaluate_generation_gate(
     differently). Zero cases, or every case errored, is inconclusive too, without dividing by zero.
     An inconclusive config still gets its rows, with ``current`` and ``n``, but ``passed`` and
     ``threshold`` are ``None``: nothing of it is gated, and ``ConfigSummary.inconclusive`` says so.
+    This holds for a total outage (every generator call failed for a provider reason): such a
+    config has no answer to name its index, and that is not held against it (see *Fail closed*).
 
     **The gate could not run.** ``ProviderRequestRejected`` or ``ProviderConfigError`` anywhere in
     the run (generator or judge: a refused key, a missing judge model) raises ``GateCannotRunError``
@@ -372,7 +375,14 @@ def evaluate_generation_gate(
       ``golden_set_sha256``, or the config's ``index_version`` differs from the row's (numbers
       scored on other data are not comparable, so that config gets no metric rows; its summary is
       still reported). A prompt, model or retrieval-config change is *not* a mismatch: catching
-      what it did is the gate's job;
+      what it did is the gate's job. The ``index_version`` of a config is read from its answers,
+      so a config with *no answered case* (every generator call failed) has none: that is
+      "unknown", not a difference, and it is not compared, so the inconclusive rule judges the
+      config instead of a comparability failure hiding it (a total outage is ``inconclusive``,
+      not ``fail``; an outage that is not provider-side, e.g. every case a generator
+      ``ProviderBadOutput``, stays a quality result). The golden set is the run's own identity,
+      not the answers', so it is compared whatever the config answered. A config that answered
+      and still names no index differs;
     - a thresholded metric with ``n == 0`` in a config that is not inconclusive: its row has
       ``current`` ``None`` and ``passed`` ``False``;
     - no config in the baseline is gated (a gate that checks nothing must not look green).
@@ -419,7 +429,7 @@ def evaluate_generation_gate(
         summaries.append(summary)
 
         if entry is not None and gated:
-            differences = _generation_setup_differences(run.info, result.index_version, entry)
+            differences = _generation_setup_differences(run.info, result, entry)
             if differences:
                 reasons.append(
                     f"{name}: run is not comparable with the baseline ({differences}); "
@@ -604,10 +614,17 @@ def _summarize(config: str, cases: list[GenerationCase], *, gated: bool) -> Conf
 
 
 def _generation_setup_differences(
-    info: GenerationRunInfo, index_version: str | None, entry: GenerationBaselineEntry
+    info: GenerationRunInfo, result: GenerationConfigResult, entry: GenerationBaselineEntry
 ) -> str:
     """The setup fields where the run and the baseline row disagree, empty when they match. Only
-    what makes numbers incomparable: not the prompt, the model or the retrieval config."""
+    what makes numbers incomparable: not the prompt, the model or the retrieval config.
+
+    A config's ``index_version`` is read from its answers' metadata and a failed call carries
+    none, so a config whose every generator call failed has ``None``. That is "unknown", not
+    "different": it is not compared, so the inconclusive rule gets to judge such a config (a total
+    outage must not read as a quality fail). The golden set is the run's own identity, not the
+    answers', so it is compared whatever the config answered. A config that did answer and still
+    names no index is a difference."""
     differences: list[str] = []
     if info.golden_set_version != entry.golden_set_version:
         differences.append(
@@ -619,8 +636,13 @@ def _generation_setup_differences(
             f"golden_set_sha256: baseline {entry.golden_set_sha256[:12]}, "
             f"run {info.golden_set_sha256[:12]}"
         )
-    if index_version != entry.index_version:
-        differences.append(f"index_version: baseline {entry.index_version}, run {index_version}")
+    index_unknown = result.index_version is None and all(
+        case.error is not None for case in result.cases
+    )
+    if not index_unknown and result.index_version != entry.index_version:
+        differences.append(
+            f"index_version: baseline {entry.index_version}, run {result.index_version}"
+        )
     return ", ".join(differences)
 
 
