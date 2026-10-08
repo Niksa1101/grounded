@@ -202,6 +202,10 @@ uv run grounded eval gate --suite retrieval --results <results-file>.json
 ```
 
 ```bash
+uv run grounded eval gate --suite generation --results <promptfoo-output>.json   # promptfoo's `-o <file>.json`; baseline eval/baselines/generation.json
+```
+
+```bash
 # From the repository root, after `uv sync` in backend/. Git Bash on Windows, Linux and macOS (PowerShell form and CI form: Tech §15.3).
 # Uses the real providers and quota; for a run with no network add GENERATOR_PROVIDERS=fake GEMINI_API_KEY= (Tech §15.3).
 export PROMPTFOO_PYTHON="$(uv run --project backend python -c 'import sys; print(sys.executable)')"

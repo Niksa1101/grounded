@@ -33,7 +33,19 @@ from grounded.evals.ask_batch import (
     summarize,
     write_ask_batch,
 )
-from grounded.evals.gate import evaluate_gate, exit_code, render_markdown
+from grounded.evals.gate import (
+    GateCannotRunError,
+    evaluate_gate,
+    evaluate_generation_gate,
+    exit_code,
+    render_generation_markdown,
+    render_markdown,
+)
+from grounded.evals.generation_results import (
+    GENERATION_BASELINE,
+    read_generation_baseline,
+    read_generation_results,
+)
 from grounded.evals.golden import (
     GOLDEN_DIR,
     TARGET_TYPE_COUNTS,
@@ -756,20 +768,36 @@ def _gate_error(message: str) -> typer.Exit:
 @eval_app.command("gate")
 def eval_gate(
     suite: Annotated[GateSuite, typer.Option(help="Which eval suite to gate.")],
-    results: Annotated[Path, typer.Option(help="Results file of the run to check.")],
+    results: Annotated[
+        Path,
+        typer.Option(
+            help="Results file of the run to check: the retrieval run, or promptfoo's JSON output "
+            "(`promptfoo eval -o <file>.json`) for generation."
+        ),
+    ],
     baseline: Annotated[
         Path | None,
         typer.Option(
-            help=f"Baseline file. Default: eval/baselines/{RETRIEVAL_BASELINE.name} (retrieval).",
-            show_default=False,
+            help="Baseline file. Default: eval/baselines/<suite>.json.", show_default=False
         ),
     ] = None,
 ) -> None:
     """Compare a run with the committed baseline. Exit 0 on pass or inconclusive, 1 on fail and
     2 if the gate could not run. The Markdown report goes to stdout."""
-    if suite is not GateSuite.retrieval:
-        raise _gate_error("The generation gate arrives in Phase 4 (tickets 4.07-4.08).")
-    baseline_path = baseline or RETRIEVAL_BASELINE
+    if suite is GateSuite.generation:
+        markdown, code = _generation_gate(results, baseline or GENERATION_BASELINE)
+    else:
+        markdown, code = _retrieval_gate(results, baseline or RETRIEVAL_BASELINE)
+    # The report has ✅ ❌ Δ ≥. Redirected, a Windows stdout is cp1252 and would crash on them.
+    stdout: object = sys.stdout
+    if isinstance(stdout, io.TextIOWrapper):
+        stdout.reconfigure(encoding="utf-8")
+    typer.echo(markdown, nl=False)
+    if code:
+        raise typer.Exit(code=code)
+
+
+def _retrieval_gate(results: Path, baseline_path: Path) -> tuple[str, int]:
     try:
         run = read_run(results)
     except (OSError, ValueError) as exc:
@@ -784,13 +812,29 @@ def eval_gate(
             "A row written before the golden-set hash and git state became required has to be "
             "regenerated in a baseline PR."
         ) from exc
-
     report = evaluate_gate(run, rows)
-    # The report has ✅ ❌ Δ ≥. Redirected, a Windows stdout is cp1252 and would crash on them.
-    stdout: object = sys.stdout
-    if isinstance(stdout, io.TextIOWrapper):
-        stdout.reconfigure(encoding="utf-8")
-    typer.echo(render_markdown(report), nl=False)
-    code = exit_code(report)
-    if code:
-        raise typer.Exit(code=code)
+    return render_markdown(report), exit_code(report)
+
+
+def _generation_gate(results: Path, baseline_path: Path) -> tuple[str, int]:
+    """promptfoo's own exit code is ignored (Tech.md §15.5): the gate reads its output file."""
+    try:
+        run = read_generation_results(results)
+    except (OSError, ValueError) as exc:
+        raise _gate_error(f"Cannot read the results file {results}: {exc}") from exc
+    try:
+        rows = read_generation_baseline(baseline_path)
+    except OSError as exc:
+        raise _gate_error(f"Cannot read the baseline {baseline_path}: {exc}") from exc
+    except ValueError as exc:
+        raise _gate_error(
+            f"Invalid baseline {baseline_path}: {exc}\n"
+            "A row missing a required field has to be regenerated in a baseline PR."
+        ) from exc
+    try:
+        report = evaluate_generation_gate(run, rows)
+    except GateCannotRunError as exc:
+        raise _gate_error(
+            "The gate could not run:\n" + "\n".join(f"- {r}" for r in exc.reasons)
+        ) from exc
+    return render_generation_markdown(report), exit_code(report)

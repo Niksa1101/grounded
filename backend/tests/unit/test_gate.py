@@ -495,14 +495,6 @@ def test_gate_exits_2_when_the_baseline_file_is_missing(
     assert "Cannot read the baseline" in result.output
 
 
-def test_the_generation_gate_is_not_there_yet(files: tuple[Path, Path]) -> None:
-    results, baseline = files
-    args = ["eval", "gate", "--suite", "generation", "--results", str(results)]
-    result = runner.invoke(app, [*args, "--baseline", str(baseline)])
-    assert result.exit_code == 2
-    assert "Phase 4" in result.output
-
-
 def test_gate_help_names_the_options() -> None:
     result = runner.invoke(app, ["eval", "gate", "--help"])
     assert result.exit_code == 0
