@@ -185,7 +185,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [4.04](phase-4/4.04-judge.md) | Judge rubrics and the judge module | Build | A+G | done | [#69](https://github.com/Niksa1101/grounded/pull/69) |
 | [4.05](phase-4/4.05-promptfoo-tracer.md) | Tracer bullet: promptfoo harness with deterministic assertions | Build | G | done | [#70](https://github.com/Niksa1101/grounded/pull/70) |
 | [4.06](phase-4/4.06-judge-asserts.md) | Judge-based assertions: faithfulness and correctness | Build | G | done | [#71](https://github.com/Niksa1101/grounded/pull/71) |
-| [4.07](phase-4/4.07-gate-generation-spec.md) | Generation gate and inconclusive rule — spec | Spec | G | todo | |
+| [4.07](phase-4/4.07-gate-generation-spec.md) | Generation gate and inconclusive rule — spec | Spec | G | done | [#72](https://github.com/Niksa1101/grounded/pull/72), [#73](https://github.com/Niksa1101/grounded/pull/73) |
 | [4.08](phase-4/4.08-gate-generation.md) | Generation gate and inconclusive rule — implementation | Author | A | todo | |
 | [4.09](phase-4/4.09-generation-baseline.md) | First generation baseline and the eval report | Build + Baseline | G | todo | |
 | [4.10](phase-4/4.10-eval-workflow.md) | `eval.yml` workflow with the PR comment | Build | G | todo | |
