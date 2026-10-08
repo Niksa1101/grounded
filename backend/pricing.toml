@@ -1,6 +1,10 @@
 # List prices used for shadow cost (Tech.md §14, PRD D27). The demo itself runs on free tiers.
 # Prices are copied from the provider pricing pages, never typed from memory. USD per 1M tokens.
 # Free-tier prices are 0, so these are the PAID-tier list prices, i.e. "what this traffic would cost".
+#
+# The file-level as_of and source below describe the Gemini rows (the Google pages read on 2026-10-06).
+# A row from another page or another day carries its own price_source and price_as_of (Tech §14 rule 1):
+# the Groq row (read 2026-10-08, console.groq.com) and the embedding row (a 2025 announcement) do.
 as_of = "2026-10-06"  # the day the pages were read; the pricing page itself says "Last updated 2026-10-01"
 source = "https://ai.google.dev/gemini-api/docs/pricing, https://ai.google.dev/gemini-api/docs/deprecations"
 
@@ -8,6 +12,17 @@ source = "https://ai.google.dev/gemini-api/docs/pricing, https://ai.google.dev/g
 [models."gemini-3.5-flash-lite"]
 input_per_mtok = 0.30
 output_per_mtok = 2.50
+
+# Groq, the fallback generator and the judge (PRD D48). The model page and the "Production Models" table of
+# console.groq.com/docs/models both show "$0.15 input, $0.60 output" per 1M tokens (cached input $0.075 is not
+# used by the cost formula). groq.com/pricing redirects to the home page since 2026-10-08, so the model page
+# is the source. Whether completion_tokens already includes the reasoning tokens is not stated in the docs:
+# unverified until ticket 4.02 records a real reply (Tech §9.1).
+[models."openai/gpt-oss-120b"]
+input_per_mtok = 0.15
+output_per_mtok = 0.60
+price_source = "https://console.groq.com/docs/model/openai/gpt-oss-120b"
+price_as_of = "2026-10-08"
 
 # The model Grounded embeds with. The current pricing page lists only gemini-embedding-2 ($0.20 per 1M
 # text tokens), a different model. The 0.15 below is the price Google announced when this model became

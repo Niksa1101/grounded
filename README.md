@@ -219,7 +219,7 @@ uv run grounded eval retrieval --config dense --config fts --config hybrid
 ```
 
 ```bash
-npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
+npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1
 ```
 
 ## Roadmap

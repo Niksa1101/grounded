@@ -202,7 +202,7 @@ uv run grounded eval gate --suite retrieval --results <results-file>.json
 ```
 
 ```bash
-npx promptfoo@<pinned-version> eval -c eval/promptfoo/promptfooconfig.yaml -j 1
+npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1   # needs PROMPTFOO_PYTHON and --no-cache: Tech §15.3
 ```
 
 ```bash
