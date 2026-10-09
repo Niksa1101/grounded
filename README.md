@@ -90,11 +90,115 @@ Every number above is pasted from `uv run grounded eval report` (run in `backend
 `eval/baselines/*.json`; a test fails if this block drifts from them, so a baseline PR re-pastes it.
 **The generation table is the first baseline (ticket 4.09b):** one full run of the golden set through `no_rag` and
 `hybrid`, judged by Groq `openai/gpt-oss-120b`. Faithfulness is claim-level (it grades the claims of an answer, not its
-whole text) and stays unvalidated until the judge–human agreement is published (4.11). No generation number is written
+whole text) and is only partly validated by the judge–human agreement below (4.11b). No generation number is written
 by hand. Hybrid + rerank joins in Phase 6.
-Judge–human agreement: _TBD_ (4.11). Golden set: `v1`, 25 answerable questions (retrieval n = 25, one
+Judge–human agreement: [below](#judge-human-agreement). Golden set: `v1`, 25 answerable questions (retrieval n = 25, one
 question = 0.04) and 5 unanswerable ones. Shadow cost is real token counts × paid list prices (dated in
 `backend/pricing.toml`); the demo itself runs on free tiers.
+
+### Judge-human agreement
+
+The judge (Groq `openai/gpt-oss-120b`, rubrics `judge_faithfulness_v1@84103412` and `judge_correctness_v1@1bde5fe4`) was
+compared with the Author's hand labels on 20 items drawn with a fixed seed from the baseline run above: 10 faithfulness
+claims (6 real, 4 synthetic negative controls) and 10 correctness grades (real answers of both configs). The labels were
+made on a sheet that shows the evidence and no verdict. How the items were drawn, the procedure and the limits:
+[eval/judge_agreement/](eval/judge_agreement/README.md). The labels, the judge's key and the output below are
+committed; `uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key ../eval/judge_agreement/v1.key.json`
+(in `backend/`) reproduces the output, and a test fails if this block drifts from it. The numbers below are copied from
+that output; the sentences around them are the reading.
+
+- **All 20 items: exact agreement 85.0% (17/20), Cohen's kappa 0.808, so the PRD §8 target (0.8) is met by both
+  measures.** That is the most flattering view: it pools the labels of two kinds of item and includes the 4 controls,
+  which are easy.
+- **Faithfulness: 100.0% (10/10), kappa 1.000.** On the 6 real claims the judge and the Author both said `SUPPORTED`;
+  on the 4 controls both said `NOT_SUPPORTED`. For the real claims alone kappa is undefined (one label on both sides).
+- **Correctness: 70.0% (7/10), kappa 0.538. This is the weak spot, and the target is not met there.** Three grades
+  differ (a07, a09, a16); each is one step apart on the three-grade scale, none is `CORRECT` against `INCORRECT`, and the
+  judge is stricter than the Author in two and more lenient in one. The kappa is unweighted, so a one-step miss counts like
+  a two-step one.
+- **Real items only (16): 81.2% (13/16), kappa 0.741, which is below 0.8.** Without the controls the target is met by
+  exact agreement and not by kappa. PRD §8 does not say which of the two the 0.8 applies to.
+- **Limits.** n = 20, so one item is 5 percentage points. One rater, who also wrote the rubrics. The sample is stratified
+  by the judge's own verdict, not random, so this is agreement on this sample and not the judge's accuracy on the run. The
+  controls are synthetic: a real claim shown with the sources of another question.
+
+**What it means for the table above.** The judge is not a rubber stamp: it said `NOT_SUPPORTED` for all 4 controls, and the
+Author agreed with it on the 6 real claims, which makes the faithfulness **1.000** a little more credible. It does not
+validate it. The judge said `SUPPORTED` for all 53 real claims of the run, so the 6 real items can only show agreement on
+supported claims; whether the judge catches a *subtly* unsupported real claim (a detail the source does not state) is not
+measured at all. Treat 1.000 as "the judge found no unsupported claim", not as a verified zero hallucination rate. The
+correctness figures rest on a judge that agrees with the Author on 7 of 10 grades, so a difference between configs of less
+than a grade step per question is not a claim. The disagreements, item by item, are in
+[eval/judge_agreement/README.md](eval/judge_agreement/README.md#result).
+
+<details>
+<summary>The full output of <code>grounded eval agreement</code> (n = 20)</summary>
+
+<!-- agreement-report:start -->
+# Judge-human agreement
+
+Sample: seed 411, 20 items from the run 20261008T155539Z-generation.json (sha256 4d571ae1a34b, golden set v1). Judge: groq openai/gpt-oss-120b, rubrics judge_correctness_v1@1bde5fe4, judge_faithfulness_v1@84103412.
+
+| Scope | n | Exact agreement | Cohen's kappa |
+|---|---:|---:|---:|
+| All items (labels of both kinds pooled) | 20 | 85.0% (17/20) | 0.808 |
+| Faithfulness | 10 | 100.0% (10/10) | 1.000 |
+| Correctness | 10 | 70.0% (7/10) | 0.538 |
+| Real items only (pooled) | 16 | 81.2% (13/16) | 0.741 |
+| Faithfulness, real items only | 6 | 100.0% (6/6) | undefined |
+| Controls only (synthetic) | 4 | 100.0% (4/4) | undefined |
+
+Kappa of 'Faithfulness, real items only' is undefined: both raters gave every item the label SUPPORTED, so agreement by chance is 100%.
+Kappa of 'Controls only (synthetic)' is undefined: both raters gave every item the label NOT_SUPPORTED, so agreement by chance is 100%.
+
+## PRD §8 target
+
+PRD §8 asks for agreement on at least 10 verdicts, 0.8 desired. It does not say whether that is the exact agreement or kappa, so both are shown against it.
+
+| Measure | Value | n | >= 0.8 |
+|---|---:|---:|---|
+| Exact agreement, all items | 0.850 | 20 | met |
+| Cohen's kappa, all items | 0.808 | 20 | met |
+| Exact agreement, real items only | 0.812 | 16 | met |
+| Cohen's kappa, real items only | 0.741 | 16 | not met |
+
+At least 10 items labeled: yes (n = 20).
+
+## Confusion matrices (rows: human, columns: judge)
+
+### Faithfulness (n = 10)
+
+| human \ judge | SUPPORTED | NOT_SUPPORTED | total |
+|---|---:|---:|---:|
+| SUPPORTED | 6 | 0 | 6 |
+| NOT_SUPPORTED | 0 | 4 | 4 |
+| total | 6 | 4 | 10 |
+
+### Correctness (n = 10)
+
+| human \ judge | CORRECT | PARTIALLY_CORRECT | INCORRECT | total |
+|---|---:|---:|---:|---:|
+| CORRECT | 4 | 1 | 0 | 5 |
+| PARTIALLY_CORRECT | 0 | 1 | 1 | 2 |
+| INCORRECT | 0 | 1 | 2 | 3 |
+| total | 4 | 3 | 3 | 10 |
+
+### Faithfulness, real items only (n = 6)
+
+| human \ judge | SUPPORTED | NOT_SUPPORTED | total |
+|---|---:|---:|---:|
+| SUPPORTED | 6 | 0 | 6 |
+| NOT_SUPPORTED | 0 | 0 | 0 |
+| total | 6 | 0 | 6 |
+
+## Disagreements (n = 3 of 20)
+
+- a07 (correctness, real): human INCORRECT, judge PARTIALLY_CORRECT
+- a09 (correctness, real): human PARTIALLY_CORRECT, judge INCORRECT
+- a16 (correctness, real): human CORRECT, judge PARTIALLY_CORRECT
+<!-- agreement-report:end -->
+
+</details>
 
 ### Retrieval ablation: reading
 

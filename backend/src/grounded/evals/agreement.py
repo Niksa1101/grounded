@@ -34,8 +34,9 @@ from grounded.schemas.judge_agreement import ALLOWED_LABELS, AgreementKey, ItemS
 AGREEMENT_DIR: Final = EVAL_DIR / "judge_agreement"
 DEFAULT_SHEET: Final = AGREEMENT_DIR / "v1.csv"
 DEFAULT_VIEW: Final = AGREEMENT_DIR / "v1.md"
-# The key is not committed with the sheet, so that the labels are made blind; 4.11b copies it next
-# to the labels once they are in.
+# Where ``export-verdicts`` writes the key: gitignored, so that the labels are made blind. Once they
+# were in, 4.11b committed a copy next to them (``v1.key.json``); the record's command and tests
+# name that copy explicitly.
 DEFAULT_KEY: Final = RESULTS_DIR / "judge-agreement-v1.key.json"
 
 SHEET_COLUMNS: Final = (
