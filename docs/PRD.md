@@ -433,7 +433,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - `gemini-embedding-001` is still served (shutdown date 2028-05-14, Google's deprecations page, 2026-10-06), but Google's recommended replacement is `gemini-embedding-2`. Moving to it is a new index version (new vectors, new baselines) and is not planned in this project's phases.
 - `gemini-3.5-flash-lite` has a single list price ($0.30 / $2.50 per 1M input / output tokens). The 3.6, 3.7 and 3.8 Flash prices double on 2027-01-01 (from $0.75 / $3.75 to $1.50 / $7.50), which matters only if the project moves to one of them.
 - Limits of `openai/gpt-oss-120b` on Groq (`console.groq.com/docs/rate-limits`, read 2026-10-08; the page has a Free Plan tab and a Developer Plan tab): Free **30 RPM, 1K RPD, 8K TPM, 200K TPD**; Developer 1K RPM, 500K RPD, 250K TPM, no TPD listed. The page calls the table a summary with possible exceptions and sends the reader to the account's Limits page, which needs a login, so the Author's own numbers were unverified until the first real call in 4.02 (2026-10-08): the response headers `x-ratelimit-limit-requests: 1000` (requests per day) and `x-ratelimit-limit-tokens: 8000` (tokens per minute) are the Free Plan numbers, so the account is on the Free Plan. Cached tokens do not count. The docs do not say whether a request's `max_completion_tokens` is reserved against TPM (still unverified). Reasoning tokens count inside `max_completion_tokens` and inside `usage.completion_tokens` (4.02, Tech §9.1). A 429 carries `retry-after` in seconds (set only on a 429). Ticket 4.09 reads the Limits page before the first full run. A TPD stop ends a run as `inconclusive`, and the eval cache keeps what was already paid for.
-- Groq `reasoning_effort` for `openai/gpt-oss-120b` accepts `low`, `medium` and `high` (default `medium`), and Groq's reasoning page says the reasoning chains "are part of the token output". With 8K TPM, `low` saves a lot of tokens per judge call but may change verdict quality. Decided in 4.02: the `Settings` field `GROQ_REASONING_EFFORT`, default `low`. The judge agreement (4.11) shows whether the choice hurt.
+- Groq `reasoning_effort` for `openai/gpt-oss-120b` accepts `low`, `medium` and `high` (default `medium`), and Groq's reasoning page says the reasoning chains "are part of the token output". With 8K TPM, `low` saves a lot of tokens per judge call but may change verdict quality. Decided in 4.02: the `Settings` field `GROQ_REASONING_EFFORT`, default `low`. The judge agreement (4.11) was to show whether the choice hurt; 4.11b could not settle it (no run at a higher effort to compare with, see the correctness-rubric item at the end of this section).
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
 - **Judge budget of a full run (4.06, for 4.09).** The 4.06 run on 3 questions made 10 judge calls: a faithfulness call whose claim cites three chunks took about 1.9K input tokens, a correctness call about 1.3K. Extrapolated to the 30 golden questions (about 25 answered `hybrid` answers with 2-3 claims each, and 60 correctness calls), a full run needs roughly 180K tokens against the free plan's 200K per day. That is an estimate from two answers, not a measurement, and it leaves no room for retries or a second attempt: 4.09 should read the account's Limits page first, expect a TPD stop to be possible, and rely on the eval cache to finish on the next day.
 - **Judge budget of the first full run, measured (4.09b, 2026-10-08).** One full run (30 questions, both configs, `-j 1`,
@@ -511,7 +511,23 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   baseline run has no `NOT_SUPPORTED` verdict, so the sample has four synthetic controls and cannot show whether the judge
   catches a borderline unsupported *real* claim. The degraded-prompt run of the gate demonstration (4.12) will produce real
   `NOT_SUPPORTED` verdicts; a second sheet drawn from it (the same tool, another seed and results file) would measure that,
-  if the agreement number is thin or low.
+  if the agreement number is thin or low. **Status after 4.11b** (the result is in README Evaluation and
+  `eval/judge_agreement/README.md`): the number is thin in exactly that respect. Faithfulness agreed on all 10 items, but
+  only 6 are real claims, all `SUPPORTED`, and 4 are easy synthetic controls, so the faithfulness baseline of 1.000 is
+  not validated for a subtly unsupported claim. Open: draw the second sheet from the 4.12 degraded run (or from any run
+  that has real `NOT_SUPPORTED` verdicts) and label it, and ideally have a second rater who did not write the rubrics.
+- **Correctness rubric boundary (from the 4.11b disagreements).** Correctness agreed on 7 of 10 grades (kappa below the
+  0.8 target), and the three misses (a07, a09, a16) sit on the rubric's own boundaries: *main point* against *an
+  important part left out*, and *a wrong detail that does not reverse the main point*. Three items cannot say whether
+  the rubric or the judge is the outlier. Open for the Author: whether to write `judge_correctness_v2` with sharper
+  boundaries, which means a new judge prompt version, a re-run of the generation eval, a new baseline in its own PR
+  (AGENTS.md §7) and a new agreement sheet. Not decided and not part of 4.11. The Groq reasoning-effort question above
+  is not settled either: no run at a higher effort exists to compare with.
+- **What the 0.8 of §8 means.** §8 says "reported (≥ 0.8 desired)" for judge-human agreement without saying whether it
+  is exact agreement or Cohen's kappa, nor over which items. The 4.11b numbers show the choice matters: pooled over all 20
+  items both measures meet 0.8, over the 16 real items only exact agreement does, and for correctness alone neither does
+  (`eval/judge_agreement/v1.agreement.md`). Open for the Author: state the measure and the scope in §8 (for example kappa,
+  per kind, on real items); `grounded eval agreement` prints all of them.
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
   (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
   null and not null. Tracked in ticket 9.06.

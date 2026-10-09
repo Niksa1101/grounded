@@ -97,17 +97,24 @@ APP_ENV=eval GENERATOR_PROVIDERS=gemini GROQ_MODEL=openai/gpt-oss-120b JUDGE_MOD
 ```
 
 It writes the blind `judge_agreement/v1.csv` and `v1.md` (the evidence of 20 items, no verdict anywhere) and the key
-(`eval/results/judge-agreement-v1.key.json`, gitignored: what each `item_id` is and what the judge said). Four of the
+(`eval/results/judge-agreement-v1.key.json`, gitignored while the labels are made: what each `item_id` is and what the judge said). Four of the
 faithfulness items are synthetic controls (a real claim with the sources of another question) and need one real judge call
 each, on Groq's quota; a quota error stops it, and running it again completes the key. How the items were chosen, the source
 run and what the number can and cannot say: [judge_agreement/README.md](judge_agreement/README.md).
 
-The Author labels the sheet (`human_label` column) without seeing any verdict, and then:
+The Author labels the sheet (`human_label` column) without seeing any verdict; the key is then copied next to the labels
+(`judge_agreement/v1.key.json`, committed) and:
 
 ```bash
-uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key <key>.json
+uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key ../eval/judge_agreement/v1.key.json
 ```
 
 It prints exact agreement and Cohen's kappa (overall, per kind, real items only, controls only), the confusion matrices,
 the disagreements and the PRD §8 target (0.8) as Markdown with `n` in every row. It refuses, listing every item, a sheet
 with a missing or invalid label. Details: [docs/Tech.md §15.4](../docs/Tech.md).
+
+**Done for `v1` (ticket 4.11b).** The labeled sheet, the key and the command's output ([judge_agreement/v1.agreement.md](judge_agreement/v1.agreement.md))
+are committed, and the output is pasted in the README between its `<!-- agreement-report:start -->` and
+`<!-- agreement-report:end -->` markers; a test fails when the output file or the README block differs from what the
+command prints for the committed labels and key. The reading, with every disagreement: [judge_agreement/README.md](judge_agreement/README.md#result).
+A new sheet (another seed or results file) would be `v2.*` next to these, never an edit of the `v1` labels.

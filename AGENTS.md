@@ -234,7 +234,7 @@ APP_ENV=eval GENERATOR_PROVIDERS=gemini GROQ_MODEL=<pinned> JUDGE_MODEL=<pinned>
 ```
 
 ```bash
-uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key <key>.json   # judge-human agreement and Cohen's kappa from the labeled sheet; refuses a missing or invalid label (Tech §15.4)
+uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key ../eval/judge_agreement/v1.key.json   # judge-human agreement and Cohen's kappa from the labeled sheet and the committed key; refuses a missing or invalid label. Its output is eval/judge_agreement/v1.agreement.md and the README block (Tech §15.4)
 ```
 
 ```bash
