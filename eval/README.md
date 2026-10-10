@@ -47,8 +47,10 @@ PowerShell, the CI form, the flags, what each variable is for and the result for
 
 ## In CI (`eval.yml`)
 
-A PR runs the generation eval when it carries the `run-eval` label (add the label, or push to a PR that has it); a push
-to `main` and a manual run (`workflow_dispatch`) run it too. The job sets up the same database and caches as
+A PR runs the generation eval when it carries the `run-eval` label (adding the label, a push, reopening or adding another
+label all start it) and its job `eval` is skipped otherwise; since #88 `eval` is reported on every PR and is a required
+check of `main`, so a labeled PR whose gate fails cannot be merged (removing the label is a bypass: nothing re-runs, and
+the next push is skipped). A push to `main` and a manual run (`workflow_dispatch`) run it too. The job sets up the same database and caches as
 `retrieval-eval`, runs the command above with the pinned model IDs, and lets `grounded eval gate` decide: pass and
 **inconclusive** succeed (inconclusive is labeled as such and is not a pass), a quality fail and a gate that could not
 run fail the job. The result is in the job summary, in one PR comment (found by `<!-- grounded-eval -->`, updated on

@@ -228,9 +228,10 @@ n = 25, so differences under one question (0.04) are not claims either way.
 - **PRs labeled `run-eval`, every push to `main`, and manual runs:** the full promptfoo generation eval (`eval.yml`: the 30
   golden questions through `no_rag` and `hybrid` at concurrency 1, the generator on Gemini and the judge on Groq with
   both model IDs pinned in the workflow, then `grounded eval gate --suite generation` against
-  `eval/baselines/generation.json`). Adding the label starts it and every later push to that PR re-runs it; a PR without
-  the label never runs it, so a PR that can change answer quality (prompts, retrieval, chunking, context, schemas, model
-  IDs) must carry the label (AGENTS.md §7). The numbers it is compared with are the generation block of
+  `eval/baselines/generation.json`). On a PR the job `eval` runs whenever the PR carries the label (adding it, a later
+  push, reopening and adding any other label all re-run it) and is skipped otherwise, so a PR that can change answer
+  quality (prompts, retrieval, chunking, context, schemas, model IDs) must carry the label (AGENTS.md §7): nothing else
+  tells the workflow that a PR is quality-affecting. The numbers it is compared with are the generation block of
   [the report above](#evaluation), which `grounded eval report` prints from the baseline file.
 - **Three outcomes**, decided by the gate and by nothing else (promptfoo exits 100 whenever any single assertion fails,
   also in a run that passes, so its exit code is ignored):
@@ -255,9 +256,14 @@ n = 25, so differences under one question (0.04) are not claims either way.
   asking and ends `inconclusive`. Most of the first CI runs ended that way (a quota already spent, and spells of
   Gemini 503s); the only run on `main` that gated anything so far passed. Every push to `main` starts a real eval, so
   merges spend quota too.
-- **What a red `eval` check does and does not do.** It is not a required status check: the job exists only for labeled
-  PRs, so branch protection cannot wait for it, and GitHub still shows the demo PR below as mergeable. The label and the
-  review are the enforcement. The gate also sees format and schema regressions better than wording ones: see
+- **What a red `eval` check does.** Since PR [#88](https://github.com/Niksa1101/grounded/pull/88) (2026-10-10) `eval` is
+  reported on every PR, and it is a required status check of `main` next to `backend`, `frontend` and `retrieval-eval`
+  (branch protection is a repository setting, not a file in the repository). A job skipped for want of the label counts
+  as a success, so only a labeled PR whose gate fails, or whose eval could not run, cannot be merged; the demo PR below
+  shows `BLOCKED`. `inconclusive` succeeds with a warning and is not a pass. **The label is still the weak point:** a PR
+  without it is not evaluated, and removing the label from a red PR clears the block on the next push (that run is then
+  skipped). So the protection rests on the label being added to every quality-affecting PR (AGENTS.md §7) and on the
+  review. The gate also sees format and schema regressions better than wording ones: see
   [limitations](#failure-modes-and-limitations).
 - A run on `main` is also recorded in the `eval_runs` table for the dashboard (aggregates only). That write is shipped
   **disabled** until the repository variable `EVAL_RECORD_RUNS` is set to `true`.
@@ -277,8 +283,9 @@ n = 25.
 validity, answer correctness and refusal accuracy of `hybrid` fell below their thresholds, and most generator calls
 were bad output after their one retry, with no provider error, so the verdict is a fail and not inconclusive. Weakening
 the *instructions* instead (six local attempts) moved no gated metric on this model, which is why the demonstration is a
-format mismatch ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)). The inconclusive outcome was seen in real CI runs,
-and the report of all three outcomes is pinned by committed fixture tests.
+format mismatch ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)). When it ran, `eval` was not yet a required check
+and GitHub showed the PR as mergeable; making it required (#88) turned the same PR into `BLOCKED`. The inconclusive
+outcome was seen in real CI runs, and the report of all three outcomes is pinned by committed fixture tests.
 
 ## How confidence is computed
 

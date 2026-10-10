@@ -122,7 +122,7 @@ IDs are referenced from Tech.md, tests and PRs.
 - **FR-20** Retrieval eval (Python, deterministic, cached): Recall@k, MRR, nDCG@k for configs `dense`, `fts`, `hybrid`, `hybrid_rerank`.
 - **FR-21** Generation eval (promptfoo with a Python provider running the real pipeline): faithfulness (per claim), answer correctness, citation precision, refusal accuracy, schema first-try validity, latency and shadow cost. Includes a `no_rag` baseline.
 - **FR-22** The LLM judge runs on a different provider than the generator, with a pinned model, temperature 0 and a written rubric. Judge-vs-human agreement is measured on ≥10 verdicts and published.
-- **FR-23** CI gate in two tiers. Every PR gets unit/integration tests and the retrieval eval. PRs labeled `run-eval` and pushes to `main` get the full generation eval. Quota/429-dominated runs end as **inconclusive**, not as failures.
+- **FR-23** CI gate in two tiers. Every PR gets unit/integration tests and the retrieval eval. PRs labeled `run-eval` and pushes to `main` get the full generation eval. Quota/429-dominated runs end as **inconclusive**, not as failures. *(Since #88, 2026-10-10: the check `eval` is reported on every PR and is a required check of `main`; on a PR without the label its job is skipped, which counts as a success.)*
 - **FR-24** CI posts (and updates) a PR comment with a metrics table vs baseline, Δ and ✅/❌ per threshold, and links the promptfoo report artifact.
 - **FR-25** Baselines are committed files. They change only through an explicit PR.
 
@@ -278,7 +278,7 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | **Metric aggregation + generation gate logic** (thresholds, tolerance, inconclusive rule; the retrieval part is Phase 2) | **A** (delegated to G by the Author, 2026-10-08: "write it", explained line by line in the 4.08 PR) |
 | `grounded eval baseline` (baseline rows written from a results file, never typed) and `grounded eval report` (the README tables from the committed baselines) | G |
 | Eval mode: fallback off, temperature 0, LLM response cache (SQLite, keyed by full prompt and the adapter settings), concurrency 1, backoff on a 429 and a bounded retry of a transient 5xx | G |
-| `eval.yml`: label `run-eval` + push to `main` (+ `workflow_dispatch`); PR comment with diff table; promptfoo HTML report artifact; the `eval_runs` insert on `main` ships disabled (`EVAL_RECORD_RUNS`) | G |
+| `eval.yml`: label `run-eval` + push to `main` (+ `workflow_dispatch`); PR comment with diff table; promptfoo HTML report artifact; the `eval_runs` insert on `main` ships disabled (`EVAL_RECORD_RUNS`); the check `eval` is reported on every PR and required (since #88) | G |
 | Judge–human agreement tooling: a blind sample drawn from a real run with synthetic negative controls, exact agreement and Cohen's kappa | G |
 | Judge–human agreement: the Author labels the sheet (20 items); agreement recorded | A |
 
@@ -291,8 +291,9 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 **Closed on 2026-10-10** (report with the evidence and the caveats: [4.12](../tickets/phase-4/4.12-closeout.md#closeout-report)).
 All four pass. (1) The baseline is `eval/baselines/generation.json` (PR #76) and the full eval passed in CI (run
 37906313627), but 8 of the 10 CI eval runs that reached a verdict were `inconclusive` on free-tier quota. (2) PR #86, a
-one-line prompt/schema format mismatch, was failed by the gate; the `eval` check is not a required check, and weakening
-the instructions instead did not trip the gate (open items below). (3) Two real CI runs ended `inconclusive` with exit
+one-line prompt/schema format mismatch, was failed by the gate, and since #88 and a branch-protection change (also
+2026-10-10, with the Author's approval) that red check blocks the merge button; weakening the instructions instead did not
+trip the gate, and the block depends on the `run-eval` label being added (open items below). (3) Two real CI runs ended `inconclusive` with exit
 0, and fixture tests pin the rule. (4) The agreement is recorded on 20 items; correctness alone is below 0.8.
 
 ---
@@ -399,7 +400,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 | D20 | Golden set | LLM-drafted, Author-curated, ~30 items, section-level graded labels |
 | D21 | Metrics/tools | Retrieval metrics in Python; generation metrics in promptfoo |
 | D22 | Judge | Different provider (Groq), pinned, temp 0, agreement measured |
-| D23 | CI gate | Two tiers (always / `run-eval` label + main); quota → inconclusive |
+| D23 | CI gate | Two tiers (always / `run-eval` label + main); quota → inconclusive. Since #88 (2026-10-10, the Author's approval): `eval` is reported on every PR and is a required check of `main`, skipped (a success) without the label |
 | D24 | Hosting | Backend on Vercel Functions (FastAPI, Fluid compute) as its own Vercel project; frontend on Vercel. Changed 2026-09-24: HF Docker Spaces now require a paid PRO plan |
 | D25 | FE↔BE | Next.js Route Handler proxy with shared secret |
 | D26 | Observability | Own `request_logs` table + public aggregate dashboard |
@@ -575,15 +576,23 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   **Consequence for the process:** a PR that changes a prompt needs a human look at the diff as well as the `run-eval`
   gate; AGENTS.md §7's label is necessary, not sufficient. Not built: a set of prompt mutations the gate must fail
   (a canary), which would turn this account into a test at the cost of a full run per mutation.
-- **The `eval` check is not a required check, so a red gate does not block the merge button.** On the demo PR (#86),
-  GitHub reported `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`; the required checks of `main` are `backend`,
-  `frontend` and `retrieval-eval`. `eval.yml` triggers on `labeled` and `synchronize` only, so a PR without the label
-  gets no `eval` status at all, and a required check would wait for a status that never comes. Making the gate
-  mechanically blocking means a trigger that always reports (for example `opened` and `reopened` too, with the job
-  skipped when the label is missing; GitHub reports a job skipped by its own `if` as successful) and adding `eval` to
-  the required checks. A labeled PR whose run is `inconclusive` would stay mergeable (the job succeeds), consistent with
-  D23 (inconclusive is not a failure) but not a pass either. Not built; the Author decides whether process (the label
-  and the review) is enough for a one-person repository.
+- ~~The `eval` check is not a required check, so a red gate does not block the merge button.~~ **Resolved by #88 and
+  branch protection on 2026-10-10, with the Author's approval.** Found in 4.12: on the demo PR (#86) GitHub reported
+  `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, because `eval` was not required and, with `labeled` and
+  `synchronize` as the only triggers, a PR without the label had no `eval` status at all. #88 starts the workflow on
+  `opened`, `reopened`, `synchronize` and `labeled`, and the job `eval` runs whenever the PR carries `run-eval` and is
+  skipped otherwise (GitHub reports a job skipped by its own `if` as successful for a required check). The orchestrator
+  then added `eval` to the required status checks of `main`, a repository setting changed on the Author's explicit
+  approval in chat, not a file in the repository: the list is now `backend`, `frontend`, `retrieval-eval`, `eval`,
+  strict off, nothing else in the protection changed. #86 now reports `BLOCKED`. `inconclusive` still succeeds with a
+  warning (consistent with D23, and not a pass). **Edge cases that remain, from #88 (Tech §17):** removing the
+  `run-eval` label starts nothing, and a red status stays until the next push, which is then skipped, so removing the
+  label is a human bypass; an unrelated label on a labeled PR re-runs the eval (cheap through the PR's cache, but a
+  provider error is never cached); a PR created with `--label run-eval` fires `opened` and `labeled`, and the second
+  cancels the first; a cancelled run superseded by a newer run of the same name does not block. **What still is not
+  enforced:** the label itself. A quality-affecting PR that is not labeled is not evaluated, so AGENTS.md §7 and the
+  review remain the control for adding it; making the label automatic (a path filter on `backend/prompts`, retrieval,
+  chunking and the eval config) is possible and not built.
 - **Free-tier headroom of the CI eval (found in the first real runs, 2026-10-08 to 2026-10-10).** Of the 10 `eval.yml`
   runs that reached a gate verdict, 1 passed (37906313627, 2026-10-09), 1 failed on purpose (the demo, 38044085266) and
   8 were `inconclusive`, all on 2026-10-08. The causes read in their logs: the Groq daily quota (the judge:

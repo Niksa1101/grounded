@@ -15,7 +15,7 @@ not do are in the [closeout report](4.12-closeout.md#closeout-report).
 | # | Criterion | Result |
 |---|---|---|
 | 1 | Full eval locally and in CI, baseline committed | **PASS**: [#76](https://github.com/Niksa1101/grounded/pull/76), CI [run 37906313627](https://github.com/Niksa1101/grounded/actions/runs/37906313627). Caveat: 8 of the 10 CI runs that reached a verdict were inconclusive (free-tier quota) |
-| 2 | A degraded prompt is blocked by the gate | **PASS**: demo PR [#86](https://github.com/Niksa1101/grounded/pull/86), CI [run 38044085266](https://github.com/Niksa1101/grounded/actions/runs/38044085266). Caveats: the `eval` check is red but not a required check, and only a prompt/schema format mismatch tripped the gate |
+| 2 | A degraded prompt is blocked by the gate | **PASS**: demo PR [#86](https://github.com/Niksa1101/grounded/pull/86), CI [run 38044085266](https://github.com/Niksa1101/grounded/actions/runs/38044085266). Caveats: only a prompt/schema format mismatch tripped the gate, and the block depends on the `run-eval` label. The first caveat of the demo (a red `eval` did not block the merge) was resolved afterwards: [#88](https://github.com/Niksa1101/grounded/pull/88) plus a branch-protection change on 2026-10-10 made `eval` a required check, and #86 now reports `BLOCKED` |
 | 3 | A quota-limited run is `inconclusive` | **PASS**: real runs [37817266433](https://github.com/Niksa1101/grounded/actions/runs/37817266433) and [37844464091](https://github.com/Niksa1101/grounded/actions/runs/37844464091) (exit 0), plus the committed fixture tests |
 | 4 | Judge agreement recorded | **PASS**: [#85](https://github.com/Niksa1101/grounded/pull/85). Caveat: correctness alone is below the 0.8 target |
 
