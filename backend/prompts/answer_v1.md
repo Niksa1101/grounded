@@ -44,7 +44,7 @@ Return one JSON object with these fields:
 - `status`: `answered`, `partial` or `insufficient_context`.
 - `answer_markdown`: the answer in Markdown, with citation markers as described above.
 - `claims`: the factual statements the answer makes, at most 8, each short and self-contained. Each claim has
-  `text`, `citation_ids` (the labels that support it, without brackets, for example `["c1", "c3"]`) and
+  `text`, `citation_ids` (the citation markers that support it, for example `["[c1]", "[c3]"]`) and
   `self_confidence` (your own estimate from 0 to 1 that the sources support the claim).
 - `follow_up_questions`: at most 3 questions the sources can answer. Use an empty list if there are none.
 
