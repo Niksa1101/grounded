@@ -4,6 +4,11 @@
 # decides the job with `grounded eval gate` and reports the outcome in the job summary, in ONE PR
 # comment (updated on every later push, found by <!-- grounded-eval -->) and in a report artifact.
 #
+# - `eval` is meant to be a REQUIRED status check of main. A required check has to be reported on
+#   every PR, so the workflow starts on every new PR and the job is skipped when the PR does not
+#   carry `run-eval`; GitHub reports a job skipped by its `if` as a success, so only a labeled PR
+#   whose gate says `fail` (or whose eval could not run) is blocked. `inconclusive` succeeds.
+#   The job name must stay `eval`: it is the context string of the branch protection.
 # - promptfoo's own exit code is ignored: the gate is the single source of truth (Tech.md §15.5).
 #   Gate exit 0 = pass or inconclusive (job succeeds, the report says which), 1 = a quality fail,
 #   2 = the gate could not run. Exits 1 and 2 fail the job, named in an error annotation. A setup
@@ -18,7 +23,10 @@ name: eval
 
 on:
   pull_request:
-    types: [labeled, synchronize]
+    # `opened` and `reopened` give a PR its `eval` status at once (skipped when unlabeled), which a
+    # required check needs. There is no `unlabeled`: removing the label starts nothing, and a red
+    # status stays red until the next push, which is then skipped (no label, no eval).
+    types: [opened, reopened, synchronize, labeled]
   push:
     branches: [main]
   workflow_dispatch:
@@ -29,15 +37,21 @@ permissions:
 
 jobs:
   eval:
-    # `labeled` runs only for the run-eval label itself (another label must not start an eval), and
-    # `synchronize` only when the PR carries it.
+    # A PR event runs the eval whenever the PR carries `run-eval` now, whatever the event type, and is
+    # skipped otherwise. Not `labeled` for run-eval only: a labeled PR whose eval went red must not
+    # get a green, skipped `eval` on the same commit because someone added an unrelated label (for
+    # example `documentation`); that event re-runs the eval instead. The extra `labeled` clause does
+    # not depend on the payload listing the label that was just added (GitHub does not document it).
+    # What the re-run costs: the PR's own eval LLM cache (below) replays every call already paid
+    # for, so only what had no cached reply is asked again (a provider error is not cached).
     if: >-
       github.event_name != 'pull_request'
+      || contains(github.event.pull_request.labels.*.name, 'run-eval')
       || (github.event.action == 'labeled' && github.event.label.name == 'run-eval')
-      || (github.event.action == 'synchronize' && contains(github.event.pull_request.labels.*.name, 'run-eval'))
     # Per PR (or ref), here and not on the workflow: a workflow-level group would let a run whose job
-    # is skipped (some other label) cancel an eval in progress. A newer push cancels the run it
-    # supersedes; runs on main always finish.
+    # is skipped (the label is absent) cancel an eval in progress. A newer run of the same PR cancels
+    # the one it supersedes, and a labeled PR's newer run is always a full eval of the head commit,
+    # so the cancelled one is never the last word; runs on main always finish.
     concurrency:
       group: eval-${{ github.event.pull_request.number || github.ref }}
       cancel-in-progress: ${{ github.event_name == 'pull_request' }}
