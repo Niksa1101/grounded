@@ -2,7 +2,7 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phases 0–3 done (foundations; ingestion, golden set, dense baseline; hybrid retrieval and the CI retrieval gate; `/ask` with structured output, with 30/30 golden questions schema-valid on the real Gemini provider).** Everything below describes the target system. Sections marked
+> 🚧 **Status: Phases 0–4 done (foundations; ingestion, golden set, dense baseline; hybrid retrieval and the CI retrieval gate; `/ask` with structured output, with 30/30 golden questions schema-valid on the real Gemini provider; the promptfoo generation eval with a judge on another provider, a committed baseline and a CI quality gate).** Everything below describes the target system. Sections marked
 > _TBD_ are filled in only from committed eval results and real measurements, never by hand.
 
 | | |
@@ -225,21 +225,67 @@ n = 25, so differences under one question (0.04) are not claims either way.
   `grounded eval gate` blocking a drop of more than one question's worth on hybrid Recall@5, MRR or nDCG@5). The
   metrics table is in the job summary. A cold embedding cache with no key or quota is reported as an **infrastructure
   failure** (exit code 3), never as a quality result; `warm-cache.yml` seeds the cache.
-- **PRs labeled `run-eval` and `main`:** the full promptfoo generation eval (`eval.yml`: the 30 golden questions through
-  `no_rag` and `hybrid`, a judge on another provider, `grounded eval gate` against `eval/baselines/generation.json`).
-  The PR gets **one comment** with the metric table, `n` and the verdict, updated on every push and never duplicated;
-  the promptfoo HTML and JSON report is a downloadable artifact; a quality fail blocks.
+- **PRs labeled `run-eval`, every push to `main`, and manual runs:** the full promptfoo generation eval (`eval.yml`: the 30
+  golden questions through `no_rag` and `hybrid` at concurrency 1, the generator on Gemini and the judge on Groq with
+  both model IDs pinned in the workflow, then `grounded eval gate --suite generation` against
+  `eval/baselines/generation.json`). On a PR the job `eval` runs whenever the PR carries the label (adding it, a later
+  push, reopening and adding any other label all re-run it) and is skipped otherwise, so a PR that can change answer
+  quality (prompts, retrieval, chunking, context, schemas, model IDs) must carry the label (AGENTS.md §7): nothing else
+  tells the workflow that a PR is quality-affecting. The numbers it is compared with are the generation block of
+  [the report above](#evaluation), which `grounded eval report` prints from the baseline file.
+- **Three outcomes**, decided by the gate and by nothing else (promptfoo exits 100 whenever any single assertion fails,
+  also in a run that passes, so its exit code is ignored):
+
+  | Outcome | Means | Job |
+  |---|---|---|
+  | ✅ **pass** | every gated `hybrid` metric (faithfulness, answer correctness, refusal accuracy, schema first-try validity) is at or above its threshold: the baseline minus a tolerance, or a floor | green |
+  | ❌ **fail** | a gated metric is below its threshold, or the run cannot be compared with the baseline (another golden set or index, or a gated metric no question could score) | red, with an error annotation |
+  | ⚠️ **inconclusive** | more than 20% of a config's cases ended in a provider error (a quota, a 5xx or a timeout, of the generator or of the judge), so nothing of that config is gated and its metrics are shown with `n` | green, with a warning annotation. **Not a pass: re-run once the quota has reset or the provider has recovered** |
+
+  A run that could not even start (the setup failed, promptfoo crashed, the gate had no results to read) is red too and
+  says "the eval did not run"; it is never shown as a pass.
+- **Reading the PR comment.** One comment, found by a hidden marker and edited on every push, never duplicated. It opens
+  with the verdict, then the gate table (config, metric, baseline, current, Δ, threshold, `n`, ✅/❌; `·` means reported
+  only), then one line per config (cases, `n`, `n` for faithfulness, provider errors, bad outputs, latency, cost per 1k
+  questions), the errors by kind, and a footer with the commit, the models and links to the run and to the downloadable
+  report (promptfoo HTML and JSON, the gate's Markdown, the log). `n` is per metric: a question a metric does not apply
+  to (faithfulness of a refusal) is left out of it, and a question the judge could not grade is left out too.
+- **Free-tier constraints are part of the design.** The judge runs on Groq's free plan (a daily token quota, and 8K tokens
+  a minute), the generator on Gemini's, and a full run uses most of the day's Groq quota ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)).
+  A cache of LLM replies keeps what was paid for, so an identical re-run is free, and a run that hits a quota stops
+  asking and ends `inconclusive`. Most of the first CI runs ended that way (a quota already spent, and spells of
+  Gemini 503s); the only run on `main` that gated anything so far passed. Every push to `main` starts a real eval, so
+  merges spend quota too.
+- **What a red `eval` check does.** Since PR [#88](https://github.com/Niksa1101/grounded/pull/88) (2026-10-10) `eval` is
+  reported on every PR, and it is a required status check of `main` next to `backend`, `frontend` and `retrieval-eval`
+  (branch protection is a repository setting, not a file in the repository). A job skipped for want of the label counts
+  as a success, so only a labeled PR whose gate fails, or whose eval could not run, cannot be merged; the demo PR below
+  shows `BLOCKED`. `inconclusive` succeeds with a warning and is not a pass. **The label is still the weak point:** a PR
+  without it is not evaluated, and removing the label from a red PR clears the block on the next push (that run is then
+  skipped). So the protection rests on the label being added to every quality-affecting PR (AGENTS.md §7) and on the
+  review. The gate also sees format and schema regressions better than wording ones: see
+  [limitations](#failure-modes-and-limitations).
 - A run on `main` is also recorded in the `eval_runs` table for the dashboard (aggregates only). That write is shipped
   **disabled** until the repository variable `EVAL_RECORD_RUNS` is set to `true`.
-- Runs dominated by free-tier quota errors are reported as **inconclusive**, not as failures: the comment, the job
-  summary and a warning annotation say so, and an inconclusive run is never shown as a pass.
 
-A deliberately broken fusion (the dense term dropped from the RRF score) blocked by the retrieval gate
-([run](https://github.com/Niksa1101/grounded/actions/runs/37453667731), closed PR
+**Retrieval gate demonstration.** A deliberately broken fusion (the dense term dropped from the RRF score) blocked by the
+retrieval gate ([run](https://github.com/Niksa1101/grounded/actions/runs/37453667731), closed PR
 [#37](https://github.com/Niksa1101/grounded/pull/37)): hybrid Recall@5 0.74 → 0.58, MRR 0.66 → 0.44, nDCG@5 0.66 → 0.47,
 n = 25.
 
 ![The retrieval-eval job fails on a PR that breaks fusion](docs/images/gate-blocked-pr.png)
+
+**Generation gate demonstration.** A deliberately degraded `answer_v1`: one line of the prompt changed so that its
+`citation_ids` example (`["[c1]", "[c3]"]`) contradicts the schema (`^c[1-9]$`). The generation gate failed it
+([run](https://github.com/Niksa1101/grounded/actions/runs/38044085266), closed unmerged PR
+[#86](https://github.com/Niksa1101/grounded/pull/86), the
+[comment](https://github.com/Niksa1101/grounded/pull/86#issuecomment-6096484617) with the gate table): schema first-try
+validity, answer correctness and refusal accuracy of `hybrid` fell below their thresholds, and most generator calls
+were bad output after their one retry, with no provider error, so the verdict is a fail and not inconclusive. Weakening
+the *instructions* instead (six local attempts) moved no gated metric on this model, which is why the demonstration is a
+format mismatch ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)). When it ran, `eval` was not yet a required check
+and GitHub showed the PR as mergeable; making it required (#88) turned the same PR into `BLOCKED`. The inconclusive
+outcome was seen in real CI runs, and the report of all three outcomes is pinned by committed fixture tests.
 
 ## How confidence is computed
 
@@ -276,7 +322,14 @@ fallback rate and shadow cost per 1k questions, with methodology.
 Known in advance (expanded with observed examples in Phase 9):
 - **Postgres full-text search is not true BM25.** The ablation rows show what lexical search actually contributes.
 - **Small golden set.** With ~25 answerable questions, one question ≈ 4 percentage points. Tolerances reflect that.
-- **Free-tier constraints:** the first request after idle pays a cold start (serverless function + Neon wake-up); daily quotas can exhaust the demo budget.
+- **Free-tier constraints:** the first request after idle pays a cold start (serverless function + Neon wake-up); daily quotas can exhaust the demo budget. The same quotas limit the CI eval: a full run uses most of the day's free judge quota, so back-to-back runs end `inconclusive`.
+- **The generation gate sees some regressions and not others.** The one degraded prompt that tripped it was a prompt/schema
+  format mismatch. Six attempts to weaken the instructions (drop the citation rule, allow outside knowledge, narrow the
+  refusal rule, shorten the answer) moved no gated metric on `gemini-3.5-flash-lite`, whose output schema keeps it citing and
+  refusing. So the gate is not a substitute for reading a prompt diff, and a different model could behave differently
+  ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)).
+- **The judge is checked on a small sample.** 20 items, one rater who wrote the rubrics; correctness agreement is the weak
+  spot ([above](#judge-human-agreement)). The faithfulness baseline means "the judge found no unsupported claim".
 - **Frozen corpus:** answers reflect the pinned FastAPI docs version, not the live site.
 - **Privacy:** the demo uses free AI API tiers, which may use inputs to improve models. Don't enter personal data.
 - **Cohere trial key** is non-production. Serving real users needs a paid key or a local re-ranker.
@@ -366,7 +419,7 @@ smoke-run switches and what the assertions score are in [docs/Tech.md §15.3](do
 | 1 | Ingestion, golden set, dense baseline | ✅ done |
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ✅ done |
 | 3 | `/v1/ask` with structured output, citations, confidence | ✅ done ([closeout](tickets/phase-3/3.14-closeout.md)) |
-| 4 | promptfoo generation eval + CI quality gate | ⬜ |
+| 4 | promptfoo generation eval + CI quality gate | ✅ done ([closeout](tickets/phase-4/4.12-closeout.md)) |
 | 5 | UI, abuse protection, deployment. **MVP** | ⬜ |
 | 6 | Re-ranking with measured lift | ⬜ |
 | 7 | Provider fallback + circuit breaker | ⬜ |

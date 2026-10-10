@@ -5,9 +5,9 @@
 
 | | |
 |---|---|
-| Status | Phases 0–3 done (Phase 3: 30/30 golden questions schema-valid with the real provider, ticket 3.14); next: Phase 4 |
+| Status | Phases 0–4 done (Phase 4, closed 2026-10-10: first generation baseline committed, the generation gate demonstrated on a degraded prompt, judge–human agreement recorded, ticket 4.12); next: Phase 5 |
 | Owner / Author | probniprobic4@gmail.com |
-| Last updated | 2026-10-06 |
+| Last updated | 2026-10-10 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
 
 ---
@@ -122,7 +122,7 @@ IDs are referenced from Tech.md, tests and PRs.
 - **FR-20** Retrieval eval (Python, deterministic, cached): Recall@k, MRR, nDCG@k for configs `dense`, `fts`, `hybrid`, `hybrid_rerank`.
 - **FR-21** Generation eval (promptfoo with a Python provider running the real pipeline): faithfulness (per claim), answer correctness, citation precision, refusal accuracy, schema first-try validity, latency and shadow cost. Includes a `no_rag` baseline.
 - **FR-22** The LLM judge runs on a different provider than the generator, with a pinned model, temperature 0 and a written rubric. Judge-vs-human agreement is measured on ≥10 verdicts and published.
-- **FR-23** CI gate in two tiers. Every PR gets unit/integration tests and the retrieval eval. PRs labeled `run-eval` and pushes to `main` get the full generation eval. Quota/429-dominated runs end as **inconclusive**, not as failures.
+- **FR-23** CI gate in two tiers. Every PR gets unit/integration tests and the retrieval eval. PRs labeled `run-eval` and pushes to `main` get the full generation eval. Quota/429-dominated runs end as **inconclusive**, not as failures. *(Since #88, 2026-10-10: the check `eval` is reported on every PR and is a required check of `main`; on a PR without the label its job is skipped, which counts as a success.)*
 - **FR-24** CI posts (and updates) a PR comment with a metrics table vs baseline, Δ and ✅/❌ per threshold, and links the promptfoo report artifact.
 - **FR-25** Baselines are committed files. They change only through an explicit PR.
 
@@ -275,16 +275,26 @@ Timeline: Phases 0–5 = MVP (~2 weeks). Phases 6–8 = "wow" features (week 3).
 | Judge rubrics: faithfulness per claim, correctness vs reference (prompt files) | A + G together |
 | promptfoo config: Python provider calling the pipeline in-process; configs `no_rag`, `hybrid` | G |
 | Assertions: faithfulness (Python, per claim), correctness (custom Python grader through the judge module, D50), citation precision, refusal, schema validity | G |
-| **Metric aggregation + generation gate logic** (thresholds, tolerance, inconclusive rule; the retrieval part is Phase 2) | **A** |
-| Eval mode: fallback off, temperature 0, LLM response cache (SQLite, keyed by full prompt), concurrency 1, backoff | G |
-| `eval.yml`: label `run-eval` + push to `main`; PR comment with diff table; promptfoo HTML report artifact | G |
-| Judge–human agreement: Author labels ≥10 judge verdicts; agreement recorded | A |
+| **Metric aggregation + generation gate logic** (thresholds, tolerance, inconclusive rule; the retrieval part is Phase 2) | **A** (delegated to G by the Author, 2026-10-08: "write it", explained line by line in the 4.08 PR) |
+| `grounded eval baseline` (baseline rows written from a results file, never typed) and `grounded eval report` (the README tables from the committed baselines) | G |
+| Eval mode: fallback off, temperature 0, LLM response cache (SQLite, keyed by full prompt and the adapter settings), concurrency 1, backoff on a 429 and a bounded retry of a transient 5xx | G |
+| `eval.yml`: label `run-eval` + push to `main` (+ `workflow_dispatch`); PR comment with diff table; promptfoo HTML report artifact; the `eval_runs` insert on `main` ships disabled (`EVAL_RECORD_RUNS`); the check `eval` is reported on every PR and required (since #88) | G |
+| Judge–human agreement tooling: a blind sample drawn from a real run with synthetic negative controls, exact agreement and Cohen's kappa | G |
+| Judge–human agreement: the Author labels the sheet (20 items); agreement recorded | A |
 
 **Exit criteria**
 - Full eval runs locally and in CI. Baseline committed to `eval/baselines/generation.json` (rows `no_rag`, `hybrid`).
 - A deliberately degraded prompt is blocked by the gate (demonstrated).
 - A quota-limited run ends as `inconclusive` (demonstrated, or simulated with the fake provider).
 - Judge agreement number recorded.
+
+**Closed on 2026-10-10** (report with the evidence and the caveats: [4.12](../tickets/phase-4/4.12-closeout.md#closeout-report)).
+All four pass. (1) The baseline is `eval/baselines/generation.json` (PR #76) and the full eval passed in CI (run
+37906313627), but 8 of the 10 CI eval runs that reached a verdict were `inconclusive` on free-tier quota. (2) PR #86, a
+one-line prompt/schema format mismatch, was failed by the gate, and since #88 and a branch-protection change (also
+2026-10-10, with the Author's approval) that red check blocks the merge button; weakening the instructions instead did not
+trip the gate, and the block depends on the `run-eval` label being added (open items below). (3) Two real CI runs ended `inconclusive` with exit
+0, and fixture tests pin the rule. (4) The agreement is recorded on 20 items; correctness alone is below 0.8.
 
 ---
 
@@ -390,7 +400,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 | D20 | Golden set | LLM-drafted, Author-curated, ~30 items, section-level graded labels |
 | D21 | Metrics/tools | Retrieval metrics in Python; generation metrics in promptfoo |
 | D22 | Judge | Different provider (Groq), pinned, temp 0, agreement measured |
-| D23 | CI gate | Two tiers (always / `run-eval` label + main); quota → inconclusive |
+| D23 | CI gate | Two tiers (always / `run-eval` label + main); quota → inconclusive. Since #88 (2026-10-10, the Author's approval): `eval` is reported on every PR and is a required check of `main`, skipped (a success) without the label |
 | D24 | Hosting | Backend on Vercel Functions (FastAPI, Fluid compute) as its own Vercel project; frontend on Vercel. Changed 2026-09-24: HF Docker Spaces now require a paid PRO plan |
 | D25 | FE↔BE | Next.js Route Handler proxy with shared secret |
 | D26 | Observability | Own `request_logs` table + public aggregate dashboard |
@@ -419,6 +429,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 | D49 | promptfoo version and test loading (2026-10-08) | promptfoo is pinned at `0.123.1` (a stable release of 2026-09-18; npm `engines.node` is `>=22.22.0`, which the local Node 24.15.0 and CI's Node 24 satisfy) and run as `npx promptfoo@0.123.1`. `0.124.0` (2026-10-06) is newer, but it was two days old at decision time and lists eight breaking changes (SDKs become opt-in installs, a provider is removed); nothing in it is needed. Tests are loaded by promptfoo's own Python test generator, `tests: file://tests_loader.py:generate_tests` (read in the 0.123.1 source: the function is run and must return a list), so the `tests.generated.yaml` pre-step is **not** used. The Python side runs in the backend's uv environment through `PROMPTFOO_PYTHON` (the one variable that reaches the provider, the assertions and the test generator). promptfoo's own result cache is off (`--no-cache`): the cache key of a Python provider does not include the backend's prompt files, so a changed prompt would be served stale results and the gate would not see it. Details in Tech §15.3 |
 | D50 | Correctness judge (2026-10-08) | Answer correctness is a custom Python grader (`asserts.py`), not `llm-rubric`: it calls `evals/judge.py`, which goes through the Groq adapter and the eval LLM cache and returns `{pass, score, reason}` with 0 / 0.5 / 1. **Why:** promptfoo's built-in Groq grading provider would bypass our adapter, the typed provider errors that feed the `inconclusive` rule, the cache and the pinned, hashed rubric prompt; `llm-rubric` with our own provider as the grader still sends promptfoo's rubric prompt, not ours. **Cost accepted:** we write and maintain the grader and its rubric (`judge_correctness_v1.md`). Faithfulness was already a custom Python assertion |
 | D51 | CI model IDs (2026-10-08) | `eval.yml` sets `GEMINI_MODEL`, `GROQ_MODEL` and `JUDGE_MODEL` as literals in its `env:` block, not as repository variables or secrets. A model ID is not a secret, a change is then a reviewed diff on a PR that has to carry the `run-eval` label anyway, and no hidden variable can change what a baseline means. (The embedding model and the FastAPI ref stay `Settings` defaults, D45.) |
+| D52 | Judge verdict labels and failed judge calls (2026-10-10) | The judge returns a label, never a number: faithfulness `SUPPORTED \| NOT_SUPPORTED`, correctness `CORRECT \| PARTIALLY_CORRECT \| INCORRECT`, which the code maps to 1 / 0.5 / 0 (`CORRECTNESS_SCORES`). A claim with no usable cited source is `NOT_SUPPORTED`, decided locally without a call (rubric rule 6, 4.04). A judge call that fails (invalid output after its one retry, or a provider error) is `errored`, not scored: it is left out of the mean and of `n`, and never counted as 0. **Why:** a number written by a model is not calibrated and would move with its wording; a claim with no source cannot be supported, and asking the model would only spend quota on a fixed answer; a call that failed says nothing about the answer, so scoring it 0 would blame the generator for the judge's quota (a provider-side error makes the run `inconclusive`, D23, and a judge bad output is reported in its own column). Built in 4.04 and 4.06, written down here at the Phase 4 closeout. Details: Tech §15.4 |
 
 ## 12. Assumptions and open items
 
@@ -435,7 +446,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - Limits of `openai/gpt-oss-120b` on Groq (`console.groq.com/docs/rate-limits`, read 2026-10-08; the page has a Free Plan tab and a Developer Plan tab): Free **30 RPM, 1K RPD, 8K TPM, 200K TPD**; Developer 1K RPM, 500K RPD, 250K TPM, no TPD listed. The page calls the table a summary with possible exceptions and sends the reader to the account's Limits page, which needs a login, so the Author's own numbers were unverified until the first real call in 4.02 (2026-10-08): the response headers `x-ratelimit-limit-requests: 1000` (requests per day) and `x-ratelimit-limit-tokens: 8000` (tokens per minute) are the Free Plan numbers, so the account is on the Free Plan. Cached tokens do not count. The docs do not say whether a request's `max_completion_tokens` is reserved against TPM (still unverified). Reasoning tokens count inside `max_completion_tokens` and inside `usage.completion_tokens` (4.02, Tech §9.1). A 429 carries `retry-after` in seconds (set only on a 429). Ticket 4.09 reads the Limits page before the first full run. A TPD stop ends a run as `inconclusive`, and the eval cache keeps what was already paid for.
 - Groq `reasoning_effort` for `openai/gpt-oss-120b` accepts `low`, `medium` and `high` (default `medium`), and Groq's reasoning page says the reasoning chains "are part of the token output". With 8K TPM, `low` saves a lot of tokens per judge call but may change verdict quality. Decided in 4.02: the `Settings` field `GROQ_REASONING_EFFORT`, default `low`. The judge agreement (4.11) was to show whether the choice hurt; 4.11b could not settle it (no run at a higher effort to compare with, see the correctness-rubric item at the end of this section).
 - Rate-limit and budget numbers are set below current free-tier limits, verified at Phase 5.
-- **Judge budget of a full run (4.06, for 4.09).** The 4.06 run on 3 questions made 10 judge calls: a faithfulness call whose claim cites three chunks took about 1.9K input tokens, a correctness call about 1.3K. Extrapolated to the 30 golden questions (about 25 answered `hybrid` answers with 2-3 claims each, and 60 correctness calls), a full run needs roughly 180K tokens against the free plan's 200K per day. That is an estimate from two answers, not a measurement, and it leaves no room for retries or a second attempt: 4.09 should read the account's Limits page first, expect a TPD stop to be possible, and rely on the eval cache to finish on the next day.
+- **Judge budget of a full run (4.06, for 4.09).** The 4.06 run on 3 questions made 10 judge calls: a faithfulness call whose claim cites three chunks took about 1.9K input tokens, a correctness call about 1.3K. Extrapolated to the 30 golden questions (about 25 answered `hybrid` answers with 2-3 claims each, and 60 correctness calls), a full run needs roughly 180K tokens against the free plan's 200K per day. That is an estimate from two answers, not a measurement, and it leaves no room for retries or a second attempt: 4.09 should read the account's Limits page first, expect a TPD stop to be possible, and rely on the eval cache to finish on the next day. (Superseded by the measured run below, which came to about 145K.)
 - **Judge budget of the first full run, measured (4.09b, 2026-10-08).** One full run (30 questions, both configs, `-j 1`,
   Groq Free Plan) made 103 live judge calls (the eval cache replayed 10 more from earlier tickets), about 144.6K Groq
   tokens (133,436 input + 11,144 output, 4,943 of the output reasoning tokens), below the 180K estimate above and
@@ -449,7 +460,8 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   against HEAD's commit date would catch a mistake; not built. (2) The first `hybrid` thresholds are the table of Tech
   §15.5 as a constant (`evals/generation_baseline.py:INITIAL_THRESHOLDS`), copied once into the baseline file, which the
   Author approves in the baseline PR. A floor above what the first run measures (faithfulness 0.85) makes the new
-  baseline fail its own gate: the command says so and the Author decides. (3) The PRD §8 targets are constants in
+  baseline fail its own gate: the command says so and the Author decides. *Resolved in #76:* the Author approved the
+  numbers and the thresholds as they are, and the baseline passed its own gate. (3) The PRD §8 targets are constants in
   `evals/report.py` too (`met` / `not met` in the README); a change to PRD §8 must change both. The Groq daily budget of
   the first full run is the item above ("Judge budget of a full run").
 - **`eval_runs` insert on `main` (4.10c), waiting for the Author's go.** The step and `grounded eval record` are in `eval.yml`
@@ -457,6 +469,9 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   reserve for the Author. To enable it, set the repository variable `EVAL_RECORD_RUNS` to `true`; the first row appears
   after the next push to `main` whose eval got a verdict. Open points the Author may want to decide first: `status` is
   the run's verdict on every row, `no_rag` stores `none` as `index_config_hash`, and a CI re-run adds rows (DB.md §4).
+  **Status at the Phase 4 closeout (2026-10-10):** the variable is not set (`gh variable list` is empty), and the step
+  writes to a production `eval_runs` table that exists only once Neon production is migrated (5.09, still `todo`). So
+  the Author sets `EVAL_RECORD_RUNS=true` after 5.09, not before; Phase 4 closes with the step shipped and disabled.
 - ~~The generation gate says `fail`, not `inconclusive`, when every generator call of a gated config failed (found in
   4.10c).~~ Fixed in #80: a config with no answered case has no index to compare (Tech §15.5, "As built in 4.08",
   item 7), so a total outage is `inconclusive`.
@@ -474,6 +489,10 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   `EVAL_UNAVAILABLE_RETRIES`, `EVAL_UNAVAILABLE_WAIT_S`). Not verified against the real API (no real call was made for
   the fix; the tests use scripted providers), and a spell of 503s longer than the 75 s of waits still costs the case:
   whether 4 retries are enough is for the next real `main` run to show, and the two settings are the knobs.
+  **Status at the Phase 4 closeout:** five real runs have used the fix (`main` pushes 37820274623, 37843958678,
+  37844464091, 37906313627 and the demo PR run 38044085266). None shows a generator `ProviderUnavailable` in its
+  errors-by-kind line (37820274623 has one `ProviderTimeout`), so the fix has not met a 503 spell since; whether it
+  would have saved 37817266433 is unknown. Still open until a spell happens again.
 - The judge assertions (4.06) pay about a second of imports per judged assertion call, two per row, because `grounded.runtime`, where `open_judge` lives, imports the Gemini SDK. A module that builds the judge without it would cut that; not done, since it is small next to the 8K tokens-per-minute pacing.
 - A missing `GROQ_API_KEY` or `JUDGE_MODEL` is found by the first judged assertion of a real run (every judge component of the run is then `errored` with `ProviderConfigError`, and the run stops asking), after generator calls were spent. A check in the test generator, which runs first, would find it before any quota is used; the generator calls are cached, so the cost of the late discovery is one re-run, not lost quota.
 - ~~The answer cache (3.13) stores a finished answer, and its key did not include the confidence weights.~~ Closed in
@@ -482,19 +501,28 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - The question normalization of the cache key and `question_hash` lowercases the text (Tech §11), so `Path` and
   `path`, `Body` and `body` are one key, although in the FastAPI docs a class and a concept can differ. Accepted for
   now (Phase 3 review #9); revisit if Phase 4 or the logs show a wrong cached answer for a case-only difference.
+  Phase 4 could not show one: eval mode runs with the answer cache off (Tech §15.6), so the question stays open for the
+  logs of Phase 5 and later.
 - A client disconnect cancels the request (`CancelledError`, a `BaseException`), and no `request_logs` row is written
   (Phase 3 review #10). Handled with the request deadline and the timeout chain of 5.02.
 - Hybrid retrieval was below dense in the first ablation (ticket 2.07, README "Retrieval ablation"). Not tried, because
   tuning against the golden set needs an explicit decision (AGENTS.md §13): a lexical query closer to BM25 (AND-first,
   or weighting rare terms), a smaller weight or a shorter list (`K_FTS`) for the lexical side, `RRF_K`. Any of them
-  would be a separate PR that says it was tuned on the golden set.
+  would be a separate PR that says it was tuned on the golden set. Phase 4 adds a generation-side symptom of the same
+  weakness: the baseline's two false refusals (q016 and q026, the only `refusal_correctness` errors of `hybrid`) are
+  retrieval failures, the same two questions the README's retrieval reading names (the reading is in the 4.09b PR
+  description, #76). A retrieval fix or the Phase 6 rerank should therefore show in the generation table too, not only
+  in Recall.
 - The answer-cache key is built before generation, with the configured generator's `generator_model` and generation
   parameters. Once the router falls back (Phase 7), an answer from the fallback provider would be stored under the
   primary's key and served as the primary's for up to 30 days. Decide in Phase 7 (`router.py` is Author-owned): do
   not cache a fallback answer, or key the row on the provider that answered (R.16).
 - `thinking_level` is read twice: by the Gemini adapter (`runtime.py`) and by `GenerationParams` for the cache key, and
-  it is hashed whatever the provider. Move it to the provider in Phase 4, when Groq arrives: each adapter exposes the
-  parameters that change its answer, and the key hashes those (R.16, Author's decision of 2026-10-07).
+  it is hashed whatever the provider. The plan was to move it to the provider in Phase 4, when Groq arrives: each
+  adapter exposes the parameters that change its answer, and the key hashes those (R.16, Author's decision of
+  2026-10-07). **Not done in Phase 4:** Groq arrived only as the judge, never as a generator, so nothing forced the move,
+  and it is still open. It becomes necessary when `groq` can answer requests (the router, Phase 7), unless the Author
+  wants it earlier; this closeout does not decide that.
   `GROQ_REASONING_EFFORT` (4.02) is another such parameter: it is not in the answer-cache key yet, because `groq`
   cannot be the generator before the router, so the move to the provider has to include it. The eval LLM cache (4.03)
   already hashes both, per provider and only the knob that provider uses, through
@@ -509,13 +537,17 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   that retrieval found weakly but the reranker scores high, and extend the guard and its equality test (R.17).
 - Judge–human agreement (4.11) was measured on 20 items, one rater (the Author, who wrote the rubrics), and the real
   baseline run has no `NOT_SUPPORTED` verdict, so the sample has four synthetic controls and cannot show whether the judge
-  catches a borderline unsupported *real* claim. The degraded-prompt run of the gate demonstration (4.12) will produce real
-  `NOT_SUPPORTED` verdicts; a second sheet drawn from it (the same tool, another seed and results file) would measure that,
+  catches a borderline unsupported *real* claim. The degraded-prompt run of the gate demonstration (4.12) was expected to
+  produce real `NOT_SUPPORTED` verdicts; a second sheet drawn from it (the same tool, another seed and results file) would measure that,
   if the agreement number is thin or low. **Status after 4.11b** (the result is in README Evaluation and
   `eval/judge_agreement/README.md`): the number is thin in exactly that respect. Faithfulness agreed on all 10 items, but
   only 6 are real claims, all `SUPPORTED`, and 4 are easy synthetic controls, so the faithfulness baseline of 1.000 is
-  not validated for a subtly unsupported claim. Open: draw the second sheet from the 4.12 degraded run (or from any run
-  that has real `NOT_SUPPORTED` verdicts) and label it, and ideally have a second rater who did not write the rubrics.
+  not validated for a subtly unsupported claim. Open: draw the second sheet from a run that has real `NOT_SUPPORTED`
+  verdicts and label it, and ideally have a second rater who did not write the rubrics. **Status after 4.12:** the demo
+  run (#86) is not such a run: only 8 of its 30 `hybrid` cases produced an answer, one of them was scored for
+  faithfulness (n = 1, 1.000), so it has no real `NOT_SUPPORTED` verdict. A degraded prompt that produces *answers*
+  with unsupported claims is needed, and the six instruction edits of the finding below did not move faithfulness
+  either, on this model.
 - **Correctness rubric boundary (from the 4.11b disagreements).** Correctness agreed on 7 of 10 grades (kappa below the
   0.8 target), and the three misses (a07, a09, a16) sit on the rubric's own boundaries: *main point* against *an
   important part left out*, and *a wrong detail that does not reverse the main point*. Three items cannot say whether
@@ -528,6 +560,66 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   items both measures meet 0.8, over the 16 real items only exact agreement does, and for correctness alone neither does
   (`eval/judge_agreement/v1.agreement.md`). Open for the Author: state the measure and the scope in §8 (for example kappa,
   per kind, on real items); `grounded eval agreement` prints all of them.
+- **What the generation gate can see (found in the 4.12 demonstration).** The ticket suggested degrading `answer_v1` by
+  weakening an instruction. Six such edits were tried locally on `gemini-3.5-flash-lite`, each followed by a gate run:
+  deleting the "cite every claim" rule, allowing outside knowledge, narrowing the refusal rule, requiring "full explicit"
+  answers, and a 15-word and an 8-word answer limit. None moved a gated metric: the output section and the schema keep
+  the model citing and refusing, and the length limit only shortened the prose. The outputs were not kept
+  (`eval/results/` is gitignored), so this is an account, not an artifact. The edit that did trip the gate is a
+  prompt/schema **format mismatch**: PR #86 changed the `citation_ids` example from `["c1", "c3"]` to `["[c1]", "[c3]"]`,
+  which the schema (`^c[1-9]$`) rejects; `schema_first_try` fell to 0.233 against the floor of 0.950 (n = 30), 22 of 30
+  generator calls were `ProviderBadOutput` after their retry, and correctness and refusal accuracy (both n = 8) fell
+  below their thresholds too. **What this implies:** the gate is sensitive to schema and format regressions, and (by how
+  `refusal_correctness` is computed) to refusals that retrieval induces, which the baseline's q016 and q026 show but
+  this closeout did not demonstrate by a run; it is insensitive, on this model, to instruction-wording regressions that
+  the structured output hides. One demonstration is one data point, and another model may behave differently.
+  **Consequence for the process:** a PR that changes a prompt needs a human look at the diff as well as the `run-eval`
+  gate; AGENTS.md §7's label is necessary, not sufficient. Not built: a set of prompt mutations the gate must fail
+  (a canary), which would turn this account into a test at the cost of a full run per mutation.
+- ~~The `eval` check is not a required check, so a red gate does not block the merge button.~~ **Resolved by #88 and
+  branch protection on 2026-10-10, with the Author's approval.** Found in 4.12: on the demo PR (#86) GitHub reported
+  `mergeable: MERGEABLE`, `mergeStateStatus: UNSTABLE`, because `eval` was not required and, with `labeled` and
+  `synchronize` as the only triggers, a PR without the label had no `eval` status at all. #88 starts the workflow on
+  `opened`, `reopened`, `synchronize` and `labeled`, and the job `eval` runs whenever the PR carries `run-eval` and is
+  skipped otherwise (GitHub reports a job skipped by its own `if` as successful for a required check). The orchestrator
+  then added `eval` to the required status checks of `main`, a repository setting changed on the Author's explicit
+  approval in chat, not a file in the repository: the list is now `backend`, `frontend`, `retrieval-eval`, `eval`,
+  strict off, nothing else in the protection changed. #86 now reports `BLOCKED`. `inconclusive` still succeeds with a
+  warning (consistent with D23, and not a pass). **Edge cases that remain, from #88 (Tech §17):** removing the
+  `run-eval` label starts nothing, and a red status stays until the next push, which is then skipped, so removing the
+  label is a human bypass; an unrelated label on a labeled PR re-runs the eval (cheap through the PR's cache, but a
+  provider error is never cached); a PR created with `--label run-eval` fires `opened` and `labeled`, and the second
+  cancels the first; a cancelled run superseded by a newer run of the same name does not block. **What still is not
+  enforced:** the label itself. A quality-affecting PR that is not labeled is not evaluated, so AGENTS.md §7 and the
+  review remain the control for adding it; making the label automatic (a path filter on `backend/prompts`, retrieval,
+  chunking and the eval config) is possible and not built.
+- **Free-tier headroom of the CI eval (found in the first real runs, 2026-10-08 to 2026-10-10).** Of the 10 `eval.yml`
+  runs that reached a gate verdict, 1 passed (37906313627, 2026-10-09), 1 failed on purpose (the demo, 38044085266) and
+  8 were `inconclusive`, all on 2026-10-08. The causes read in their logs: the Groq daily quota (the judge:
+  `ProviderRateLimited (daily quota)`, 24 to 74 calls per run, in six of the runs) and Gemini 503 spells (generator
+  `ProviderUnavailable`, up to 28 calls in one run). The numbers behind it: a full uncached run needs about 145K Groq
+  tokens against the Free Plan's 200K a day, so one full run a day fits and two do not, and a local baseline run spends
+  the same quota as CI. How the daily limit resets is **not documented** (the rate-limits page says nothing about it,
+  read 2026-10-10); that it refills continuously, about 139 tokens a minute (200K over 1,440 minutes), is the Author's
+  observation and unverified. Every push to `main` starts a real eval; a merge that changed nothing the eval sees
+  replays from `main`'s cache and costs no call, so the cost is the quality-affecting merges and re-runs (see the cache
+  scope item above). Not built, options only: run the `main` eval only when `backend/prompts`, retrieval or the eval
+  config changed; schedule it; hand a PR's cache to `main`; a paid tier. Until then, expect `inconclusive` on a day that
+  already spent the quota, and do not re-run hoping for another result.
+- **`warm-cache.yml` still has its own copy of the setup steps** that the composite actions `eval-index` and
+  `save-embeddings` hold for `ci.yml` and `eval.yml` (Tech §17, "Shared setup"). They must be kept in step by hand; moving
+  `warm-cache.yml` onto the actions is small, but it is the workflow that seeds the embeddings cache, so it was left
+  alone in Phase 4.
+- **`ubuntu-latest` is about to point at Ubuntu 26.** All three workflows run on `ubuntu-latest` (`ci.yml`,
+  `eval.yml`, `warm-cache.yml`). GitHub's annotation on the CI runs of 2026-10-10 says: "The ubuntu-latest label will
+  migrate to Ubuntu 26 beginning October 19, 2026" (https://github.com/actions/runner-images/issues/14748); the
+  runner-images README lists `ubuntu-latest` as Ubuntu 24.04 today, with an `ubuntu-26.04` label available, and says a
+  `-latest` migration is gradual, over one to two months. The risk is a workflow that fails on the new image (Python and
+  Node toolchains, the `pgvector` service, cache keys that include the OS), including the two quota-limited workflows.
+  A separate task already exists; nothing was changed here.
+- **The branch `phase-4/gate-demo` is kept** (PR #86 is closed unmerged), so the evidence of the demonstration can be
+  re-run or inspected. Deleting a branch needs the Author's go (AGENTS.md §5); the Phase 2 demo branch was deleted by
+  the ticket.
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
   (so they aren't lexical paraphrases of a section), and report metrics separately for items with `source_section`
   null and not null. Tracked in ticket 9.06.
