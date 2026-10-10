@@ -601,12 +601,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   `save-embeddings` hold for `ci.yml` and `eval.yml` (Tech §17, "Shared setup"). They must be kept in step by hand; moving
   `warm-cache.yml` onto the actions is small, but it is the workflow that seeds the embeddings cache, so it was left
   alone in Phase 4.
-- **`ubuntu-latest` is about to point at a newer Ubuntu.** All three workflows run on `ubuntu-latest` (`ci.yml`,
-  `eval.yml`, `warm-cache.yml`). The runner-images README lists `ubuntu-latest` as Ubuntu 24.04 today with an
-  `ubuntu-26.04` label available, and says a `-latest` migration is gradual, over one to two months (read 2026-10-10).
-  The Author's task note names 2026-10-19 for the change; that date could not be confirmed from the README. The risk is a
-  workflow that fails on the new image (Python and Node toolchains, the `pgvector` service, cache keys that include the
-  OS), including the two quota-limited workflows. A separate task already exists; nothing was changed here.
+- **`ubuntu-latest` is about to point at Ubuntu 26.** All three workflows run on `ubuntu-latest` (`ci.yml`,
+  `eval.yml`, `warm-cache.yml`). GitHub's annotation on the CI runs of 2026-10-10 says: "The ubuntu-latest label will
+  migrate to Ubuntu 26 beginning October 19, 2026" (https://github.com/actions/runner-images/issues/14748); the
+  runner-images README lists `ubuntu-latest` as Ubuntu 24.04 today, with an `ubuntu-26.04` label available, and says a
+  `-latest` migration is gradual, over one to two months. The risk is a workflow that fails on the new image (Python and
+  Node toolchains, the `pgvector` service, cache keys that include the OS), including the two quota-limited workflows.
+  A separate task already exists; nothing was changed here.
 - **The branch `phase-4/gate-demo` is kept** (PR #86 is closed unmerged), so the evidence of the demonstration can be
   re-run or inspected. Deleting a branch needs the Author's go (AGENTS.md §5); the Phase 2 demo branch was deleted by
   the ticket.
