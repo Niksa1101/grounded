@@ -1,0 +1,13 @@
+name: probe-labels
+on:
+  pull_request:
+    types: [labeled]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo 'action: ${{ github.event.action }}'
+          echo 'label: ${{ github.event.label.name }}'
+          echo 'payload labels: ${{ toJSON(github.event.pull_request.labels.*.name) }}'
+          echo 'would-run-eval: ${{ contains(github.event.pull_request.labels.*.name, 'documentation') }}'
