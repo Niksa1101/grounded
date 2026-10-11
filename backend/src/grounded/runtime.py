@@ -9,9 +9,10 @@ through it, so they cannot drift apart. Tests pass their own ``embedder`` and ``
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime
 
 from google import genai
 from psycopg_pool import AsyncConnectionPool
@@ -25,6 +26,7 @@ from grounded.generation.providers.fake import StubJudgeProvider, StubLLMProvide
 from grounded.generation.providers.gemini import GeminiProvider
 from grounded.generation.providers.groq import GroqProvider
 from grounded.infra.db import create_pool
+from grounded.infra.ratelimit import RateLimiter
 from grounded.infra.timing import Clock
 from grounded.ingest.embed import Embedder
 from grounded.observability.cost import Pricing, load_pricing
@@ -44,6 +46,9 @@ class Runtime:
     pool: AsyncConnectionPool
     pipeline: AskPipeline
     request_logger: RequestLogger
+    # None in eval mode: the limiter is not consulted at all (Tech §15.6), so a run of 30+
+    # questions from one process is never answered with our own 429 (5.04).
+    rate_limiter: RateLimiter | None = None
     # Eval mode only (Tech §15.6), and only for a provider built from the settings: the cache and
     # backoff around it, whose counters a run prints at its end. ``wrap`` takes the judge as well.
     eval_llm: EvalLLM | None = None
@@ -171,7 +176,9 @@ async def open_runtime(
     provider: LLMProvider | None = None,
     pricing: Pricing | None = None,
     clock: Clock = time.perf_counter,
+    wall_clock: Callable[[], datetime] | None = None,
 ) -> AsyncGenerator[Runtime]:
+    """``wall_clock`` replaces the database's ``now()`` as the rate limiter's clock (tests only)."""
     async with AsyncExitStack() as stack:
         pool = create_pool(settings)
         # wait=False: start serving even if the database is unreachable; /readyz reports it.
@@ -203,6 +210,20 @@ async def open_runtime(
         request_logger = RequestLogger(
             pool, pricing, clock=clock, source="eval" if settings.app_env == "eval" else "api"
         )
+        rate_limiter = (
+            None
+            if settings.app_env == "eval"
+            else RateLimiter(
+                pool,
+                per_minute=settings.rate_limit_per_min,
+                per_day=settings.rate_limit_per_day,
+                clock=wall_clock,
+            )
+        )
         yield Runtime(
-            pool=pool, pipeline=pipeline, request_logger=request_logger, eval_llm=eval_llm
+            pool=pool,
+            pipeline=pipeline,
+            request_logger=request_logger,
+            rate_limiter=rate_limiter,
+            eval_llm=eval_llm,
         )

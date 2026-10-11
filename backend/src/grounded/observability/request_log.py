@@ -47,11 +47,12 @@ from grounded.schemas.llm import AnswerStatus
 
 logger = logging.getLogger(__name__)
 
-# The outcomes written today. DB.md §4 also allows rate_limited and budget_exhausted (5.04, 5.05).
+# The outcomes written today. DB.md §4 also allows budget_exhausted (5.05).
 Outcome = Literal[
     "answered",
     "partial",
     "insufficient_context",
+    "rate_limited",
     "bad_request",
     "validation_failed",
     "provider_unavailable",

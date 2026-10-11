@@ -102,7 +102,7 @@ Tables by lifecycle:
 | Group | Tables | Written by | Read by |
 |---|---|---|---|
 | Index | `index_versions`, `documents`, `chunks` | ingest CLI (owner role) | runtime, eval |
-| Runtime state | `answer_cache`, `daily_usage`, `rate_limit_counters` (planned, `0003`, 5.04) | runtime (`app` role) | runtime |
+| Runtime state | `answer_cache`, `daily_usage`, `rate_limit_counters` (`0003`) | runtime (`app` role) | runtime |
 | Telemetry | `request_logs` | runtime | dashboard views, retention job |
 | Quality | `eval_runs` | CI on `main` only | dashboard |
 | Meta | `schema_migrations` | migration runner | migration runner |
@@ -295,10 +295,10 @@ ALTER TABLE chunks DROP CONSTRAINT chunks_document_id_fkey;  -- superseded by th
 
 The old single-column `chunks.document_id` FK is dropped because the composite one implies it. No data is lost. The `chunks` and `documents` DDL above is the `0001` shape; after `0002` a chunk is tied to a document *of its own version*, and a `retired` version no longer blocks rebuilding its config (only `ready` rows are unique).
 
-**`0003_rate_limit.sql`** (planned by the 5.01 decision, D31; **not written yet**, ticket 5.04 writes it and shows the DDL in its PR) adds the per-IP rate-limit counters. The rate limiter is in Postgres because Vercel's instance count under a burst is not documented (PRD §12), so a per-instance counter would multiply the limit by an unknown number. The shape agreed in the decision:
+**`0003_rate_limit.sql`** (applied; decided in 5.01, D31, written in 5.04) adds the per-IP rate-limit counters. The rate limiter is in Postgres because Vercel's instance count under a burst is not documented (PRD §12), so a per-instance counter would multiply the limit by an unknown number. The migration holds exactly this table; the `app` grant is not in it (the role is created by the one-time runbook of 5.09, which applies the grants of §5):
 
 ```sql
--- 0003_rate_limit.sql (planned)
+-- 0003_rate_limit.sql
 CREATE TABLE rate_limit_counters (
     ip_hash      text        NOT NULL,   -- HMAC-SHA256(ip, IP_HASH_SECRET); never a raw IP
     window_kind  text        NOT NULL CHECK (window_kind IN ('minute', 'day')),
@@ -337,8 +337,9 @@ GRANT SELECT ON index_versions, documents, chunks, eval_runs TO app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON answer_cache TO app;
 GRANT SELECT, INSERT, UPDATE ON daily_usage TO app;
 GRANT INSERT, SELECT ON request_logs TO app;
--- Added by the rate-limit migration (0003, 5.04); `SELECT` because `ON CONFLICT … DO UPDATE … RETURNING` reads the row:
--- GRANT SELECT, INSERT, UPDATE ON rate_limit_counters TO app;
+-- For the rate-limit table of migration 0003 (5.04); `SELECT` because `ON CONFLICT … DO UPDATE … RETURNING` reads the row.
+-- No DELETE: the retention job runs as the owner (§9):
+GRANT SELECT, INSERT, UPDATE ON rate_limit_counters TO app;
 -- Added by the dashboard-views migration (Phase 8):
 -- GRANT SELECT ON v_request_stats_daily, v_stage_latency_7d TO app;
 ```
@@ -397,19 +398,23 @@ SELECT llm_calls FROM daily_usage WHERE day = (now() AT TIME ZONE 'utc')::date; 
 ```
 `llm_calls >= DAILY_LLM_BUDGET` → `budget_exhausted` without an embedding. A request that passes can still lose the race at the reserve above, which stays the only thing that enforces the cap.
 
-### 7.4 Rate limit: fixed-window counter (planned, `0003`, 5.04)
+### 7.4 Rate limit: fixed-window counter (`0003`, 5.04; `infra/ratelimit.py`)
 ```sql
 -- One statement per window; the returned count is this request's place in the window.
+-- %(now)s is NULL in production (the database clock) and a fixed instant in tests.
+WITH clock AS (SELECT coalesce(%(now)s::timestamptz, now()) AS t)
 INSERT INTO rate_limit_counters AS rl (ip_hash, window_kind, window_start, hits)
-VALUES (%(ip_hash)s, %(kind)s, %(window_start)s, 1)
+SELECT %(ip_hash)s::text, %(kind)s::text,
+       date_trunc(%(kind)s::text, clock.t AT TIME ZONE 'utc') AT TIME ZONE 'utc', 1
+FROM clock
 ON CONFLICT (ip_hash, window_kind, window_start)
 DO UPDATE SET hits = rl.hits + 1
-RETURNING rl.hits;
+RETURNING rl.hits, rl.window_start, (SELECT t FROM clock) AS now;
 ```
-- Windows are the UTC minute (`kind = 'minute'`, limit `RATE_LIMIT_PER_MIN`) and the UTC day (`kind = 'day'`, `RATE_LIMIT_PER_DAY`). `window_start` is computed from one clock, the database's `now()` (or an injected `now` in tests), never from the instance's, so two instances agree on the window.
-- Order: the minute counter first. Only a request it admits touches the day counter, so a client that hammers the minute limit does not burn its daily quota with rejected requests. `hits > limit` → 429; `Retry-After` is the seconds to the end of that window.
+- Windows are the UTC minute (`kind = 'minute'`, limit `RATE_LIMIT_PER_MIN`) and the UTC day (`kind = 'day'`, `RATE_LIMIT_PER_DAY`). `window_start` is computed in the statement from one clock, the database's `now()` (or an injected `now` in tests), never from the instance's, so two instances agree on the window, and it is truncated in UTC whatever the session time zone is.
+- Order: the minute counter first. Only a request it admits touches the day counter, so a client that hammers the minute limit does not burn its daily quota with rejected requests. `hits > limit` → 429; `Retry-After` is the seconds to the end of that window (the `RETURNING` row gives the window start and the clock, so the remainder is computed without a second query). Both upserts of one request run in one transaction on one pooled connection, minute then day.
 - Fixed windows allow up to twice the limit across a boundary (10 requests in two seconds at 5 per minute). The day counter and the global budget bound the harm; a sliding log would need a row per request.
-- Atomic: the upsert takes the row lock, so parallel requests of one IP hash on different instances get distinct counts. Not run in eval mode.
+- Atomic: the upsert takes the row lock, so parallel requests of one IP hash on different instances get distinct counts. Not run in eval mode, and not run for a request with no `ip_hash` (dev and test only, Tech §12).
 
 ### 7.2 Answer cache
 - Read: `SELECT response FROM answer_cache WHERE cache_key = %s AND expires_at > now()`. On hit: `UPDATE … SET hit_count = hit_count + 1, last_hit_at = now()`. The runtime does both as one statement, `UPDATE … WHERE cache_key = %s AND expires_at > now() RETURNING response`: one round trip, and the row cannot expire between the read and the update.
@@ -484,7 +489,7 @@ DELETE FROM answer_cache WHERE expires_at < now();
 -- Old usage counters.
 DELETE FROM daily_usage WHERE day < (now() AT TIME ZONE 'utc')::date - 90;
 
--- Rate-limit windows (planned, 0003): the day window is the longest one, so two days is enough.
+-- Rate-limit windows (0003): the day window is the longest one, so two days is enough.
 DELETE FROM rate_limit_counters WHERE window_start < now() - interval '2 days';
 ```
 Index versions: keep the active one plus at most 2 previous ones. Older versions are set to `retired`

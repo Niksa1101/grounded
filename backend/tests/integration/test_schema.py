@@ -27,6 +27,7 @@ _EXPECTED_TABLES = {
     "chunks",
     "answer_cache",
     "daily_usage",
+    "rate_limit_counters",
     "request_logs",
     "eval_runs",
 }
@@ -232,7 +233,7 @@ def test_0002_applies_over_a_database_that_already_holds_v1_data(
             conn.execute(_INSERT_CHUNK, (version, _insert_document(conn, version)))
             conn.commit()
 
-        assert migrate(url).applied == ["0002_index_integrity"]
+        assert migrate(url).applied == ["0002_index_integrity", "0003_rate_limit"]
 
         with psycopg.connect(url) as conn:
             assert conn.execute("SELECT count(*) FROM index_versions").fetchone() == (1,)
