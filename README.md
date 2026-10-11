@@ -360,7 +360,7 @@ docs/        PRD, technical design, database design
 
 ## Quickstart (local)
 
-> Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. The question UI arrives in Phase 5. The first `ingest` needs `GEMINI_API_KEY` in `.env` (the corpus tag and the embedding model have pinned defaults), and takes two days on the free embedding tier (daily quota); re-running the same command resumes from the cache.
+> Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. The question page (a minimal one until Phase 5 ends) needs the API running and the two variables of `frontend/.env.example` in `frontend/.env.local`. The first `ingest` needs `GEMINI_API_KEY` in `.env` (the corpus tag and the embedding model have pinned defaults), and takes two days on the free embedding tier (daily quota); re-running the same command resumes from the cache.
 >
 > **Windows:** start the API with `grounded serve` (as below), not bare `uvicorn`: psycopg's async driver can't run
 > on the Proactor event loop that uvicorn picks there, and `serve` selects a compatible one. Always go through
@@ -387,7 +387,11 @@ uv run grounded serve --reload --port 8000
 ```
 
 ```bash
-cd frontend && npm ci && npm run dev
+cd frontend && cp .env.example .env.local   # then set PROXY_SHARED_SECRET to the same value as the API's
+```
+
+```bash
+cd frontend && npm ci && npm run dev   # http://localhost:3000
 ```
 
 Run checks and evals:
@@ -397,7 +401,13 @@ uv run ruff check . && uv run ruff format --check . && uv run pyright && uv run 
 ```
 
 ```bash
-cd frontend && npm run lint && npm run typecheck && npm run build
+cd frontend && npm run lint && npm run typecheck && npm test && npm run build
+```
+
+After a change to the API's request or response models, regenerate the committed frontend types (CI fails on stale ones):
+
+```bash
+cd frontend && npm run generate:api
 ```
 
 ```bash

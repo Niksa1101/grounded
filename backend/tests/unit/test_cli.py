@@ -220,3 +220,25 @@ def test_golden_sample_is_seeded(monkeypatch: pytest.MonkeyPatch) -> None:
     too_many = runner.invoke(app, ["golden", "sample", "--n", "99"])
     assert too_many.exit_code == 1
     assert "asked for 99 sections" in too_many.output
+
+
+def test_openapi_writes_the_schema_the_frontend_types_come_from(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(grounded.cli, "get_settings", make_settings)
+    out = tmp_path / "nested" / "openapi.json"
+
+    first = runner.invoke(app, ["openapi", "--out", str(out)])
+    assert first.exit_code == 0, first.output
+    raw = out.read_bytes()
+    schema = json.loads(raw)
+    assert "/v1/ask" in schema["paths"]
+    assert {"AskRequest", "AskResponse", "ErrorResponse"} <= set(schema["components"]["schemas"])
+    # LF only and a final newline, so a Windows checkout and CI produce the same bytes.
+    assert b"\r" not in raw
+    assert raw.endswith(b"}\n")
+
+    # Deterministic: the committed file is compared with a fresh run in CI.
+    second = runner.invoke(app, ["openapi", "--out", str(out)])
+    assert second.exit_code == 0, second.output
+    assert out.read_bytes() == raw

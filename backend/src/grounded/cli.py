@@ -139,6 +139,7 @@ from grounded.ingest.pipeline import (
 from grounded.ingest.pipeline import ingest as run_ingest
 from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
+from grounded.main import create_app
 from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalConfig, RetrievalMode
 from grounded.retrieval.index import NoActiveIndexError
@@ -190,6 +191,25 @@ def serve(
         # runs the server in a subprocess (--reload/--workers). Elsewhere uvicorn's choice is fine.
         loop="asyncio:SelectorEventLoop" if sys.platform == "win32" else "auto",
     )
+
+
+@app.command()
+def openapi(
+    out: Annotated[
+        Path,
+        typer.Option(help="Where to write the OpenAPI JSON.", show_default=False),
+    ],
+) -> None:
+    """Write the API's OpenAPI schema (the source of the frontend's generated types, Tech §19).
+
+    The schema is built from the route declarations, so no database, key or running server is
+    needed. The output is deterministic (the file is committed and CI regenerates it) and is
+    written with LF line endings on every platform, so a Windows checkout shows no diff.
+    """
+    schema = create_app(get_settings()).openapi()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes((json.dumps(schema, indent=2) + "\n").encode("utf-8"))
+    typer.echo(f"Wrote {out}")
 
 
 @app.command()

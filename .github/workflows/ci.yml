@@ -91,10 +91,28 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install dependencies
         run: npm ci
+      # The API types are generated from the backend's OpenAPI schema (Tech.md §19) and committed.
+      # Regenerate them here: a backend contract change without the new types fails this step.
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install the backend (for the OpenAPI dump)
+        run: uv sync --frozen --project ../backend
+      - name: Generated API types are current
+        env:
+          APP_ENV: test
+          UV_FROZEN: "1"
+        run: |
+          npm run generate:api
+          git diff --exit-code -- lib/openapi.json lib/api-types.ts \
+            || { echo "::error title=API types are stale::Run 'npm run generate:api' in frontend/ and commit lib/openapi.json and lib/api-types.ts."; exit 1; }
       - name: Lint
         run: npm run lint
       - name: Typecheck
         run: npm run typecheck
+      - name: Unit tests
+        run: npm test
       - name: Build
         run: npm run build
 

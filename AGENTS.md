@@ -238,7 +238,11 @@ uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key ../
 ```
 
 ```bash
-cd frontend && npm run lint && npm run typecheck && npm run build
+cd frontend && npm run lint && npm run typecheck && npm test && npm run build
+```
+
+```bash
+cd frontend && npm run generate:api   # dumps the OpenAPI schema (`uv run grounded openapi --out lib/openapi.json`) and regenerates lib/api-types.ts; commit both, CI checks they are current (Tech §19)
 ```
 
 Run the API through `grounded serve`, not bare `uvicorn`: it uses the app factory, keeps logs JSON, turns off uvicorn's
