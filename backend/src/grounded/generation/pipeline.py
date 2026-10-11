@@ -26,7 +26,9 @@ today is marked below.
   no_rag`` and from the eval harness, never from the HTTP API: the route does not pass a mode.
 - The answer cache (3.13, ``infra/answer_cache.py``) is looked up right after the active index is
   known and before the query is embedded, so a hit costs no embedding, retrieval or LLM call. The
-  daily budget reservation (5.05) must go **after** that lookup: a hit does not consume budget.
+  daily budget (5.05, ``infra/budget.py``) comes **after** that lookup, so a hit never consumes it:
+  an advisory check (no reserve) before the embedding, and one atomic reserve before every LLM
+  call, a validation retry included. Its token totals are added after each call.
   ``no_rag`` and ``APP_ENV=eval`` never read or write the cache. Only a response that was built
   successfully is stored; every failure raises before that point, so errors are never cached.
 """
@@ -50,6 +52,7 @@ from grounded.generation.params import GenerationParams
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
 from grounded.infra.answer_cache import AnswerCache, CacheKey, from_stored
+from grounded.infra.budget import DailyBudget
 from grounded.infra.provider_errors import ProviderBadOutput
 from grounded.infra.timing import Clock, StageTimer
 from grounded.ingest.embed import Embedder
@@ -106,6 +109,7 @@ class AskPipeline:
         no_rag_prompt: Prompt,
         pricing: Pricing,
         clock: Clock = time.perf_counter,
+        budget: DailyBudget | None = None,
     ) -> None:
         self._settings = settings
         self._pool = pool
@@ -120,6 +124,8 @@ class AskPipeline:
         self._generation = GenerationParams.from_settings(settings, provider.name)
         self._pricing = pricing
         self._clock = clock
+        # None when no cap is set (dev, test) and in eval mode (Tech §12, §15.6).
+        self._budget = budget
         # Off in eval mode (Tech §11): eval runs must measure the pipeline, not the cache.
         self._cache = (
             None
@@ -186,6 +192,9 @@ class AskPipeline:
                 cached = await self._cached_response(cache_key, request_id, trace, index_version)
                 if cached is not None:
                     return cached
+
+            if self._budget is not None:
+                await self._budget.check_available()  # advisory: spend no embedding on a lost day
 
             # Recorded before the call: a failed call may still have been billed.
             trace.embedding_model = self._settings.embedding_model
@@ -346,8 +355,10 @@ class AskPipeline:
         attempt_user = user
         while True:
             try:
+                if self._budget is not None:
+                    await self._budget.reserve()  # one unit per call: the retry reserves again
                 result = await self._generate(prompt, attempt_user)
-                trace.add_usage(result.usage)
+                await self._record_usage(trace, result.usage)
                 trace.llm_cache_hits += int(result.cache_hit)
                 mapped = map_citations(
                     result.parsed, labels, titles, require_citations=require_citations
@@ -364,8 +375,8 @@ class AskPipeline:
                 return Generation(result, mapped)
             except ProviderBadOutput as exc:
                 if exc.input_tokens or exc.output_tokens:
-                    trace.add_usage(
-                        Usage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens)
+                    await self._record_usage(
+                        trace, Usage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens)
                     )
                 if not exc.retryable or trace.validation_retries >= MAX_VALIDATION_RETRIES:
                     raise
@@ -378,6 +389,11 @@ class AskPipeline:
                     },
                 )
                 attempt_user = prompt.render_retry(user, error=exc.validation_error or str(exc))
+
+    async def _record_usage(self, trace: RequestTrace, usage: Usage) -> None:
+        trace.add_usage(usage)
+        if self._budget is not None:
+            await self._budget.add_tokens(usage)
 
     async def _generate(self, prompt: Prompt, user: str) -> GenerationResult[LLMAnswer]:
         return await self._provider.generate(

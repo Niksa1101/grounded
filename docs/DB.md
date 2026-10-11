@@ -390,7 +390,7 @@ ON CONFLICT (day) DO UPDATE
     WHERE du.llm_calls < %(limit)s
 RETURNING du.llm_calls;
 ```
-Token totals are added after the call with a plain `UPDATE`. `rerank_calls` uses the same pattern with its own cap.
+Token totals are added after the call with a plain `UPDATE ... WHERE day = (now() AT TIME ZONE 'utc')::date` (`infra/budget.py`, 5.05; the `app` grant on `daily_usage` is exactly what the reserve, the advisory read and this update need, and `tests/integration/test_budget.py` runs them under a role with only that grant). `rerank_calls` uses the same pattern with its own cap.
 
 **Advisory check (5.01, D31).** After the answer-cache lookup and before the query is embedded, a plain read decides whether to refuse early; it reserves nothing, so it cannot leak a unit:
 ```sql

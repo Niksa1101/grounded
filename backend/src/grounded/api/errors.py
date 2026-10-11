@@ -24,6 +24,7 @@ from fastapi.responses import JSONResponse
 from grounded.api.deps import get_request_logger, request_id_of
 from grounded.api.input_limits import InputRejectedError
 from grounded.api.security import ProxyAuthError
+from grounded.infra.budget import BudgetExhaustedError
 from grounded.infra.hashing import question_hash
 from grounded.infra.provider_errors import (
     ProviderBadOutput,
@@ -130,6 +131,17 @@ async def _rate_limited(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _budget_exhausted(request: Request, exc: Exception) -> JSONResponse:
+    # No Retry-After: the day ends at UTC midnight, and the demo's visitors read "tomorrow" from
+    # the message; the UI shows its own friendly state for the code (Tech §19).
+    return await _fail(
+        request,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "budget_exhausted",
+        "The demo's daily budget has been reached. Try again tomorrow (the day ends at 00:00 UTC).",
+    )
+
+
 async def _provider_unavailable(request: Request, exc: Exception) -> JSONResponse:
     retry_after = exc.retry_after_s if isinstance(exc, ProviderRateLimited) else None
     logger.warning(
@@ -183,6 +195,7 @@ def install_error_handlers(app: FastAPI) -> None:
         ProxyAuthError: _unauthorized,
         InputRejectedError: _input_rejected,
         RateLimitedError: _rate_limited,
+        BudgetExhaustedError: _budget_exhausted,
         ProviderRateLimited: _provider_unavailable,
         ProviderUnavailable: _provider_unavailable,
         ProviderTimeout: _provider_unavailable,

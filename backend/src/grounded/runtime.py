@@ -25,6 +25,7 @@ from grounded.generation.providers.eval_wrappers import EvalLLM
 from grounded.generation.providers.fake import StubJudgeProvider, StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
 from grounded.generation.providers.groq import GroqProvider
+from grounded.infra.budget import DailyBudget
 from grounded.infra.db import create_pool
 from grounded.infra.ratelimit import RateLimiter
 from grounded.infra.timing import Clock
@@ -195,6 +196,13 @@ async def open_runtime(
                 eval_llm = EvalLLM.open(settings, stack)
                 provider = eval_llm.wrap(provider)
         pricing = pricing or load_pricing()
+        # No budget in eval mode (Tech §15.6: the LLM calls of a run must neither use up the demo's
+        # day nor end in budget_exhausted) and none without a cap (dev and test; prod requires one).
+        budget = (
+            DailyBudget(pool, limit=settings.daily_llm_budget)
+            if settings.daily_llm_budget is not None and settings.app_env != "eval"
+            else None
+        )
         pipeline = AskPipeline(
             settings=settings,
             pool=pool,
@@ -205,6 +213,7 @@ async def open_runtime(
             no_rag_prompt=load_no_rag_prompt(),
             pricing=pricing,
             clock=clock,
+            budget=budget,
         )
         # Eval runs are told apart from real traffic in the table (DB.md §4, CI database only).
         request_logger = RequestLogger(
