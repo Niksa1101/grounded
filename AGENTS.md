@@ -127,7 +127,7 @@ Ask the Author before:
 
 ## 10. Commands
 
-Backend commands run from `backend/`; `eval` arrives in Phases 1–2, promptfoo in Phase 4 (keep this list current):
+Backend commands run from `backend/`, except the promptfoo one, which runs from the repository root (keep this list current):
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d db
