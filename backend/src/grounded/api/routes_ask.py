@@ -5,7 +5,9 @@ Every request writes one ``request_logs`` row (3.12). ``AskRoute`` wraps the rou
 starts before the body is parsed (a malformed body is a ``bad_request`` row too) and logs the
 success; the error handlers log the failures, each exactly once (``RequestTrace.written``).
 
-No proxy-secret check yet: the route is open in dev until ticket 5.03 adds it.
+The proxy secret is checked first of all (``api/security.py``), before the trace starts: a caller
+that fails it gets a 401 and no ``request_logs`` row, and one that passes it gives the trace its
+``source`` and ``ip_hash``.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.routing import APIRoute
 
 from grounded.api.deps import PipelineDep, RequestIdDep, TraceDep, get_request_logger, request_id_of
+from grounded.api.security import authenticate
 from grounded.schemas.api import AskRequest, AskResponse, ErrorResponse
 
 
@@ -25,8 +28,11 @@ class AskRoute(APIRoute):
         handle = super().get_route_handler()
 
         async def logged(request: Request) -> Response:
+            client = authenticate(request)  # raises ProxyAuthError -> 401 (no trace, no row)
             request_logger = get_request_logger(request)
-            trace = request_logger.start(request_id_of(request))
+            trace = request_logger.start(
+                request_id_of(request), source=client.source, ip_hash=client.ip_hash
+            )
             request.state.trace = trace
             response = await handle(request)  # a failure raises and is logged by its handler
             if trace.status is None:
@@ -48,6 +54,7 @@ router = APIRouter(prefix="/v1", tags=["ask"], route_class=AskRoute)
 @router.post(
     "/ask",
     responses={
+        401: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
         500: {"model": ErrorResponse},
         502: {"model": ErrorResponse},

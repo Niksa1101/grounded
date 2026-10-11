@@ -1,4 +1,4 @@
-"""Question normalization and its hash (Tech.md §11, DB.md §4).
+"""Question normalization and its hash (Tech.md §11, DB.md §4), and the keyed hash of a client IP.
 
 One definition, two users: ``request_logs.question_hash`` (3.12) and the answer cache key (3.13), so
 "the same question" means the same thing in the logs and in the cache.
@@ -15,6 +15,7 @@ inside the text are kept.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import unicodedata
 
 _TRAILING = frozenset(".,;:!?…。")
@@ -32,3 +33,13 @@ def normalize_question(text: str) -> str:
 def question_hash(text: str) -> str:
     """sha256 (hex) of the normalized question."""
     return hashlib.sha256(normalize_question(text).encode("utf-8")).hexdigest()
+
+
+def hash_ip(ip: str, key: bytes) -> str:
+    """HMAC-SHA256 (hex) of a client IP, keyed with ``IP_HASH_SECRET`` (Tech.md §12).
+
+    Keyed on purpose: the IPv4 space is small enough to reverse a plain sha256 by brute force, so an
+    unkeyed hash would not be pseudonymous. Callers pass the canonical spelling of the address
+    (``api/security.py``) so one client always maps to one hash.
+    """
+    return hmac.new(key, ip.encode("utf-8"), hashlib.sha256).hexdigest()

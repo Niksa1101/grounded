@@ -22,6 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from grounded.api.deps import get_request_logger, request_id_of
+from grounded.api.security import ProxyAuthError
 from grounded.infra.hashing import question_hash
 from grounded.infra.provider_errors import (
     ProviderBadOutput,
@@ -95,6 +96,19 @@ async def _bad_request(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _unauthorized(request: Request, exc: Exception) -> JSONResponse:
+    # Raised before the request trace exists (api/security.py), so ``_fail`` writes no row. The
+    # body does not say which check failed; the log does (a deploy with a wrong secret is the
+    # usual cause, and the reason is the first thing to look at).
+    reason = exc.reason if isinstance(exc, ProxyAuthError) else "unknown"
+    logger.warning(
+        "proxy auth rejected", extra={"request_id": str(request_id_of(request)), "reason": reason}
+    )
+    return await _fail(
+        request, status.HTTP_401_UNAUTHORIZED, "unauthorized", "Missing or invalid credentials."
+    )
+
+
 async def _provider_unavailable(request: Request, exc: Exception) -> JSONResponse:
     retry_after = exc.retry_after_s if isinstance(exc, ProviderRateLimited) else None
     logger.warning(
@@ -145,6 +159,7 @@ async def _no_active_index(request: Request, exc: Exception) -> JSONResponse:
 def install_error_handlers(app: FastAPI) -> None:
     handlers: dict[type[Exception], Any] = {
         RequestValidationError: _bad_request,
+        ProxyAuthError: _unauthorized,
         ProviderRateLimited: _provider_unavailable,
         ProviderUnavailable: _provider_unavailable,
         ProviderTimeout: _provider_unavailable,

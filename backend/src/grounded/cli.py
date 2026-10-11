@@ -180,8 +180,8 @@ def serve(
         host=host,
         port=port,
         reload=reload,
-        # uvicorn's access log prints raw client IPs (AGENTS.md §6.13). Request logging with an
-        # HMAC'd IP comes with request_logs.
+        # uvicorn's access log prints raw client IPs (AGENTS.md §6.13). The request_logs row has the
+        # HMAC'd IP instead (api/security.py).
         access_log=False,
         # Keep our JSON root logger instead of uvicorn's own dictConfig.
         log_config=None,
