@@ -217,7 +217,9 @@ async def test_the_pool_is_closed_with_a_timeout_inside_the_platforms_500_ms(
     assert runtime_module.POOL_CLOSE_TIMEOUT_S < 0.5
 
 
-def test_the_production_env_of_tech_18_covers_what_prod_startup_demands() -> None:
+def test_the_production_env_of_tech_18_covers_what_prod_startup_demands(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     text = (ROOT / "docs" / "Tech.md").read_text(encoding="utf-8")
     [line] = [ln for ln in text.splitlines() if ln.startswith("- Production env:")]
     documented = set(re.findall(r"`([A-Z][A-Z0-9_]+)(?:=[^`]*)?`", line))
@@ -228,6 +230,9 @@ def test_the_production_env_of_tech_18_covers_what_prod_startup_demands() -> Non
     required |= {"APP_ENV", "GEMINI_API_KEY", "GEMINI_MODEL"}
     assert required <= documented, sorted(required - documented)
 
+    # The CI job sets DATABASE_URL in the environment, which would fill a field the test removes.
+    for var in ("DATABASE_URL", "PROXY_SHARED_SECRET", "IP_HASH_SECRET", "DAILY_LLM_BUDGET"):
+        monkeypatch.delenv(var, raising=False)
     env = {
         "app_env": "prod",
         "database_url": "postgresql://u:p@db.example/app",
