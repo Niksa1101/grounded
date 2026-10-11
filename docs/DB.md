@@ -329,8 +329,11 @@ Design notes:
 ## 5. Roles and privileges
 
 ```sql
--- Run once per environment by the owner (Neon: the project owner role).
-CREATE ROLE app LOGIN PASSWORD '<from secret manager>';
+-- Run once per environment by the owner (Neon: the project owner role), after the migrations.
+-- The role is created without a password; the password is set afterwards in psql with `\password app`
+-- (generated, kept in a secret manager, never in a migration, a file or a shell history).
+-- Created in SQL, not in the Neon console: console roles join `neon_superuser`, SQL roles do not.
+CREATE ROLE app LOGIN;
 
 GRANT USAGE ON SCHEMA public TO app;
 GRANT SELECT ON index_versions, documents, chunks, eval_runs TO app;
@@ -350,6 +353,9 @@ GRANT SELECT, INSERT, UPDATE ON rate_limit_counters TO app;
 | `app` | FastAPI runtime | read index, write logs/cache/budget |
 
 The runtime can never modify the index or delete telemetry.
+
+The production procedure is `docs/runbooks/neon-production.md` (5.09). Its SQL block is a copy of the block above, and
+`tests/unit/test_neon_runbook.py` fails when the two differ, so they change together.
 
 ## 6. Retrieval queries
 

@@ -7,6 +7,11 @@ only, that step runs on a push to ``main`` and only when the repository variable
 ``EVAL_RECORD_RUNS`` is ``true`` (unset it is empty, so the step is skipped), and no pull request
 run can reach it.
 
+``ingest.yml`` (ticket 5.09) is the other workflow that can write to production, by a manual
+dispatch from ``main``: the last section of this file pins who may start it, which steps see the
+secret, that user input never reaches a script inline, and that it restores the same caches as
+``warm-cache.yml``.
+
 The same file's ``eval`` job is a required status check of ``main`` (Tech §17), which only works
 if every PR gets an ``eval`` status and a red one cannot be replaced by a green skipped one: the
 second half of the file pins the triggers, the job's ``if`` and the job name. The files are read as
@@ -20,7 +25,8 @@ from pathlib import Path
 
 import pytest
 
-WORKFLOWS = Path(__file__).resolve().parents[3] / ".github" / "workflows"
+ROOT = Path(__file__).resolve().parents[3]
+WORKFLOWS = ROOT / ".github" / "workflows"
 SECRET = "DATABASE_URL_DIRECT"
 RECORD_STEP = "Record the run in eval_runs"
 
@@ -45,6 +51,12 @@ def step_named(name: str, title: str) -> str:
     return block
 
 
+def step_title(block: str) -> str:
+    match = re.search(r"(?m)^      - name: (.*)$", block)
+    assert match is not None, "the step has no name"
+    return match.group(1)
+
+
 def step_condition(block: str) -> str:
     """The step's ``if:`` expression, a plain or a folded (``>-``) scalar, on one line."""
     match = re.search(r"(?m)^        if: (?:>-\n((?:          .*\n?)+)|(.+))$", block)
@@ -59,8 +71,16 @@ def job_condition(name: str) -> str:
     return " ".join(match.group(1).split())
 
 
+INGEST_STEPS_WITH_THE_SECRET = {
+    "Guard the production connection",
+    "Migrate Neon",
+    "Ingest",
+    "Index versions",
+}
+
+
 @pytest.mark.parametrize("workflow", sorted(p.name for p in WORKFLOWS.glob("*.yml")))
-def test_the_production_secret_is_referenced_only_by_the_record_step_of_eval_yml(
+def test_the_production_secret_is_referenced_only_by_the_steps_that_need_it(
     workflow: str,
 ) -> None:
     holders = [b for b in steps(workflow) if SECRET in b]
@@ -68,6 +88,10 @@ def test_the_production_secret_is_referenced_only_by_the_record_step_of_eval_yml
     if workflow == "eval.yml":
         assert len(holders) == 1
         assert f"- name: {RECORD_STEP}" in holders[0]
+    elif workflow == "ingest.yml":
+        # The one workflow made to write to production: four steps, each with its own env entry.
+        assert {step_title(b) for b in holders} == INGEST_STEPS_WITH_THE_SECRET
+        assert all(f"{SECRET}: ${{{{ secrets.{SECRET} }}}}" in b for b in holders)
     else:
         assert holders == []  # a PR workflow, the cache seeding, the retrieval eval: none of them
 
@@ -147,3 +171,105 @@ def test_concurrency_is_on_the_job_so_a_skipped_run_cannot_cancel_an_eval_in_pro
     assert f"    concurrency:\n      group: {group}\n" in text
     # Only a PR run is cancelled by a newer one; main always finishes.
     assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+
+
+# --- ingest.yml: the manual write to production Neon (ticket 5.09) --------------------------------
+
+
+def run_blocks(name: str) -> list[str]:
+    """The script text of every ``run:`` step, block scalars and one-liners alike."""
+    lines = code(name).splitlines()
+    blocks: list[str] = []
+    for i, line in enumerate(lines):
+        match = re.match(r"^(\s*)run: (.*)$", line)
+        if match is None:
+            continue
+        indent, rest = len(match.group(1)), match.group(2)
+        if rest.strip() not in {"|", ">", "|-", ">-"}:
+            blocks.append(rest)
+            continue
+        body: list[str] = []
+        for following in lines[i + 1 :]:
+            if following.strip() and len(following) - len(following.lstrip()) <= indent:
+                break
+            body.append(following)
+        blocks.append("\n".join(body))
+    return blocks
+
+
+def test_ingest_starts_only_from_a_manual_dispatch_on_main() -> None:
+    text = code("ingest.yml")
+    triggers = text.split("\njobs:\n", 1)[0]
+
+    assert re.search(r"(?m)^on:\n  workflow_dispatch:", triggers)
+    for other in ("pull_request", "push", "schedule", "workflow_run", "workflow_call"):
+        assert not re.search(rf"(?m)^  {other}:", triggers)
+    assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in text
+
+
+def test_ingest_activates_only_on_request_and_never_overlaps_itself() -> None:
+    text = code("ingest.yml")
+
+    assert re.search(
+        r"(?m)^      activate:\n(?:        .*\n)*?        default: false\n(?:        .*\n)*?"
+        r"        type: boolean",
+        text,
+    )
+    assert "group: ingest-neon-production\n  cancel-in-progress: false" in text
+    ingest = step_named("ingest.yml", "Ingest")
+    assert 'if [ "$ACTIVATE" = "true" ]; then' in ingest  # the flag is conditional, never fixed
+    assert re.findall(r"--activate", ingest) == ["--activate"]
+
+
+def test_user_input_reaches_a_script_only_through_env() -> None:
+    for script in run_blocks("ingest.yml"):
+        assert "${{" not in script, script  # no inputs.*, steps.*, secrets.* inside a script
+    mentions = [ln for ln in code("ingest.yml").splitlines() if "inputs.ref" in ln]
+    assert mentions == ["          INPUT_REF: ${{ inputs.ref }}"]
+    validate = step_named("ingest.yml", "Validate the inputs")
+    assert "=~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" in validate
+
+
+def test_ingest_never_prints_a_secret_and_pins_every_action() -> None:
+    for script in run_blocks("ingest.yml"):
+        for line in script.splitlines():
+            if re.search(r"\b(echo|printf|tee)\b", line):
+                assert not re.search(r"\$\{?(DATABASE_URL_DIRECT|GEMINI_API_KEY|url)\b", line), line
+    uses = re.findall(r"(?m)^\s+(?:- )?uses: (\S+)", code("ingest.yml"))
+    assert uses
+    for action in uses:
+        assert action.startswith("./") or re.fullmatch(r".+@[0-9a-f]{40}", action), action
+
+
+def test_ingest_checks_the_connection_first_and_migrates_before_it_ingests() -> None:
+    names = re.findall(r"(?m)^      - name: (.*)$", "".join(steps("ingest.yml")))
+    guard = step_named("ingest.yml", "Guard the production connection")
+
+    assert names.index("Guard the production connection") < names.index("Restore the corpus clone")
+    assert names.index("Preflight, texts still to embed") < names.index("Migrate Neon")
+    assert names.index("Migrate Neon") < names.index("Ingest") < names.index("Index versions")
+    for refusal in ('-z "$url"', "*-pooler*", "localhost"):
+        assert refusal in guard
+    assert "::add-mask::$host" in guard
+
+
+def test_ingest_uses_the_cache_keys_of_warm_cache_yml() -> None:
+    ingest, warm = code("ingest.yml"), code("warm-cache.yml")
+    embeddings_key = (
+        "embeddings-${{ steps.cfg.outputs.embedding_model }}-"
+        "${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}-${{ github.run_attempt }}"
+    )
+
+    for text in (ingest, warm):
+        assert f"path: .cache/embeddings.sqlite\n          key: {embeddings_key}" in text
+        assert (
+            "restore-keys: |\n            embeddings-${{ steps.cfg.outputs.embedding_model }}"
+            in text
+        )
+        assert "path: .cache/corpus\n          key: corpus-${{ steps." in text
+    # The embeddings are saved by the shared action, which derives the same key.
+    assert "uses: ./.github/actions/save-embeddings" in ingest
+    save = (ROOT / ".github" / "actions" / "save-embeddings" / "action.yml").read_text(
+        encoding="utf-8"
+    )
+    assert embeddings_key in save
