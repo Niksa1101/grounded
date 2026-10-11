@@ -287,6 +287,11 @@ format mismatch ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)). When it
 and GitHub showed the PR as mergeable; making it required (#88) turned the same PR into `BLOCKED`. The inconclusive
 outcome was seen in real CI runs, and the report of all three outcomes is pinned by committed fixture tests.
 
+![The generation eval fails a PR whose prompt contradicts the schema: the bot comment with the gate table](docs/images/gate-blocked-generation-pr.png)
+
+*A crop of the CI bot's comment on the demo PR [#86](https://github.com/Niksa1101/grounded/pull/86), taken on 2026-10-11 from
+the public PR page. The comment is the workflow's own output; nothing in it was edited.*
+
 ## How confidence is computed
 
 > **Drafted by the agent** while implementing `generation/confidence.py` under the Author's delegation (ticket

@@ -617,7 +617,7 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   `-latest` migration is gradual, over one to two months. The risk is a workflow that fails on the new image (Python and
   Node toolchains, the `pgvector` service, cache keys that include the OS), including the two quota-limited workflows.
   A separate task already exists; nothing was changed here.
-- **The branch `phase-4/gate-demo` is kept** (PR #86 is closed unmerged), so the evidence of the demonstration can be
+- **The branch `phase-4/gate-demo` is kept** (PR #86 is closed unmerged right after the closeout PR merges), so the evidence of the demonstration can be
   re-run or inspected. Deleting a branch needs the Author's go (AGENTS.md §5); the Phase 2 demo branch was deleted by
   the ticket.
 - Golden set v2 ideas (from the Phase 0–1 review, item #4): write questions without looking at the documentation
