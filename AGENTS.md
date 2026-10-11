@@ -242,6 +242,10 @@ cd frontend && npm run lint && npm run typecheck && npm test && npm run build
 ```
 
 ```bash
+cd frontend && npm run dev   # then /?fake=<name> shows a canned state of the ask page (dev only, no backend; names in Tech §19)
+```
+
+```bash
 cd frontend && npm run generate:api   # dumps the OpenAPI schema (`uv run grounded openapi --out lib/openapi.json`) and regenerates lib/api-types.ts; commit both, CI checks they are current (Tech §19)
 ```
 
