@@ -360,7 +360,7 @@ docs/        PRD, technical design, database design
 
 ## Quickstart (local)
 
-> Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. The question page (a minimal one until Phase 5 ends) needs the API running and the two variables of `frontend/.env.example` in `frontend/.env.local`. The first `ingest` needs `GEMINI_API_KEY` in `.env` (the corpus tag and the embedding model have pinned defaults), and takes two days on the free embedding tier (daily quota); re-running the same command resumes from the cache.
+> Requires Docker, [uv](https://docs.astral.sh/uv/), Node.js LTS. The question page needs the API running and the two variables of `frontend/.env.example` in `frontend/.env.local`. The first `ingest` needs `GEMINI_API_KEY` in `.env` (the corpus tag and the embedding model have pinned defaults), and takes two days on the free embedding tier (daily quota); re-running the same command resumes from the cache.
 >
 > **Windows:** start the API with `grounded serve` (as below), not bare `uvicorn`: psycopg's async driver can't run
 > on the Proactor event loop that uvicorn picks there, and `serve` selects a compatible one. Always go through
@@ -393,6 +393,8 @@ cd frontend && cp .env.example .env.local   # then set PROXY_SHARED_SECRET to th
 ```bash
 cd frontend && npm ci && npm run dev   # http://localhost:3000
 ```
+
+Every state of the ask page without a backend or an LLM call (development only, never in a production build): open `http://localhost:3000/?fake=answered` and press Ask. The names are `answered`, `partial`, `insufficient`, `slow`, `rate_limited`, `rate_limited_day`, `budget`, `error`, `proxy_timeout` and `network` (Tech §19).
 
 Run checks and evals:
 
