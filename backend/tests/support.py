@@ -67,13 +67,20 @@ async def app_client(
     provider: LLMProvider | None = None,
     raise_app_exceptions: bool = True,
     clock: Clock = time.perf_counter,
+    client: tuple[str, int] | None = None,
+    direct_api: bool = True,
 ) -> AsyncGenerator[httpx.AsyncClient]:
     """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client.
 
     The embedder and provider default to fakes, so no test builds a real one. A real server turns an
     unhandled error into a 500 response; pass ``raise_app_exceptions=False`` to see that here
-    instead of having the exception re-raised in the test.
+    instead of having the exception re-raised in the test. ``client`` is the socket peer the app
+    sees (``request.client``). ``direct_api`` lets a test call ``/v1/*`` without the proxy headers
+    (``ALLOW_DIRECT_API``, 5.03); the tests of the proxy check itself pass ``False`` to use the
+    settings as given.
     """
+    if direct_api:
+        settings = settings.model_copy(update={"allow_direct_api": True})
     app = create_app(
         settings,
         embedder=embedder or FakeEmbedder(dim=settings.embedding_dim),
@@ -81,9 +88,11 @@ async def app_client(
         clock=clock,
     )
     async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app, raise_app_exceptions=raise_app_exceptions)
-        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            yield client
+        transport = httpx.ASGITransport(
+            app=app, raise_app_exceptions=raise_app_exceptions, client=client or ("127.0.0.1", 123)
+        )
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
+            yield http
 
 
 # --- Hand-built index rows (retrieval tests) -----------------------------------------------------

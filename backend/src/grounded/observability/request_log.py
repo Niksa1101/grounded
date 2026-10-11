@@ -13,8 +13,9 @@ and question text must not reach stdout (AGENTS.md §6.13).
 
 What the row holds that the response does not: ``question`` (kept for the retention job of 5.11),
 ``question_hash`` (``infra/hashing.py``, the same normalization as the answer cache of 3.13),
-``error_code`` and the counts of invalid citations. ``ip_hash`` stays NULL until 5.03 and ``source``
-is ``'api'`` until 5.03 sets ``'web'`` behind the proxy. The row's ``id`` is the ``request_id``, so
+``error_code``, the counts of invalid citations and ``ip_hash`` (the HMAC of the client IP, never
+the IP: ``api/security.py``, 5.03). ``source`` is ``'web'`` behind the proxy, ``'api'`` for a direct
+call and ``'eval'`` in eval mode. The row's ``id`` is the ``request_id``, so
 a log line and a row correlate directly. A ``bad_request`` row has no ``question`` (the text was
 rejected, possibly because it is huge or not text at all); only its hash, when one can be computed.
 ``dropped_claim_count`` and ``removed_url_count`` have no column; they go to the stdout summary line
@@ -61,13 +62,13 @@ Source = Literal["web", "api", "eval"]
 
 _INSERT = """
 INSERT INTO request_logs (
-    id, source, question, question_hash, http_status, outcome, cache_hit, provider, model,
+    id, source, question, question_hash, ip_hash, http_status, outcome, cache_hit, provider, model,
     fallback_used, validation_retries, rerank_used, rerank_error, prompt_version, index_version_id,
     retrieval_config_hash, latency_total_ms, latency_embed_ms, latency_retrieval_ms,
     latency_rerank_ms, latency_llm_ms, input_tokens, output_tokens, shadow_cost_usd,
     citation_count, invalid_citation_count, min_claim_confidence, error_code
 ) VALUES (
-    %(id)s, %(source)s, %(question)s, %(question_hash)s, %(http_status)s, %(outcome)s,
+    %(id)s, %(source)s, %(question)s, %(question_hash)s, %(ip_hash)s, %(http_status)s, %(outcome)s,
     %(cache_hit)s, %(provider)s, %(model)s, %(fallback_used)s, %(validation_retries)s,
     %(rerank_used)s, %(rerank_error)s, %(prompt_version)s, %(index_version_id)s,
     %(retrieval_config_hash)s, %(latency_total_ms)s, %(latency_embed_ms)s,
@@ -86,6 +87,8 @@ class RequestTrace:
     timer: StageTimer
     question: str | None = None
     question_hash: str | None = None  # set directly when the question is not stored (bad_request)
+    source: Source | None = None  # from the caller (web or api); None: the logger's own default
+    ip_hash: str | None = None  # HMAC of the client IP; None when it cannot be computed
     provider: str | None = None
     model: str | None = None
     prompt_version: str | None = None
@@ -175,8 +178,12 @@ class RequestLogger:
         self._clock = clock
         self._source: Source = source
 
-    def start(self, request_id: UUID) -> RequestTrace:
-        return RequestTrace(request_id=request_id, timer=StageTimer(self._clock))
+    def start(
+        self, request_id: UUID, *, source: Source | None = None, ip_hash: str | None = None
+    ) -> RequestTrace:
+        return RequestTrace(
+            request_id=request_id, timer=StageTimer(self._clock), source=source, ip_hash=ip_hash
+        )
 
     async def write(
         self,
@@ -233,9 +240,11 @@ class RequestLogger:
         timer = trace.timer
         return {
             "id": trace.request_id,
-            "source": self._source,
+            # An eval run is eval whoever called it; otherwise the caller says web or api.
+            "source": self._source if self._source == "eval" else trace.source or self._source,
             "question": trace.question,
             "question_hash": trace.digest(),
+            "ip_hash": trace.ip_hash,
             "http_status": http_status,
             "outcome": outcome,
             "cache_hit": trace.cache_hit,
