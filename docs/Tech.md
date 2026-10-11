@@ -49,7 +49,7 @@ flowchart LR
     end
 ```
 
-Request path summary: **validate → rate-limit → cache lookup → embed query → hybrid retrieve → (rerank) → build
+Request path summary: **validate → rate-limit → cache lookup → budget check (advisory) → embed query → hybrid retrieve → (rerank) → build
 context → budget reserve → generate (structured) → validate/retry/fallback → map citations → confidence → log → respond.**
 
 ## 2. Tech stack
@@ -167,8 +167,8 @@ or with `ALLOW_DIRECT_API=true`.
 | `CONFIDENCE_UNCITED_CAP` | `0.2` | most a claim without a valid citation can score; at most `0.2` (§9.8 invariant) |
 | `QUERY_EMBEDDING_CACHE_SIZE` | `256` | prod only: size of the in-memory LRU of question vectors (§11); dev/CI/eval use SQLite |
 | `QUERY_EMBEDDING_TIMEOUT_S` | `3.0` | the embed stage of `/v1/ask` (§6): one attempt, no retry, no pacing; the `EMBEDDING_*` retry settings apply to ingest and the evals only |
-| `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `30` | per IP hash |
-| `DAILY_LLM_BUDGET` | below provider free RPD | global cap; optional until Phase 5 |
+| `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `30` (5.04 moves the day default to `20`) | per IP hash, Postgres fixed windows (§12). Demo values (Vercel env): `5`, `20` |
+| `DAILY_LLM_BUDGET` | unset in dev/test; **required when `APP_ENV=prod`** (5.05) | global cap on LLM calls per UTC day, below the provider's free RPD. Demo value: `300` of `gemini-3.5-flash-lite`'s 500 (PRD §12, D31). Off in eval mode |
 | `ANSWER_CACHE_TTL_DAYS` | `30` | ≤ retention |
 | `PROXY_SHARED_SECRET` | random 32+ bytes | FE→BE auth |
 | `IP_HASH_SECRET` | random 32+ bytes | HMAC for IPs |
@@ -288,11 +288,12 @@ sequenceDiagram
     participant R as Cohere (opt.)
     participant L as LLM router
     PX->>API: POST {question} + secret + client IP
-    API->>API: validate, rate-limit (memory)
+    API->>DB: validate, rate-limit (counter upsert)
     API->>C: lookup(cache_key)
     alt hit
         C-->>API: response
     else miss
+        API->>DB: budget check (advisory, no reserve)
         API->>E: embed(question, RETRIEVAL_QUERY)
         API->>DB: hybrid SQL (dense ∪ FTS → RRF)
         opt rerank enabled & under cap
@@ -546,8 +547,8 @@ Eval LLM cache details (`generation/providers/eval_wrappers.py`, 4.03):
 
 - **Proxy secret:** `/v1/*` requires `X-Proxy-Secret == PROXY_SHARED_SECRET` (constant-time compare). Without it → 401, unless `ALLOW_DIRECT_API=true` (dev only). `/healthz` and `/readyz` are public.
 - **Client IP:** trusted from `X-Client-IP` **only** when the proxy secret is valid; otherwise the socket peer. The IP is immediately HMAC-hashed (`IP_HASH_SECRET`). The raw IP is never logged or stored.
-- **Rate limit:** in-memory sliding window per IP hash (`RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY`). Single instance, so memory is correct. A reset on restart is acceptable. Response: 429 + `Retry-After`, outcome `rate_limited`.
-- **Global budget:** atomic reserve in `daily_usage` before each LLM call (DB.md §7.1). Exhausted → HTTP 503 with code `budget_exhausted` (the UI shows a friendly "demo budget reached" state), outcome logged. Cache hits don't consume budget.
+- **Rate limit (D31, 5.01):** Postgres **fixed-window** counters per IP hash, one atomic upsert per window (`rate_limit_counters`, DB.md §7.4): the minute window is counted first, and the day window only for a request the minute window admitted. Why not memory: on Vercel the instances a burst creates are not documented (PRD §12), so a per-instance counter would multiply the limit by an unknown number. Fixed windows (the UTC minute and the UTC day) are simpler than sliding ones and need one row per window, not one per request; the cost is that a client can send up to twice `RATE_LIMIT_PER_MIN` across a minute boundary, which the day counter and the budget still bound. Checked before the answer-cache lookup, so a cache hit counts too. Over the limit → 429 + `Retry-After` (seconds to the end of the window: at most 60 for the minute, up to a day for the day window) + `retry_after_s`, outcome `rate_limited`. The window clock is the database's (or an injected one in tests), never the instance's. A counter query that fails is an `internal_error` like any other DB failure: the request path needs the database anyway, so the limiter does not fail open. Off in eval mode (§15.6).
+- **Global budget:** atomic reserve in `daily_usage` before each LLM call (DB.md §7.1). Exhausted → HTTP 503 with code `budget_exhausted` (the UI shows a friendly "demo budget reached" state), outcome logged. Cache hits don't consume budget. **Advisory check:** after the cache lookup and before the embed stage, a plain `SELECT` (no reserve) refuses the request with the same `budget_exhausted` when today's `llm_calls` has already reached `DAILY_LLM_BUDGET`. Without it an exhausted day would still spend one query embedding per refused request, from a quota (1K texts per day) that ingest and the evals share (§5.6). The check is advisory: a request that passes it can still lose the race at the reserve, which is the one that enforces the cap. `DAILY_LLM_BUDGET` is required when `APP_ENV=prod` (`Settings` refuses to start without it, like the other prod secrets) and is unset (no cap) in dev and test. Off in eval mode (§15.6).
 - **Input limits:** question 3–500 chars after trimming; reject control characters; body size limit 4 KB.
 - **CORS:** not needed (browser talks only to Vercel). Backend CORS is locked to nothing.
 - **Output rendering:** the frontend renders Markdown **without** raw HTML (no `rehype-raw`). Citation URLs come from the DB, never from model text. The server removes the links and URLs the model writes in `answer_markdown` (§9.6), but that is a regex, not a Markdown parser: it is the first layer and a metric, not the guarantee (what it cannot see: PRD §12). The guarantee is planned for the frontend (Phase 5, PRD §12): model Markdown is rendered with `a` and `img` disallowed (their text kept), and claims and follow-up questions as plain text. The only links a reader can click are then the citation source cards, which open in a new tab with `rel="noopener noreferrer"`.
@@ -939,8 +940,8 @@ Notes:
 - Hobby limits (checked 2026-09-24, re-verify in Phase 5): max duration 300 s, 2 GB / 1 vCPU, Python bundle ≤ 500 MB; monthly allotment 1M invocations, 4 h Active CPU (time spent waiting on I/O, e.g. LLM calls, doesn't count), 360 GB-h provisioned memory; runtime logs kept 1 h; non-commercial use only.
 - Entrypoint: Vercel looks for a module-level FastAPI `app`. A thin entry module (`app = create_app()`) is referenced via `[tool.vercel] entrypoint` in `pyproject.toml`; `grounded.main` itself stays free of import-time side effects.
 - Deploys via the Vercel Git integration: production from `main` only. Preview deployments get no production secrets.
-- Production env: `APP_ENV=prod`, `DATABASE_URL` (app role, **pooled**), provider keys, `PROXY_SHARED_SECRET`, `IP_HASH_SECRET`.
-- Serverless consequences: no long-lived process. The DB pool is per instance (Neon's pooler absorbs connections). In-process state (rate limiter, circuit breaker) is per instance: see PRD §12. Durable telemetry lives in `request_logs`, not in platform logs. The filesystem is ephemeral.
+- Production env: `APP_ENV=prod`, `DATABASE_URL` (app role, **pooled**), provider keys, `PROXY_SHARED_SECRET`, `IP_HASH_SECRET`, `DAILY_LLM_BUDGET` (`300`), `RATE_LIMIT_PER_MIN` (`5`), `RATE_LIMIT_PER_DAY` (`20`).
+- Serverless consequences: no long-lived process. The DB pool is per instance (Neon's pooler absorbs connections). In-process state (the circuit breaker, the query-embedding LRU) is per instance: see PRD §12. The rate limiter is not in-process: its counters are in Postgres (§12, D31). Durable telemetry lives in `request_logs`, not in platform logs. The filesystem is ephemeral.
 - Function region: set closest to Neon (AWS US East 2) in Phase 5.
 - Startup: open pool, load the active index version, warm providers lazily. `/readyz` reflects readiness.
 - Outside Vercel (local dev) the API runs with `grounded serve` (app factory, JSON logs, uvicorn access log off because it prints raw IPs).

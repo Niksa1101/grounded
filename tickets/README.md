@@ -192,7 +192,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [4.11](phase-4/4.11-judge-agreement.md) | Judge–human agreement | Build | A+G | done | [#82](https://github.com/Niksa1101/grounded/pull/82), [#83](https://github.com/Niksa1101/grounded/pull/83), [#84](https://github.com/Niksa1101/grounded/pull/84) (4.11a, tooling in three stacked PRs), [#85](https://github.com/Niksa1101/grounded/pull/85) (4.11b, the labels and the measured agreement) |
 | [4.12](phase-4/4.12-closeout.md) | Gate demonstrations and Phase 4 closeout | Closeout | A+G | done | [#86](https://github.com/Niksa1101/grounded/pull/86) (demo, closed unmerged), [#87](https://github.com/Niksa1101/grounded/pull/87) (closeout) |
 | **5** | **[UI, protection, deploy (MVP)](phase-5/README.md)** | | | | |
-| [5.01](phase-5/5.01-decision-rate-limit.md) | Decision: rate limiter on serverless, limit and budget numbers | Decision | D | todo | |
+| [5.01](phase-5/5.01-decision-rate-limit.md) | Decision: rate limiter on serverless, limit and budget numbers | Decision | D | done | |
 | [5.02](phase-5/5.02-decision-deploy.md) | Decision: deployment parameters (region, durations, timeouts) | Decision | D | todo | |
 | [5.03](phase-5/5.03-proxy-auth.md) | Proxy secret, trusted client IP and IP hashing | Build | G | todo | |
 | [5.04](phase-5/5.04-rate-limit.md) | Input limits and the rate limiter | Build | G | todo | |
