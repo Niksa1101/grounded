@@ -199,7 +199,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [5.05](phase-5/5.05-budget.md) | Global daily LLM budget | Build | G | done | [#93](https://github.com/Niksa1101/grounded/pull/93) |
 | [5.06](phase-5/5.06-frontend-tracer.md) | Tracer bullet: frontend proxy, generated types, minimal ask page | Build | G | done | [#94](https://github.com/Niksa1101/grounded/pull/94) |
 | [5.07](phase-5/5.07-ask-page.md) | Complete ask page | Build | G | done | [#95](https://github.com/Niksa1101/grounded/pull/95), [#96](https://github.com/Niksa1101/grounded/pull/96) (stacked) |
-| [5.08](phase-5/5.08-backend-vercel.md) | Backend Vercel configuration | Build | G | todo | |
+| [5.08](phase-5/5.08-backend-vercel.md) | Backend Vercel configuration | Build | G | blocked: preview deploy pending Author; retrieval timeout field pending Author decision | [#97](https://github.com/Niksa1101/grounded/pull/97) |
 | [5.09](phase-5/5.09-neon-prod.md) | Neon production: migrate, `app` role, `ingest.yml` | Build | G (A runs) | todo | |
 | [5.10](phase-5/5.10-deploy.md) | Vercel projects, env vars, first deploy, cold start | Build | A (+G checklist) | todo | |
 | [5.11](phase-5/5.11-housekeeping.md) | `housekeeping.yml`: retention and daily keep-warm ping | Build | G | todo | |
