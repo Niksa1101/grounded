@@ -196,7 +196,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [5.02](phase-5/5.02-decision-deploy.md) | Decision: deployment parameters (region, durations, timeouts) | Decision | D | done | [#90](https://github.com/Niksa1101/grounded/pull/90) |
 | [5.03](phase-5/5.03-proxy-auth.md) | Proxy secret, trusted client IP and IP hashing | Build | G | done | [#91](https://github.com/Niksa1101/grounded/pull/91) |
 | [5.04](phase-5/5.04-rate-limit.md) | Input limits and the rate limiter | Build | G | done | [#92](https://github.com/Niksa1101/grounded/pull/92) |
-| [5.05](phase-5/5.05-budget.md) | Global daily LLM budget | Build | G | todo | |
+| [5.05](phase-5/5.05-budget.md) | Global daily LLM budget | Build | G | done | [#93](https://github.com/Niksa1101/grounded/pull/93) |
 | [5.06](phase-5/5.06-frontend-tracer.md) | Tracer bullet: frontend proxy, generated types, minimal ask page | Build | G | todo | |
 | [5.07](phase-5/5.07-ask-page.md) | Complete ask page | Build | G | todo | |
 | [5.08](phase-5/5.08-backend-vercel.md) | Backend Vercel configuration | Build | G | todo | |
