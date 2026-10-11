@@ -33,10 +33,19 @@ GroqReasoningEffort = Literal["low", "medium", "high"]
 _LOCAL_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/grounded"
 _LOCAL_TEST_DATABASE_URL = "postgresql://grounded:grounded@localhost:5433/grounded_test"
 
+
 # The repo-root .env (this file is backend/src/grounded/settings.py). Anchored to the source tree,
 # not the working directory, so no stray .env above the repo can leak in. In a deployed install the
 # path doesn't exist and is ignored: Vercel and CI use real env vars.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+def _repo_root(file: Path) -> Path:
+    """``backend/src/grounded/settings.py`` -> the repo root. A bundle may sit at a shallower path
+    (Vercel, Tech §18); then the file's own directory stands in. Only ``.env`` and a relative
+    ``CACHE_DIR`` hang off it, and the request path needs neither."""
+    parents = file.resolve().parents
+    return parents[3] if len(parents) > 3 else parents[0]
+
+
+_REPO_ROOT = _repo_root(Path(__file__))
 _ENV_FILE = _REPO_ROOT / ".env"
 
 # Confidence invariant 4 (Tech §9.8): a claim whose only strong signal is the model's self-report,

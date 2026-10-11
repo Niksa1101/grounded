@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "regions": ["cle1"],
+  "functions": {
+    "app.py": {
+      "maxDuration": 30,
+      "excludeFiles": "{tests/**,**/__pycache__/**,.pytest_cache/**,.ruff_cache/**}"
+    }
+  }
+}

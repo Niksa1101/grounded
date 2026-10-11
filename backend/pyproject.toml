@@ -26,6 +26,11 @@ grounded = "grounded.cli:app"
 requires = ["uv_build>=0.11.32,<0.12.0"]
 build-backend = "uv_build"
 
+# Vercel loads the ``app`` variable of ``backend/app.py`` (Tech §18; the docs' `module:variable`
+# form, resolved to ``app.py``, which is also the key of the function in ``vercel.json``).
+[tool.vercel]
+entrypoint = "app:app"
+
 # ---------------------------------------------------------------------------
 # Tooling
 # ---------------------------------------------------------------------------
@@ -60,7 +65,7 @@ select = [
 pythonVersion = "3.12"
 venvPath = "."
 venv = ".venv"
-include = ["src", "tests"]
+include = ["src", "tests", "app.py"]
 exclude = ["tests/fixtures", "**/__pycache__", "**/.*"]
 # Strict on the package, basic on tests (Tech.md §2).
 typeCheckingMode = "basic"
