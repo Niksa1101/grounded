@@ -1,0 +1,197 @@
+# Builds the index in PRODUCTION Neon (ticket 5.09, Tech.md §17, §18; runbook: docs/runbooks/neon-production.md).
+# It migrates the schema with the owner connection and ingests the pinned FastAPI docs, optionally
+# activating the new index version, then prints the index versions. Nothing here runs on its own:
+#
+# - Trigger: `workflow_dispatch` only, from `main` only (the job's `if`). The Author starts it;
+#   an agent never does (AGENTS.md §11). A PR, a push or a schedule cannot reach the secret below.
+# - `DATABASE_URL_DIRECT` (the owner role's DIRECT, non-pooled Neon URL) is a repository secret, as
+#   in Tech §17. It is passed to the four steps that use it and to nothing else: not the job, not
+#   the third-party actions. A guard step refuses an empty value, a pooled (`-pooler`) host and a
+#   local one before anything touches the database, and masks the host in the log.
+# - The environment `neon-production` is an optional approval gate: give it a required reviewer
+#   and every run waits for the Author's click. Without protection rules it changes nothing.
+# - `ref` is the FastAPI tag to index (empty = `FASTAPI_REF` of Settings, which is what you want
+#   unless the corpus is being re-pinned). `activate` defaults to false: build and verify first,
+#   look at the stats, then run again with activate=true (the second run reuses the built version,
+#   so it embeds nothing).
+# - User input only reaches a script through `env:` (never `${{ inputs.* }}` inside `run:`), and
+#   `ref` is validated against a strict pattern first.
+# - Embeddings: the same caches warm-cache.yml seeds and the eval jobs restore, with the same
+#   keys and paths (./.github/actions/eval-index, ./.github/actions/save-embeddings). Without the
+#   embeddings cache a full ingest is ~1,045 texts, over a day of the free quota (Tech §5.6).
+#   This workflow only RESTORES the corpus clone and saves the embeddings cache when the run
+#   added vectors. A cold cache plus the daily quota ends with exit 3 and nothing written to Neon.
+# - Two runs must never overlap (the concurrency group; a queued run waits, none is cancelled).
+name: ingest
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "FastAPI tag to index. Leave empty for FASTAPI_REF from Settings."
+        required: false
+        default: ""
+        type: string
+      activate:
+        description: "Make the built index version the active one. Leave off for the first run."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ingest-neon-production
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: neon-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Not prod: APP_ENV=prod demands the runtime's secrets, and this job is not the runtime.
+      # DATABASE_URL stays unset (Settings' local default), so nothing can fall back to a real
+      # database by accident: the commands below read DATABASE_URL_DIRECT, checked first.
+      APP_ENV: test
+      TIKTOKEN_CACHE_DIR: ${{ github.workspace }}/.cache/tiktoken
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate the inputs
+        id: inputs
+        env:
+          INPUT_REF: ${{ inputs.ref }}
+        run: |
+          if [ -n "$INPUT_REF" ] && ! [[ "$INPUT_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+            echo "::error title=Invalid ref::ref must be a FastAPI tag such as 0.141.1 (letters, digits, dot, underscore, dash)."
+            exit 1
+          fi
+          echo "ref=$INPUT_REF" >> "$GITHUB_OUTPUT"
+      # Fail before any cache or database work if the secret is missing or is the wrong kind of URL.
+      # The pooled endpoint is transaction-mode PgBouncer: it cannot hold the session-level
+      # advisory lock the migration runner takes (DB.md §10, Neon connection-pooling docs).
+      - name: Guard the production connection
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: |
+          url="$DATABASE_URL_DIRECT"
+          rest=${url#*://}
+          rest=${rest##*@}
+          host=${rest%%[:/?]*}
+          if [ -n "$host" ]; then echo "::add-mask::$host"; fi
+          if [ -z "$url" ]; then
+            echo "::error title=DATABASE_URL_DIRECT is not set::Create the repository secret first (runbook step 1)."
+            exit 1
+          fi
+          case "$url" in
+            postgresql://*|postgres://*) ;;
+            *) echo "::error title=DATABASE_URL_DIRECT is not a Postgres URL::It must start with postgresql://"; exit 1 ;;
+          esac
+          case "$url" in
+            *-pooler*) echo "::error title=DATABASE_URL_DIRECT is the pooled URL::Use the direct connection string (no -pooler in the host)."; exit 1 ;;
+          esac
+          case "$host" in
+            ""|localhost|127.*|*::1*) echo "::error title=DATABASE_URL_DIRECT is not a remote host::Refusing."; exit 1 ;;
+          esac
+          echo "The production connection looks like a direct, remote URL."
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Read the settings the caches are keyed on
+        id: cfg
+        run: bash "$GITHUB_WORKSPACE/.github/scripts/cache-keys.sh" >> "$GITHUB_OUTPUT"
+      - name: Resolve the corpus ref
+        id: ref
+        env:
+          REQUESTED: ${{ steps.inputs.outputs.ref }}
+          PINNED: ${{ steps.cfg.outputs.fastapi_ref }}
+        run: echo "ref=${REQUESTED:-$PINNED}" >> "$GITHUB_OUTPUT"
+      # Same keys and paths as warm-cache.yml and ./.github/actions/eval-index (restore only).
+      - name: Restore the corpus clone
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/corpus
+          key: corpus-${{ steps.ref.outputs.ref }}
+      - name: Restore the embeddings cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/embeddings.sqlite
+          key: embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            embeddings-${{ steps.cfg.outputs.embedding_model }}-${{ steps.cfg.outputs.embedding_dim }}-
+      - name: Restore tiktoken cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.TIKTOKEN_CACHE_DIR }}
+          key: tiktoken-${{ steps.cfg.outputs.tokenizer_encoding }}-v1
+      - name: Count the embeddings cache entries before
+        id: cache-before
+        run: |
+          if ! entries=$(bash "$GITHUB_WORKSPACE/.github/scripts/eval-cache-entries.sh" "$GITHUB_WORKSPACE/.cache/embeddings.sqlite"); then
+            echo "::warning title=Embeddings cache discarded::The restored cache is unreadable; the ingest starts from an empty one."
+            rm -f "$GITHUB_WORKSPACE"/.cache/embeddings.sqlite*
+            entries=0
+          fi
+          echo "entries=$entries" >> "$GITHUB_OUTPUT"
+          echo "Embeddings cache: $entries vectors restored."
+      # No database, no API: clones (or reuses) the corpus, chunks it and says how many texts the
+      # cache lacks. Anything over ~1,000 cannot finish in one day on the free quota.
+      - name: Preflight, texts still to embed
+        env:
+          INGEST_REF: ${{ steps.ref.outputs.ref }}
+        run: uv run grounded ingest --dry-run --ref "$INGEST_REF"
+      - name: Migrate Neon
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: uv run grounded migrate
+      # Exit 3 = the vectors could not be had (cold cache and no key, or the daily quota): named in
+      # the job summary by embedding-step.sh, and Neon was not touched by the ingest.
+      - name: Ingest
+        id: ingest
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          INGEST_REF: ${{ steps.ref.outputs.ref }}
+          ACTIVATE: ${{ inputs.activate }}
+        run: |
+          args=(--ref "$INGEST_REF")
+          if [ "$ACTIVATE" = "true" ]; then
+            args+=(--activate)
+          fi
+          bash ../.github/scripts/embedding-step.sh "grounded ingest" uv run grounded ingest "${args[@]}"
+      - name: Index versions
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: |
+          uv run grounded index list > "$RUNNER_TEMP/index-list.txt"
+          cat "$RUNNER_TEMP/index-list.txt"
+          {
+            echo "### Index versions on Neon"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/index-list.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Count the embeddings cache entries after
+        id: cache-after
+        if: always()
+        run: |
+          if entries=$(bash "$GITHUB_WORKSPACE/.github/scripts/eval-cache-entries.sh" "$GITHUB_WORKSPACE/.cache/embeddings.sqlite"); then
+            echo "entries=$entries" >> "$GITHUB_OUTPUT"
+          fi
+      # Only when the run added vectors, `always()` so a quota stop keeps what it paid for.
+      - name: Save the embeddings cache
+        if: >-
+          always() && steps.cache-after.outputs.entries != '' && steps.cache-after.outputs.entries != '0'
+          && steps.cache-after.outputs.entries != steps.cache-before.outputs.entries
+        uses: ./.github/actions/save-embeddings

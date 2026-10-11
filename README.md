@@ -355,7 +355,7 @@ backend/     FastAPI app, ingest CLI, retrieval, generation, evals (Python packa
 frontend/    Next.js UI (ask page, metrics dashboard, proxy route handlers)
 eval/        golden set, promptfoo config, committed baselines
 infra/       docker-compose (pgvector for local dev and CI)
-docs/        PRD, technical design, database design
+docs/        PRD, technical design, database design, runbooks (docs/runbooks/)
 ```
 
 ## Quickstart (local)
@@ -427,6 +427,14 @@ npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1 --no-cach
 
 The generation eval runs the real pipeline and uses provider quota; the exact command for each shell and for CI, the
 smoke-run switches and what the assertions score are in [docs/Tech.md §15.3](docs/Tech.md).
+
+## Production database (Neon)
+
+Production Neon is migrated, seeded and given its least-privilege `app` role by hand, from a reviewed procedure: the
+manual workflow [`ingest.yml`](.github/workflows/ingest.yml) (owner role, direct URL, embeddings restored from the CI
+cache) and the runbook [docs/runbooks/neon-production.md](docs/runbooks/neon-production.md) (the role, the grants of
+[DB §5](docs/DB.md), the manual least-privilege checks, rollback). The runtime only ever gets the pooled `app` URL.
+Neither is run by CI or by an agent. The runbook's last, optional step is the repository variable `EVAL_RECORD_RUNS`.
 
 ## Roadmap
 
