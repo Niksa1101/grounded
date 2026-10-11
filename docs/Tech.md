@@ -173,7 +173,7 @@ or with `ALLOW_DIRECT_API=true`.
 | `PROXY_SHARED_SECRET` | random 32+ bytes | FE→BE auth |
 | `IP_HASH_SECRET` | random 32+ bytes | HMAC for IPs |
 | `ALLOW_DIRECT_API` | `false` (true only in dev) | bypass proxy secret locally |
-| `REQUEST_DEADLINE_S` | `25` | must be < proxy timeout |
+| `REQUEST_DEADLINE_S` | `25` | must be < backend `maxDuration` (30) < proxy timeout (35) < frontend `maxDuration` (40), §18 |
 | `CACHE_DIR` | `.cache` | SQLite caches, cloned corpus; a relative path is taken from the repo root (like `.env`), so `backend/` commands and CI share one `.cache/` |
 | `FASTAPI_REF` | default `0.141.1` | pinned corpus tag (commit `95f8322e`); blank is rejected |
 
@@ -309,7 +309,7 @@ sequenceDiagram
     API-->>PX: AskResponse
 ```
 
-Stage timeouts (defaults): embed 3 s · retrieval 2 s · rerank 3 s · each LLM attempt 12 s · overall deadline `REQUEST_DEADLINE_S` = 25 s.
+Stage timeouts (defaults): embed 3 s · retrieval 2 s · rerank 3 s · each LLM attempt 12 s · overall deadline `REQUEST_DEADLINE_S` = 25 s (the chain up to the frontend is in §18).
 The query embedding is one attempt within `QUERY_EMBEDDING_TIMEOUT_S` (`GeminiEmbedder.for_request_path`): no pacing window and
 no retry, because both sleep (§10). A 429, 5xx or timeout fails the request at once as a 503 `provider_unavailable`
 (with `Retry-After` for a 429). The golden batch (§15.8) waits out a per-minute 429 in the CLI layer instead.
@@ -937,19 +937,32 @@ Notes:
 
 ### Backend — Vercel Functions (FastAPI)
 - A separate Vercel project with Root Directory `backend/`. Vercel runs the FastAPI app as one Vercel Function on Fluid compute and supports lifespan events (shutdown cleanup ≤ 500 ms).
-- Hobby limits (checked 2026-09-24, re-verify in Phase 5): max duration 300 s, 2 GB / 1 vCPU, Python bundle ≤ 500 MB; monthly allotment 1M invocations, 4 h Active CPU (time spent waiting on I/O, e.g. LLM calls, doesn't count), 360 GB-h provisioned memory; runtime logs kept 1 h; non-commercial use only.
+- Hobby limits (verified 2026-10-11 from Vercel's docs, D53; the pages' own dates are in brackets): max duration **300 s default and maximum** with Fluid compute, exceeding it returns a 504 `FUNCTION_INVOCATION_TIMEOUT` (`functions/limitations` [2026-08-24], `functions/configuring-functions/duration` [2026-08-24]); 2 GB / 1 vCPU; Python bundle ≤ **500 MB** uncompressed, with `excludeFiles` to trim it and precompiled `.pyc` files added when space allows (`functions/runtimes/python` [2026-08-12]); 1,024 file descriptors shared by all concurrent executions; 4.5 MB request or response body; Python 3.12 is the default (3.13 and 3.14 exist). Monthly allotment (`plans/hobby` [2026-09-14]): 1M function invocations, 4 Active CPU hours (time waiting on I/O, e.g. LLM calls, doesn't count), 360 GB-h provisioned memory; past a limit the feature waits 30 days. Runtime logs kept 1 h; non-commercial use only. Lifespan events are supported; shutdown cleanup is limited to **500 ms** after SIGTERM and shutdown logs do not reach the dashboard (`frameworks/backend/fastapi` [2026-08-27]), so closing the pool must be fast and its result is not observable there.
 - Entrypoint: Vercel looks for a module-level FastAPI `app`. A thin entry module (`app = create_app()`) is referenced via `[tool.vercel] entrypoint` in `pyproject.toml`; `grounded.main` itself stays free of import-time side effects.
 - Deploys via the Vercel Git integration: production from `main` only. Preview deployments get no production secrets.
 - Production env: `APP_ENV=prod`, `DATABASE_URL` (app role, **pooled**), provider keys, `PROXY_SHARED_SECRET`, `IP_HASH_SECRET`, `DAILY_LLM_BUDGET` (`300`), `RATE_LIMIT_PER_MIN` (`5`), `RATE_LIMIT_PER_DAY` (`20`).
 - Serverless consequences: no long-lived process. The DB pool is per instance (Neon's pooler absorbs connections). In-process state (the circuit breaker, the query-embedding LRU) is per instance: see PRD §12. The rate limiter is not in-process: its counters are in Postgres (§12, D31). Durable telemetry lives in `request_logs`, not in platform logs. The filesystem is ephemeral.
-- Function region: set closest to Neon (AWS US East 2) in Phase 5.
+- Function region: **`cle1`** (Cleveland, AWS `us-east-2`, `vercel.com/docs/regions` [2026-08-11]) for both projects, the same AWS region as Neon (D53). The default for new projects is `iad1` (`us-east-1`). Hobby takes a single region per project; set it with `"regions": ["cle1"]` in `vercel.json` (or the project's Functions settings). The latency gain over `iad1` is not measured.
 - Startup: open pool, load the active index version, warm providers lazily. `/readyz` reflects readiness.
 - Outside Vercel (local dev) the API runs with `grounded serve` (app factory, JSON logs, uvicorn access log off because it prints raw IPs).
 
 ### Frontend — Vercel
 - Project root directory `frontend/`. Env: `BACKEND_URL`, `PROXY_SHARED_SECRET` (server-only, never `NEXT_PUBLIC_`).
-- Route Handlers `app/api/ask/route.ts`, `app/api/metrics/route.ts`: forward to backend with the secret and `X-Client-IP` (from the platform's forwarded-for header), and a timeout slightly above `REQUEST_DEADLINE_S`.
-- **Function duration limit:** set `export const maxDuration` in the ask route and verify the current Hobby-plan maximum. It must exceed the backend deadline plus a possible backend cold start, or the UI must show a retry state.
+- Route Handlers `app/api/ask/route.ts`, `app/api/metrics/route.ts`: forward to backend with the secret and `X-Client-IP` (from the platform's forwarded-for header), with the fetch timeout of the chain below.
+- **Function duration limit:** `export const maxDuration = 40` in the ask route (D53); the Hobby maximum is 300 s, so 40 is a choice. It must exceed the proxy's fetch timeout, which exceeds the backend deadline plus a possible backend cold start, or the UI shows its retry state (§19).
+
+### Timeout chain (D53, 2026-10-11)
+Each line is shorter than the next, so the inner layer always answers before the outer one gives up:
+
+| Layer | Seconds | Where | What happens at the limit |
+|---|---|---|---|
+| Stage timeouts | embed 3 · retrieval 2 · rerank 3 · each LLM attempt 12 | `Settings` (§6) | the stage fails; an LLM attempt may be retried once (§9.5) |
+| `REQUEST_DEADLINE_S` | 25 | `Settings`, enforced in the `/v1/ask` route | our 504 `deadline_exceeded` with `request_id` (§13). **Not enforced by any code before ticket 5.08** |
+| Backend `maxDuration` | 30 | `vercel.json` `functions` entry keyed on the resolved entrypoint file (the Vercel docs' rule for Python framework apps) | the platform's 504 `FUNCTION_INVOCATION_TIMEOUT` |
+| Proxy fetch timeout | 35 | `app/api/ask/route.ts` (`AbortSignal.timeout`) | the route answers with an error JSON and the UI shows the retry state |
+| Frontend `maxDuration` | 40 | `app/api/ask/route.ts` | the platform's 504 |
+
+The worst case of the stages alone is about 30 s (embed 3 + retrieval 2 + two LLM attempts of 12 + rerank 3), which is why the deadline, and not the stage sum, bounds the request. A backend cold start (function start, pool open, active index load) and a Neon wake happen before the handler's deadline starts, so the 10 s between the deadline (25) and the proxy timeout (35) is their budget. **Unverified:** whether the platform counts instance initialization inside `maxDuration` (the docs do not say), the cold start duration, and the Neon wake time. Ticket 5.10 measures the cold start; if it does not fit in 10 s, the UI's retry state covers it and the numbers are documented, not hidden. Fluid compute documents bytecode caching and function pre-warming on production deployments (`fluid-compute` [2026-08-24]) as cold start reducers, without a promise for a given function.
 
 ### Database — Neon
 - Project `grounded`, Postgres 17, AWS US East 2 (Ohio), default branch `production`. Enable `vector`. Create role `app` (DB.md §5).
