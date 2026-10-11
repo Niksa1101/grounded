@@ -64,6 +64,7 @@ _PROD = {
     "database_url": "postgresql://app@db/grounded",
     "proxy_shared_secret": "x" * 32,
     "ip_hash_secret": "y" * 32,
+    "daily_llm_budget": 300,
 }
 
 
@@ -104,6 +105,7 @@ def test_the_fake_provider_is_refused_in_prod() -> None:
         database_url="postgresql://app@db/grounded",
         proxy_shared_secret="x" * 32,
         ip_hash_secret="y" * 32,
+        daily_llm_budget=300,
     )
     with pytest.raises(ProviderConfigError, match="prod"):
         build_provider(settings)

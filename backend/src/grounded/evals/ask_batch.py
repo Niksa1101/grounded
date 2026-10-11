@@ -40,6 +40,7 @@ from pydantic import BaseModel, ValidationError
 from grounded.evals.retrieval_runner import RESULTS_DIR
 from grounded.generation.pipeline import IndexMismatchError
 from grounded.generation.providers.eval_wrappers import BackoffExhaustedError
+from grounded.infra.budget import BudgetExhaustedError
 from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderError,
@@ -220,7 +221,12 @@ async def _ask_with_waits(
         except ProviderBadOutput as exc:
             # The model's fault, and already retried once by the pipeline: a result, not a stop.
             return _failed(item, trace, waits, exc), False
-        except (ProviderRequestRejected, NoActiveIndexError, IndexMismatchError) as exc:
+        except (
+            ProviderRequestRejected,
+            NoActiveIndexError,
+            IndexMismatchError,
+            BudgetExhaustedError,  # a dev run with DAILY_LLM_BUDGET set: stop, don't crash (5.05)
+        ) as exc:
             raise _stop(item, trace, waits, exc, on_result, f"{type(exc).__name__}") from exc
         except psycopg.Error as exc:
             raise _stop(item, trace, waits, exc, on_result, "database error") from exc

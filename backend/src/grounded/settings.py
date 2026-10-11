@@ -155,7 +155,8 @@ class Settings(BaseSettings):
     # --- Protection ----------------------------------------------------------------------------
     rate_limit_per_min: int = Field(default=5, gt=0)
     rate_limit_per_day: int = Field(default=20, gt=0)
-    # Set below the verified provider free-tier RPD in Phase 5; unset means "not configured yet".
+    # Global cap on LLM calls per UTC day (5.05). Unset = no cap in dev and test; required in prod.
+    # Demo: 300, below the 500 RPD of gemini-3.5-flash-lite (PRD D31).
     daily_llm_budget: int | None = Field(default=None, gt=0)
     answer_cache_ttl_days: int = Field(default=30, gt=0, le=30)  # must not exceed retention
     proxy_shared_secret: SecretStr | None = None
@@ -262,6 +263,9 @@ class Settings(BaseSettings):
                 or not value.get_secret_value().strip()
             ):
                 missing.append(name.upper())
+        # The demo's cap on LLM calls (5.05): unset means no cap, which only dev and test allow.
+        if "daily_llm_budget" not in self.model_fields_set or self.daily_llm_budget is None:
+            missing.append("DAILY_LLM_BUDGET")
         if missing:
             raise ValueError(f"APP_ENV=prod requires explicit {', '.join(missing)}")
         if self.allow_direct_api:

@@ -131,7 +131,10 @@ def test_direct_access_works_only_when_allowed() -> None:
 def test_the_prod_check_still_refuses_direct_access() -> None:
     with pytest.raises(ValueError, match="ALLOW_DIRECT_API"):
         settings(
-            app_env="prod", database_url="postgresql://u:p@db.example/x", allow_direct_api=True
+            app_env="prod",
+            database_url="postgresql://u:p@db.example/x",
+            daily_llm_budget=300,
+            allow_direct_api=True,
         )
 
 

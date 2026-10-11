@@ -154,14 +154,14 @@ class TestProdGuard:
     def _unset_guarded_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # make_settings honors real env vars, and CI sets DATABASE_URL for the job; without this
         # the "missing" case would depend on where the tests run.
-        for name in ("DATABASE_URL", "PROXY_SHARED_SECRET", "IP_HASH_SECRET"):
+        for name in ("DATABASE_URL", "PROXY_SHARED_SECRET", "IP_HASH_SECRET", "DAILY_LLM_BUDGET"):
             monkeypatch.delenv(name, raising=False)
 
     def test_prod_requires_explicit_database_and_secrets(self) -> None:
         with pytest.raises(ValidationError) as excinfo:
             make_settings(app_env="prod")
         message = str(excinfo.value)
-        for name in ("DATABASE_URL", "PROXY_SHARED_SECRET", "IP_HASH_SECRET"):
+        for name in ("DATABASE_URL", "PROXY_SHARED_SECRET", "IP_HASH_SECRET", "DAILY_LLM_BUDGET"):
             assert name in message
 
     @pytest.mark.parametrize("name", ["database_url", "proxy_shared_secret", "ip_hash_secret"])
@@ -172,9 +172,37 @@ class TestProdGuard:
             "database_url": "postgresql://app@db/grounded",
             "proxy_shared_secret": "x" * 32,
             "ip_hash_secret": "y" * 32,
+            "daily_llm_budget": 300,
         } | {name: blank}
         with pytest.raises(ValidationError, match=name.upper()):
             make_settings(app_env="prod", **values)
+
+    def test_prod_requires_an_explicit_daily_llm_budget(self) -> None:
+        # Unset means "no cap", which only dev and test allow (5.05). The other prod values are
+        # complete here, so the budget is the only thing named.
+        with pytest.raises(ValidationError, match=r"requires explicit DAILY_LLM_BUDGET"):
+            make_settings(
+                app_env="prod",
+                database_url="postgresql://app@db/grounded",
+                proxy_shared_secret="x" * 32,
+                ip_hash_secret="y" * 32,
+            )
+
+    def test_a_blank_daily_llm_budget_from_the_environment_is_refused(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # An unfilled deploy variable arrives as "": it must not read as "no cap".
+        monkeypatch.setenv("DAILY_LLM_BUDGET", "")
+        with pytest.raises(ValidationError, match="daily_llm_budget"):
+            make_settings(
+                app_env="prod",
+                database_url="postgresql://app@db/grounded",
+                proxy_shared_secret="x" * 32,
+                ip_hash_secret="y" * 32,
+            )
+
+    def test_dev_and_test_need_no_budget(self) -> None:
+        assert make_settings(app_env="test").daily_llm_budget is None
 
     def test_prod_rejects_direct_api(self) -> None:
         with pytest.raises(ValidationError, match="ALLOW_DIRECT_API"):
@@ -183,6 +211,7 @@ class TestProdGuard:
                 database_url="postgresql://app@db/grounded",
                 proxy_shared_secret="x" * 32,
                 ip_hash_secret="y" * 32,
+                daily_llm_budget=300,
                 allow_direct_api=True,
             )
 
@@ -192,8 +221,10 @@ class TestProdGuard:
             database_url="postgresql://app@db/grounded",
             proxy_shared_secret="x" * 32,
             ip_hash_secret="y" * 32,
+            daily_llm_budget=300,
         )
         assert s.app_env == "prod"
+        assert s.daily_llm_budget == 300
 
 
 class TestEvalGuard:

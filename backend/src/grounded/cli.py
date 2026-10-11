@@ -109,6 +109,7 @@ from grounded.evals.retrieval_runner import (
 from grounded.generation.pipeline import AskMode
 from grounded.generation.providers.eval_wrappers import EvalStats
 from grounded.generation.providers.fake import StubLLMProvider
+from grounded.infra.budget import BudgetExhaustedError
 from grounded.infra.event_loop import loop_factory
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
@@ -282,6 +283,8 @@ def ask(
         raise _fail(str(exc)) from exc
     except NoActiveIndexError as exc:
         raise _fail(f"Cannot answer: {exc}") from exc
+    except BudgetExhaustedError as exc:
+        raise _fail("Today's DAILY_LLM_BUDGET is used up (the day is UTC).") from exc
     except EmbedderUnavailableError as exc:
         raise _fail(f"{exc}: this question is not in the embedding cache.") from exc
     except ProviderError as exc:
