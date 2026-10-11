@@ -13,6 +13,16 @@ async function render(name: string): Promise<string> {
 }
 
 describe("AnswerView", () => {
+  it("renders [n] markers as buttons, in the prose and next to claims", async () => {
+    const html = await render("answered");
+    expect(html).toMatch(/<button[^>]*type="button"[^>]*>\[1\]<\/button>/);
+    expect(html).toContain('aria-label="Go to source 2"');
+  });
+
+  it("highlights fenced code that names a language", async () => {
+    expect(await render("answered")).toContain("hljs-keyword");
+  });
+
   it("source cards show breadcrumb and snippet, with a safe external link", async () => {
     const html = await render("answered");
     expect(html).toContain('id="source-1"');
@@ -25,16 +35,26 @@ describe("AnswerView", () => {
     expect(html).toContain('target="_blank"');
   });
 
-  it("labels the answered, partial and insufficient_context statuses", async () => {
-    expect(await render("answered")).toContain("Answered");
+  it("flags a claim below 0.5 with visible text, not a tooltip", async () => {
+    const html = await render("answered");
+    expect(html).toContain("Low confidence");
+    expect(html).toContain("heuristic computed by the server");
+    expect(html).not.toMatch(/\btitle="[^"]*(heuristic|confidence)/i);
+  });
+
+  it("keeps the debug row collapsed", async () => {
+    const html = await render("answered");
+    expect(html).toContain("Debug details");
+    expect(html).not.toContain("Shadow cost");
+  });
+
+  it("labels the partial and insufficient_context statuses and offers follow-ups", async () => {
     const partial = await render("partial");
     expect(partial).toContain("Partial answer");
     expect(partial).toContain("the answer says what is missing");
-    expect(await render("insufficient")).toContain("Not enough context");
-  });
 
-  it("offers follow-up questions, and shows no Sources section without citations", async () => {
     const insufficient = await render("insufficient");
+    expect(insufficient).toContain("Not enough context");
     expect(insufficient).toContain("How do I deploy FastAPI with Docker?");
     expect(insufficient).not.toContain("Sources");
   });
@@ -78,7 +98,9 @@ describe("state notices", () => {
   });
 
   it("budget_exhausted is friendly; an error shows the request id or says there is none", () => {
-    expect(renderToStaticMarkup(<BudgetNotice requestId={null} />)).toContain("daily budget");
+    expect(renderToStaticMarkup(<BudgetNotice requestId={null} />)).toContain(
+      "daily budget",
+    );
     const withId = renderToStaticMarkup(
       <ErrorNotice code="validation_failed" message="m" requestId="r9" />,
     );

@@ -39,3 +39,38 @@ describe("AnswerMarkdown", () => {
     expect(html).not.toContain("href");
   });
 });
+
+describe("AnswerMarkdown citation buttons", () => {
+  function renderWith(markdown: string): string {
+    return renderToStaticMarkup(<AnswerMarkdown markdown={markdown} sources={[1, 2]} />);
+  }
+
+  it("turns a [n] marker that names a source into a button", () => {
+    const html = renderWith("Use it [1] and [2].");
+    expect(html).toContain('aria-label="Go to source 1"');
+    expect(html).toContain('aria-label="Go to source 2"');
+  });
+
+  it("leaves a marker without a source as text", () => {
+    const html = renderWith("see [9]");
+    expect(html).toContain("[9]");
+    expect(html).not.toContain("<button");
+  });
+
+  it("does not touch [n] inside code", () => {
+    const html = renderWith("`items[1]` and\n\n```py\nx = items[2]\n```");
+    expect(html).not.toContain("<button");
+  });
+
+  it("model text cannot create a button of its own", () => {
+    const html = renderWith('<button onclick="x">hi</button>');
+    expect(html).not.toContain("<button");
+    expect(html).toContain("&lt;button");
+  });
+
+  it("highlights a fenced block that names a language and keeps links dropped", () => {
+    const html = renderWith("```python\ndef f():\n    return 1\n```\n\n[x](https://evil.example)");
+    expect(html).toContain("hljs-keyword");
+    expect(html).not.toContain("<a");
+  });
+});

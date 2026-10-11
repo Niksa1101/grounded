@@ -128,3 +128,42 @@
     @apply font-sans;
   }
 }
+
+/* Code highlighting for answers (rehype-highlight adds the .hljs-* classes). Our own palette instead
+   of a highlight.js theme: every colour is at least 4.5:1 on the code block's --muted background. */
+.hljs-comment,
+.hljs-quote {
+  color: #57606a;
+  font-style: italic;
+}
+.hljs-meta {
+  color: #57606a;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag {
+  color: #b31d28;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition {
+  color: #0a3069;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-attr,
+.hljs-variable,
+.hljs-template-variable {
+  color: #0550ae;
+}
+.hljs-title,
+.hljs-section,
+.hljs-function .hljs-title {
+  color: #6639ba;
+}
+.hljs-built_in,
+.hljs-type,
+.hljs-symbol,
+.hljs-bullet {
+  color: #953800;
+}
