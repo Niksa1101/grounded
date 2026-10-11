@@ -28,7 +28,7 @@
 
 Neon notes:
 - Neon scales compute to zero after inactivity; the first query after idle pays a wake-up (~0.5–1 s). This is measured, not hidden.
-- Runtime uses the pooled endpoint (PgBouncer, transaction mode). If prepared-statement errors appear, configure psycopg with `prepare_threshold=None`.
+- Runtime uses the pooled endpoint (PgBouncer, transaction mode). Neon's PgBouncer supports protocol-level prepared statements (PgBouncer 1.22+, `max_prepared_statements=1000`; Neon's connection-pooling docs, read 2026-10-11), which is what psycopg 3 uses, so the default is kept. If prepared-statement errors appear on the real pooler (5.10 checks), configure psycopg with `prepare_threshold=None`.
 - Neon branches can be used for a throwaway staging copy (copy-on-write). Optional.
 
 Pool settings (runtime): `psycopg_pool.AsyncConnectionPool(min_size=1, max_size=5, timeout=5)`. pgvector types are registered per connection via `configure=register_vector_async`.
@@ -250,7 +250,7 @@ CREATE TABLE request_logs (
     citation_count         smallint,
     invalid_citation_count smallint,
     min_claim_confidence   real,
-    error_code             text
+    error_code             text                       -- the API ErrorCode; no CHECK. A deadline (504) is outcome internal_error + error_code deadline_exceeded
 );
 CREATE INDEX request_logs_created_idx ON request_logs (created_at DESC);
 CREATE INDEX request_logs_source_created_idx ON request_logs (source, created_at DESC);

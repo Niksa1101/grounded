@@ -36,6 +36,11 @@ from grounded.retrieval.index import ActiveIndexCache
 from grounded.retrieval.query_embedding import build_query_embedder
 from grounded.settings import Settings
 
+# Vercel gives a function 500 ms after SIGTERM and shows no shutdown logs (Tech §18), so closing the
+# pool must not use psycopg_pool's default of waiting up to 5 s for its workers. A platform limit,
+# not a tunable: 0.4 s leaves the rest of the budget to the other closers.
+POOL_CLOSE_TIMEOUT_S = 0.4
+
 
 class ProviderConfigError(Exception):
     """A provider this build cannot create or must not use: an unknown ``GENERATOR_PROVIDERS``
@@ -184,7 +189,7 @@ async def open_runtime(
         pool = create_pool(settings)
         # wait=False: start serving even if the database is unreachable; /readyz reports it.
         await pool.open(wait=False)
-        stack.push_async_callback(pool.close)
+        stack.push_async_callback(pool.close, POOL_CLOSE_TIMEOUT_S)
         eval_llm: EvalLLM | None = None
         if provider is None:
             provider = build_provider(settings)

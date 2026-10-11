@@ -21,6 +21,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from grounded.api.deadline import DeadlineExceededError
 from grounded.api.deps import get_request_logger, request_id_of
 from grounded.api.input_limits import InputRejectedError
 from grounded.api.security import ProxyAuthError
@@ -65,12 +66,17 @@ async def _fail(
     message: str,
     *,
     retry_after_s: float | None = None,
+    outcome: Outcome | None = None,
 ) -> JSONResponse:
     trace: RequestTrace | None = getattr(request.state, "trace", None)
     if trace is not None:
-        # Every ErrorCode written today is also a request_logs outcome (DB.md §4).
+        # Every ErrorCode but one is also a request_logs outcome (DB.md §4); the exception passes
+        # ``outcome`` (see ``_deadline_exceeded``).
         await get_request_logger(request).write(
-            trace, outcome=cast(Outcome, code), http_status=http_status, error_code=code
+            trace,
+            outcome=outcome or cast(Outcome, code),
+            http_status=http_status,
+            error_code=code,
         )
     return error_response(request, http_status, code, message, retry_after_s=retry_after_s)
 
@@ -157,6 +163,28 @@ async def _provider_unavailable(request: Request, exc: Exception) -> JSONRespons
     )
 
 
+async def _deadline_exceeded(request: Request, exc: Exception) -> JSONResponse:
+    trace: RequestTrace | None = getattr(request.state, "trace", None)
+    logger.warning(
+        "request deadline exceeded",
+        extra={
+            "request_id": str(request_id_of(request)),
+            "deadline_s": exc.deadline_s if isinstance(exc, DeadlineExceededError) else None,
+            # The stages so far, in ms (0: not reached). The same numbers go to the row.
+            "stage_latency_ms": trace.latency_ms() if trace is not None else None,
+        },
+    )
+    # The outcome is ``internal_error``: DB.md §4's CHECK has no value for a deadline and a new one
+    # needs a migration. The row's ``error_code`` and ``http_status`` (504) tell it apart.
+    return await _fail(
+        request,
+        status.HTTP_504_GATEWAY_TIMEOUT,
+        "deadline_exceeded",
+        "The request took too long and was stopped. Try again shortly.",
+        outcome="internal_error",
+    )
+
+
 async def _validation_failed(request: Request, exc: Exception) -> JSONResponse:
     logger.warning("model output invalid", extra={"request_id": str(request_id_of(request))})
     return await _fail(
@@ -195,6 +223,7 @@ def install_error_handlers(app: FastAPI) -> None:
         ProxyAuthError: _unauthorized,
         InputRejectedError: _input_rejected,
         RateLimitedError: _rate_limited,
+        DeadlineExceededError: _deadline_exceeded,
         BudgetExhaustedError: _budget_exhausted,
         ProviderRateLimited: _provider_unavailable,
         ProviderUnavailable: _provider_unavailable,

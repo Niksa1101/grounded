@@ -16,6 +16,14 @@ the question, and only then does the endpoint count the request against the rate
 malformed request costs no counter write, and a cache hit still counts. The limit has to be checked
 in the endpoint, not in a dependency: FastAPI runs every dependency before it reports a body that
 failed validation, which would count invalid requests.
+
+The deadline (``api/deadline.py``, 5.08) starts right after authentication and bounds everything
+that follows: the body read, validation, the rate-limit upsert, the cache lookup, the budget check
+and reserve, the stages and the response. A database call that hangs is as good a reason for a 504
+as a slow model, and the platform's clock (``maxDuration``) counts all of it. The failure
+write-up of a timed-out request happens *after* the deadline, in the error handler, so the row is
+still written. Eval mode has no deadline: it does not go through this route, and its LLM timeout
+(``EVAL_LLM_TIMEOUT_S``, 40 s) is longer than the deadline on purpose (Tech §15.6).
 """
 
 from __future__ import annotations
@@ -26,12 +34,14 @@ from typing import Any
 from fastapi import APIRouter, Request, Response
 from fastapi.routing import APIRoute
 
+from grounded.api.deadline import request_deadline
 from grounded.api.deps import (
     PipelineDep,
     RateLimiterDep,
     RequestIdDep,
     TraceDep,
     get_request_logger,
+    get_settings_dep,
     request_id_of,
 )
 from grounded.api.input_limits import read_limited_body
@@ -51,8 +61,11 @@ class AskRoute(APIRoute):
                 request_id_of(request), source=client.source, ip_hash=client.ip_hash
             )
             request.state.trace = trace
-            request = await read_limited_body(request)  # InputRejectedError -> 422, logged
-            response = await handle(request)  # a failure raises and is logged by its handler
+            settings = get_settings_dep(request)
+            deadline_s = None if settings.app_env == "eval" else settings.request_deadline_s
+            async with request_deadline(deadline_s):  # DeadlineExceededError -> 504, logged
+                request = await read_limited_body(request)  # InputRejectedError -> 422, logged
+                response = await handle(request)  # a failure raises and is logged by its handler
             if trace.status is None:
                 # The pipeline sets it whenever it returns an answer, so this is a bug. Raised (not
                 # asserted, which ``python -O`` would strip) so the internal-error handler logs it
@@ -78,6 +91,7 @@ router = APIRouter(prefix="/v1", tags=["ask"], route_class=AskRoute)
         500: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
+        504: {"model": ErrorResponse},
     },
 )
 async def ask(

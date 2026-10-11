@@ -2,7 +2,8 @@
 
 ``create_app`` takes explicit settings so tests can build isolated apps. There is deliberately no
 module-level ``app``: importing this module must not read settings. Serve it with ``grounded serve``
-(or ``uvicorn --factory grounded.main:create_app``).
+(or ``uvicorn --factory grounded.main:create_app``). On Vercel the thin entry module
+``backend/app.py`` calls ``create_app()`` (Tech §18).
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 
 from fastapi import FastAPI
 
@@ -28,6 +29,15 @@ from grounded.runtime import open_runtime
 from grounded.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _app_version() -> str:
+    """The installed package version for the OpenAPI document. It must not be needed to serve: a
+    bundle that carries the source but not the package metadata (Vercel, Tech §18) has none."""
+    try:
+        return version("grounded")
+    except PackageNotFoundError:
+        return "0+unknown"
 
 
 def _has_ip_hash_key(settings: Settings) -> bool:
@@ -72,7 +82,7 @@ def create_app(
                 )
             yield
 
-    app = FastAPI(title="Grounded", version=version("grounded"), lifespan=lifespan)
+    app = FastAPI(title="Grounded", version=_app_version(), lifespan=lifespan)
     app.state.settings = settings
     install_error_handlers(app)
     app.include_router(health_router)
