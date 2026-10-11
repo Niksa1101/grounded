@@ -22,6 +22,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from grounded.api.deps import get_request_logger, request_id_of
+from grounded.api.input_limits import InputRejectedError
 from grounded.api.security import ProxyAuthError
 from grounded.infra.hashing import question_hash
 from grounded.infra.provider_errors import (
@@ -30,6 +31,7 @@ from grounded.infra.provider_errors import (
     ProviderTimeout,
     ProviderUnavailable,
 )
+from grounded.infra.ratelimit import RateLimitedError
 from grounded.ingest.embed import EmbedderUnavailableError
 from grounded.observability.request_log import Outcome, RequestTrace
 from grounded.retrieval.index import NoActiveIndexError
@@ -109,6 +111,25 @@ async def _unauthorized(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _input_rejected(request: Request, exc: Exception) -> JSONResponse:
+    # A body over the size limit (api/input_limits.py): the same code and status as an invalid
+    # field. Like a body that failed validation, it keeps no question (there is none to read).
+    return await _fail(request, status.HTTP_422_UNPROCESSABLE_CONTENT, "bad_request", str(exc))
+
+
+async def _rate_limited(request: Request, exc: Exception) -> JSONResponse:
+    if not isinstance(exc, RateLimitedError):  # registered for that type only
+        return await _internal_error(request, exc)
+    wait = exc.retry_after_s
+    if exc.window == "day":
+        message = f"Daily question limit reached. Try again in about {math.ceil(wait / 3600)} h."
+    else:
+        message = f"Too many requests. Try again in {wait}s."
+    return await _fail(
+        request, status.HTTP_429_TOO_MANY_REQUESTS, "rate_limited", message, retry_after_s=wait
+    )
+
+
 async def _provider_unavailable(request: Request, exc: Exception) -> JSONResponse:
     retry_after = exc.retry_after_s if isinstance(exc, ProviderRateLimited) else None
     logger.warning(
@@ -160,6 +181,8 @@ def install_error_handlers(app: FastAPI) -> None:
     handlers: dict[type[Exception], Any] = {
         RequestValidationError: _bad_request,
         ProxyAuthError: _unauthorized,
+        InputRejectedError: _input_rejected,
+        RateLimitedError: _rate_limited,
         ProviderRateLimited: _provider_unavailable,
         ProviderUnavailable: _provider_unavailable,
         ProviderTimeout: _provider_unavailable,

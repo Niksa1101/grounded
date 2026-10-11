@@ -6,10 +6,11 @@ are mapped to DB-sourced citations, markers rewritten to display numbers, confid
 
 from __future__ import annotations
 
-from typing import Literal
+import unicodedata
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, HttpUrl, StringConstraints, field_validator
 
 from grounded.schemas.llm import AnswerStatus
 
@@ -25,8 +26,31 @@ ErrorCode = Literal[
 ]
 
 
+# The input limits of Tech.md §12. They are part of the API contract (the OpenAPI schema, the golden
+# set's question rule, the UI's counter), not tunables: changing one is a contract change.
+MIN_QUESTION_CHARS = 3
+MAX_QUESTION_CHARS = 500
+MAX_BODY_BYTES = 4096
+
+
 class AskRequest(BaseModel):
-    question: str = Field(min_length=3, max_length=500)
+    # Trimmed first: the length rule applies to what the pipeline sees, so "  hi  " is 2 characters.
+    question: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True, min_length=MIN_QUESTION_CHARS, max_length=MAX_QUESTION_CHARS
+        ),
+    ]
+
+    @field_validator("question")
+    @classmethod
+    def _no_control_characters(cls, value: str) -> str:
+        # Unicode category Cc: C0 (NUL, tab, newline, ESC, ...), DEL and C1. Leading and trailing
+        # whitespace is already gone, so only a control character *inside* the text is refused.
+        # The message names the rule and never echoes the text (api/errors.py, Tech §13).
+        if any(unicodedata.category(char) == "Cc" for char in value):
+            raise ValueError("must not contain control characters")
+        return value
 
 
 class Citation(BaseModel):

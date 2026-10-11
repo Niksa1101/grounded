@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncGenerator, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -59,6 +60,20 @@ class FakeClock:
         self.now += seconds
 
 
+class WallClock:
+    """A calendar clock tests move by hand: the rate limiter's ``clock`` (``wall_clock`` of
+    ``app_client``), which replaces the database's ``now()`` so a test picks its minute and day."""
+
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def advance(self, **delta: float) -> None:
+        self.now += timedelta(**delta)
+
+
 @asynccontextmanager
 async def app_client(
     settings: Settings,
@@ -69,6 +84,7 @@ async def app_client(
     clock: Clock = time.perf_counter,
     client: tuple[str, int] | None = None,
     direct_api: bool = True,
+    wall_clock: Callable[[], datetime] | None = None,
 ) -> AsyncGenerator[httpx.AsyncClient]:
     """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client.
 
@@ -86,6 +102,7 @@ async def app_client(
         embedder=embedder or FakeEmbedder(dim=settings.embedding_dim),
         provider=provider or StubLLMProvider(),
         clock=clock,
+        wall_clock=wall_clock,
     )
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(

@@ -65,6 +65,13 @@ def test_embedding_defaults_match_the_free_tier() -> None:
     assert s.embedding_timeout_s == 30.0
 
 
+def test_rate_limit_defaults_are_the_demo_values() -> None:
+    # PRD D31 (5.01): 5 per minute as the burst guard, 20 per day (one IP uses at most 40 of the
+    # 300 daily LLM calls). 5.04 moved the day default from 30 to 20.
+    s = make_settings()
+    assert (s.rate_limit_per_min, s.rate_limit_per_day) == (5, 20)
+
+
 def test_embedding_max_retry_wait_must_be_positive() -> None:
     with pytest.raises(ValidationError):
         make_settings(embedding_max_retry_wait_s=0)

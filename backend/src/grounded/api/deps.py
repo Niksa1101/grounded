@@ -12,6 +12,7 @@ from grounded.settings import Settings
 
 if TYPE_CHECKING:
     from grounded.generation.pipeline import AskPipeline
+    from grounded.infra.ratelimit import RateLimiter
     from grounded.observability.request_log import RequestLogger, RequestTrace
 
 
@@ -29,6 +30,11 @@ def get_pipeline(request: Request) -> AskPipeline:
 
 def get_request_logger(request: Request) -> RequestLogger:
     return cast("RequestLogger", request.app.state.request_logger)
+
+
+def get_rate_limiter(request: Request) -> RateLimiter | None:
+    """The limiter, or ``None`` in eval mode (the limiter is not consulted at all, Tech §15.6)."""
+    return cast("RateLimiter | None", request.app.state.rate_limiter)
 
 
 def trace_of(request: Request) -> RequestTrace:
@@ -52,5 +58,6 @@ def request_id_of(request: Request) -> UUID:
 SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 PoolDep = Annotated[AsyncConnectionPool, Depends(get_pool)]
 PipelineDep = Annotated["AskPipeline", Depends(get_pipeline)]
+RateLimiterDep = Annotated["RateLimiter | None", Depends(get_rate_limiter)]
 RequestIdDep = Annotated[UUID, Depends(request_id_of)]
 TraceDep = Annotated["RequestTrace", Depends(trace_of)]

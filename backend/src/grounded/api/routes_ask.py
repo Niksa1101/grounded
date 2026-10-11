@@ -8,6 +8,14 @@ success; the error handlers log the failures, each exactly once (``RequestTrace.
 The proxy secret is checked first of all (``api/security.py``), before the trace starts: a caller
 that fails it gets a 401 and no ``request_logs`` row, and one that passes it gives the trace its
 ``source`` and ``ip_hash``.
+
+The order after that is Tech §1's "validate -> rate-limit -> cache lookup": the body-size limit
+runs in ``AskRoute`` before the JSON is parsed (``api/input_limits.py``), ``AskRequest`` validates
+the question, and only then does the endpoint count the request against the rate limit
+(``infra/ratelimit.py``) and hand it to the pipeline, whose first lookup is the answer cache. So a
+malformed request costs no counter write, and a cache hit still counts. The limit has to be checked
+in the endpoint, not in a dependency: FastAPI runs every dependency before it reports a body that
+failed validation, which would count invalid requests.
 """
 
 from __future__ import annotations
@@ -18,8 +26,17 @@ from typing import Any
 from fastapi import APIRouter, Request, Response
 from fastapi.routing import APIRoute
 
-from grounded.api.deps import PipelineDep, RequestIdDep, TraceDep, get_request_logger, request_id_of
+from grounded.api.deps import (
+    PipelineDep,
+    RateLimiterDep,
+    RequestIdDep,
+    TraceDep,
+    get_request_logger,
+    request_id_of,
+)
+from grounded.api.input_limits import read_limited_body
 from grounded.api.security import authenticate
+from grounded.infra.ratelimit import RateLimitedError
 from grounded.schemas.api import AskRequest, AskResponse, ErrorResponse
 
 
@@ -34,6 +51,7 @@ class AskRoute(APIRoute):
                 request_id_of(request), source=client.source, ip_hash=client.ip_hash
             )
             request.state.trace = trace
+            request = await read_limited_body(request)  # InputRejectedError -> 422, logged
             response = await handle(request)  # a failure raises and is logged by its handler
             if trace.status is None:
                 # The pipeline sets it whenever it returns an answer, so this is a bug. Raised (not
@@ -56,13 +74,22 @@ router = APIRouter(prefix="/v1", tags=["ask"], route_class=AskRoute)
     responses={
         401: {"model": ErrorResponse},
         422: {"model": ErrorResponse},
+        429: {"model": ErrorResponse},
         500: {"model": ErrorResponse},
         502: {"model": ErrorResponse},
         503: {"model": ErrorResponse},
     },
 )
 async def ask(
-    body: AskRequest, pipeline: PipelineDep, request_id: RequestIdDep, trace: TraceDep
+    body: AskRequest,
+    pipeline: PipelineDep,
+    request_id: RequestIdDep,
+    trace: TraceDep,
+    limiter: RateLimiterDep,
 ) -> AskResponse:
     trace.question = body.question
+    if limiter is not None:  # None in eval mode: the limiter is not consulted (Tech §15.6)
+        decision = await limiter.check(trace.ip_hash)
+        if not decision.allowed:
+            raise RateLimitedError(decision)
     return await pipeline.ask(body.question, request_id, trace=trace)

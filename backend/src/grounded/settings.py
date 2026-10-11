@@ -154,7 +154,7 @@ class Settings(BaseSettings):
 
     # --- Protection ----------------------------------------------------------------------------
     rate_limit_per_min: int = Field(default=5, gt=0)
-    rate_limit_per_day: int = Field(default=30, gt=0)
+    rate_limit_per_day: int = Field(default=20, gt=0)
     # Set below the verified provider free-tier RPD in Phase 5; unset means "not configured yet".
     daily_llm_budget: int | None = Field(default=None, gt=0)
     answer_cache_ttl_days: int = Field(default=30, gt=0, le=30)  # must not exceed retention
