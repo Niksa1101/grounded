@@ -202,11 +202,11 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [5.05](phase-5/5.05-budget.md) | Global daily LLM budget | Build | G | done | [#93](https://github.com/Niksa1101/grounded/pull/93) |
 | [5.06](phase-5/5.06-frontend-tracer.md) | Tracer bullet: frontend proxy, generated types, minimal ask page | Build | G | done | [#94](https://github.com/Niksa1101/grounded/pull/94) |
 | [5.07](phase-5/5.07-ask-page.md) | Complete ask page | Build | G | done | [#95](https://github.com/Niksa1101/grounded/pull/95), [#96](https://github.com/Niksa1101/grounded/pull/96) (stacked) |
-| [5.08](phase-5/5.08-backend-vercel.md) | Backend Vercel configuration | Build | G | blocked: preview deploy pending Author; retrieval timeout field pending Author decision | [#97](https://github.com/Niksa1101/grounded/pull/97) |
-| [5.09](phase-5/5.09-neon-prod.md) | Neon production: migrate, `app` role, `ingest.yml` | Build | G (A runs) | blocked: waiting for the Author to run the runbook | [#98](https://github.com/Niksa1101/grounded/pull/98) |
-| [5.10](phase-5/5.10-deploy.md) | Vercel projects, env vars, first deploy, cold start | Build | A (+G checklist) | blocked: waiting for the Author to deploy and measure | [#99](https://github.com/Niksa1101/grounded/pull/99) |
-| [5.11](phase-5/5.11-housekeeping.md) | `housekeeping.yml`: retention and daily keep-warm ping | Build | G | blocked: waiting for the Author's first production dispatch (runbook step 10) | [#100](https://github.com/Niksa1101/grounded/pull/100) |
-| [5.12](phase-5/5.12-readme-v1.md) | README v1 and MVP closeout | Closeout | G draft, A final | blocked: exit criteria 1 and 2 pending the Author's deployment and manual checks | [#101](https://github.com/Niksa1101/grounded/pull/101) |
+| [5.08](phase-5/5.08-backend-vercel.md) | Backend Vercel configuration | Build | G | done | [#97](https://github.com/Niksa1101/grounded/pull/97) |
+| [5.09](phase-5/5.09-neon-prod.md) | Neon production: migrate, `app` role, `ingest.yml` | Build | G (A runs) | done | [#98](https://github.com/Niksa1101/grounded/pull/98) |
+| [5.10](phase-5/5.10-deploy.md) | Vercel projects, env vars, first deploy, cold start | Build | A (+G checklist) | done | [#99](https://github.com/Niksa1101/grounded/pull/99) |
+| [5.11](phase-5/5.11-housekeeping.md) | `housekeeping.yml`: retention and daily keep-warm ping | Build | G | done | [#100](https://github.com/Niksa1101/grounded/pull/100) |
+| [5.12](phase-5/5.12-readme-v1.md) | README v1 and MVP closeout | Closeout | G draft, A final | done | [#101](https://github.com/Niksa1101/grounded/pull/101) |
 | [R.18](phase-5/README.md#review-follow-ups) | Phase 5 review follow-ups: tickets and decisions (D54) | Build | G | done | [#102](https://github.com/Niksa1101/grounded/pull/102) |
 | [R.19](phase-5/R.19-neon-role-password.md) | Neon runbook: set the `app` password in plain text from a psql variable | Build | G | done | [#103](https://github.com/Niksa1101/grounded/pull/103) |
 | [R.20](phase-5/R.20-deadline-outcome.md) | Migration `0004`: the `deadline_exceeded` outcome | Build | G | done | [#104](https://github.com/Niksa1101/grounded/pull/104) |
