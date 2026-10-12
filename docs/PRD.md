@@ -469,6 +469,14 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   comparable across queries. That matters before `CONFIDENCE_W_RERANK` goes above 0 (see the guard item below). (7) At
   list price one rerank call ($2.50 per 1K) costs more than the whole shadow cost of a `hybrid` request in the committed
   baseline ($1.69 per 1K requests, `n` = 30), so the lift analysis of 6.05 should state what the lift costs.
+- **Phase 6 adapter (6.02, 2026-10-12), what stays open.** (1) The adapter's tests run the real `cohere` 7.2.0 client over
+  a mock transport on fixtures that follow the documented response shape: **none is recorded**, because no real call has
+  been made (no key in `.env`; the tally stays at 0). The first real call (6.04) should be compared with
+  `tests/fixtures/cohere/rerank_success.json` and the fixture replaced by a recording if the shape differs (a `Retry-After`
+  on a 429 stays hypothetical until one is seen). (2) The SDK has no public `close`; the adapter ends its client with
+  `__aexit__`, the context-manager exit the SDK documents for this. Re-check on an SDK upgrade. (3) The check that
+  `RERANK_PROVIDER=cohere` has a key and a model lives in `runtime.build_reranker`, like Gemini's in `open_runtime`:
+  `Settings` accepts the combination, and nothing calls the builder until 6.03 wires it into `open_runtime`.
 - Free-tier limits of `gemini-3.5-flash-lite` (read from the Author's AI Studio rate-limit page, project `grounded`, 2026-10-06; the docs only point to that dashboard): **500 requests per day** (the Limit line sits on the labelled 500 tick). RPM (15) and TPM (250K) are read off the chart as the midpoint of the axis, they are not printed, so treat them as approximate. For comparison `gemini-3.6-flash` showed 5 RPM, 20 RPD and ~250K TPM. The daily quota resets at midnight Pacific time. Ticket 5.01 set `DAILY_LLM_BUDGET` to 300, below 500, and every retry counts as a request.
 - The current list price of `gemini-embedding-001`: the pricing page now lists only `gemini-embedding-2` ($0.20 per 1M text tokens). `pricing.toml` uses $0.15 per 1M input tokens from Google's general-availability post (2025-07-14), a dated announcement and not a row of today's page. Re-check it if the page lists the model again.
 - `gemini-embedding-001` is still served (shutdown date 2028-05-14, Google's deprecations page, 2026-10-06), but Google's recommended replacement is `gemini-embedding-2`. Moving to it is a new index version (new vectors, new baselines) and is not planned in this project's phases.

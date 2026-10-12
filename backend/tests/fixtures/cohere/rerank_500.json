@@ -1,0 +1,10 @@
+{
+ "_synthetic": true,
+ "_note": "NOT RECORDED. A 5xx can't be provoked on demand. Shape: the SDK's InternalServerError (status 500, headers, body) with the {id, message} error body of the API reference; the message wording is modeled.",
+ "status_code": 500,
+ "headers": {},
+ "body": {
+  "id": "5ab4f4d3-8a3c-4d54-9f55-2b8e2d3b0c13",
+  "message": "internal server error"
+ }
+}

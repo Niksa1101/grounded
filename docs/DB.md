@@ -108,7 +108,7 @@ Tables by lifecycle:
 | Meta | `schema_migrations` | migration runner | migration runner |
 
 Not in the database, on purpose:
-- **Embedding cache, rerank cache, eval LLM-response cache.** These are SQLite files under `.cache/` used by ingest/eval locally and restored in CI via `actions/cache`. This keeps CI independent of production and avoids re-embedding the corpus on every run.
+- **Embedding cache, rerank cache, eval LLM-response cache.** These are SQLite files under `.cache/` used by ingest/eval locally and, for the embedding cache, restored in CI via `actions/cache`. This keeps CI independent of production and avoids re-embedding the corpus on every run. The rerank cache is a local convenience for manual `hybrid_rerank` runs: no CI job restores or writes it (Tech §8, PRD D55), and it is never created in prod.
 
 ## 4. Schema (migrations `0001_init.sql` to `0004_deadline_outcome.sql`)
 

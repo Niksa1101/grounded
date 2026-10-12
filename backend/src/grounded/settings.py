@@ -127,6 +127,10 @@ class Settings(BaseSettings):
     rerank_provider: RerankProvider = "none"
     rerank_model: str | None = None
     rerank_daily_cap: int = Field(default=30, ge=0)
+    # The rerank stage of /v1/ask (Tech §6, §8, PRD D55): one attempt, no retry, no sleep. Unlike
+    # RETRIEVAL_TIMEOUT_S it also applies in eval mode, so an eval run and the request path agree
+    # on what counts as a degraded (timed-out) rerank.
+    rerank_timeout_s: float = Field(default=3.0, gt=0)
 
     # --- Chunking (grouped into ChunkingConfig, stored per index version) ----------------------
     chunk_max_tokens: int = Field(default=450, gt=0)

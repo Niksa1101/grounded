@@ -1,6 +1,7 @@
 """Persistent key-value cache in a local SQLite file (Tech.md §11).
 
-One file per cache under ``CACHE_DIR`` (``embeddings.sqlite``, ``llm_eval.sqlite``; rerank later).
+One file per cache under ``CACHE_DIR`` (``embeddings.sqlite``, ``llm_eval.sqlite``,
+``rerank.sqlite``).
 Offline tooling only: ingest, evals, dev. The request path in prod uses in-memory caches.
 
 The API is synchronous (stdlib ``sqlite3``); async callers wrap calls in ``asyncio.to_thread`` so

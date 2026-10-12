@@ -1,0 +1,10 @@
+{
+ "_synthetic": true,
+ "_note": "NOT RECORDED. A 429 can't be provoked on demand, and Cohere's pages do not say whether a 429 carries Retry-After (Tech 8, PRD 12), so this header is HYPOTHETICAL: it exists to prove the adapter passes a server-given wait on and never sleeps on it. Shape: the SDK's TooManyRequestsError (status 429, headers, body) with the {id, message} error body of the API reference; the message wording is modeled.",
+ "status_code": 429,
+ "headers": {"retry-after": "7"},
+ "body": {
+  "id": "5ab4f4d3-8a3c-4d54-9f55-2b8e2d3b0c11",
+  "message": "Too many requests: rate limit exceeded for this key."
+ }
+}
