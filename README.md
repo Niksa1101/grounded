@@ -575,10 +575,11 @@ CI touches Neon production or a Vercel project on its own.
 | `eval.yml` | labeled PRs (`run-eval`), every push to `main`, manual | green on `main`; `eval` is a required check. Uses free-tier quota: [CI quality gate](#ci-quality-gate) |
 | `warm-cache.yml` | manual | seeds the CI embeddings cache (one run, 2026-10-02); the re-seed procedure after an eviction |
 | `ingest.yml` | manual, from `main` only | builds and activates the index in Neon production. Never run |
-| `housekeeping.yml` | daily schedule and manual | retention and the keep-warm ping. The schedule is off until `HOUSEKEEPING_ENABLED` is set; never run |
+| `housekeeping.yml` | daily schedule and manual | retention and the keep-warm ping (`/readyz` needs the repository secret `PROXY_SHARED_SECRET`, the Vercel value). The schedule is off until `HOUSEKEEPING_ENABLED` is set; never run |
 
 The repository variables that switch production-touching steps on (`EVAL_RECORD_RUNS`, `HOUSEKEEPING_ENABLED`) and the
-`BACKEND_URL` of the keep-warm ping are all unset (`gh variable list` was empty on 2026-10-12).
+`BACKEND_URL` of the keep-warm ping are all unset (`gh variable list` was empty on 2026-10-12). The keep-warm ping also
+needs the repository secret `PROXY_SHARED_SECRET` (the Author creates it in step 10 of the Neon runbook).
 
 ## Roadmap
 

@@ -31,8 +31,20 @@ from grounded.infra.cold_start import (
     render_report,
     run_measurement,
 )
+from grounded.settings import get_settings
 
 runner = CliRunner()
+
+SECRET = "proxy-secret-for-tests"
+
+
+@pytest.fixture(autouse=True)
+def proxy_secret(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The command reads PROXY_SHARED_SECRET through ``get_settings()``; give it a known value."""
+    monkeypatch.setenv("PROXY_SHARED_SECRET", SECRET)
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 def answer(*, cache_hit: bool = False, total_ms: int = 1500) -> dict[str, Any]:
@@ -116,6 +128,7 @@ def plan(site: FakeSite, **overrides: Any) -> Plan:
         "idle_minutes": 30,
         "warm_probes": 2,
         "asks": 3,
+        "proxy_secret": SECRET,
     }
     return Plan(**{**values, **overrides})
 
@@ -169,10 +182,43 @@ def test_every_ask_is_a_different_question_and_nothing_secret_is_sent(site: Fake
     questions = [json.loads(raw)["question"] for _, raw in asks]
     assert questions == list(DEFAULT_QUESTIONS[:4])
     assert len(set(questions)) == 4
-    for method, _, headers, _ in site.requests:
-        assert "x-proxy-secret" not in headers, method
+    for method, path, headers, _ in site.requests:
+        if path != "/readyz":
+            assert "x-proxy-secret" not in headers, (method, path)
         assert "authorization" not in headers
         assert "cookie" not in headers
+
+
+def test_the_proxy_secret_goes_to_readyz_and_nowhere_else(site: FakeSite) -> None:
+    run_measurement(plan(site, asks=2))
+    sent = {
+        (method, path, headers.get("x-proxy-secret")) for method, path, headers, _ in site.requests
+    }
+    assert sent == {
+        ("GET", "/healthz", None),
+        ("GET", "/readyz", SECRET),
+        ("POST", "/api/ask", None),
+    }
+
+
+@pytest.mark.parametrize("secret", [None, ""])
+def test_a_backend_url_without_the_proxy_secret_is_refused(
+    site: FakeSite, secret: str | None
+) -> None:
+    with pytest.raises(MeasureError, match="PROXY_SHARED_SECRET"):
+        run_measurement(plan(site, proxy_secret=secret))
+    assert site.requests == []
+
+
+def test_ask_order_without_a_backend_needs_no_secret(site: FakeSite) -> None:
+    run = run_measurement(plan(site, backend_url=None, first="ask", asks=1, proxy_secret=None))
+    assert [s.step for s in run.samples] == [Step.ASK]
+
+
+def test_the_secret_is_not_in_the_plan_repr() -> None:
+    assert SECRET not in repr(
+        Plan("https://f.example", "https://b.example", 30, proxy_secret=SECRET)
+    )
 
 
 # --- stop rules and failures -----------------------------------------------------------------
@@ -347,6 +393,7 @@ def test_the_report_has_the_table_the_runbook_asks_for(site: FakeSite) -> None:
     assert "### Raw samples" in report
     assert "`cle1::cle1`" in report  # the regions line, from x-vercel-id
     assert "x-proxy-secret" not in report.lower()
+    assert SECRET not in report
 
 
 # --- the command -----------------------------------------------------------------------------
@@ -374,6 +421,23 @@ def test_the_command_prints_the_report_and_warns_about_quota(site: FakeSite) -> 
     assert "## Cold start and warm latency" in result.stdout
     assert "WARNING: this sends 2 real question(s)" in result.output
     assert paths(site).count("POST /api/ask") == 2
+    assert SECRET not in result.output
+    readyz = [headers for _, path, headers, _ in site.requests if path == "/readyz"]
+    assert readyz
+    assert all(h.get("x-proxy-secret") == SECRET for h in readyz)
+
+
+def test_the_command_refuses_a_backend_url_without_the_secret(
+    site: FakeSite, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PROXY_SHARED_SECRET", "")  # wins over any .env file
+    get_settings.cache_clear()
+    result = invoke(
+        "--frontend-url", site.url, "--backend-url", site.url, "--idle-minutes", "30", "--yes"
+    )
+    assert result.exit_code == 1
+    assert "PROXY_SHARED_SECRET" in result.output
+    assert site.requests == []
 
 
 def test_declining_the_confirmation_sends_nothing(site: FakeSite) -> None:

@@ -211,7 +211,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.19](phase-5/R.19-neon-role-password.md) | Neon runbook: set the `app` password in plain text from a psql variable | Build | G | done | [#103](https://github.com/Niksa1101/grounded/pull/103) |
 | [R.20](phase-5/R.20-deadline-outcome.md) | Migration `0004`: the `deadline_exceeded` outcome | Build | G | done | [#104](https://github.com/Niksa1101/grounded/pull/104) |
 | [R.21](phase-5/R.21-retrieval-timeout.md) | `RETRIEVAL_TIMEOUT_S`: the retrieval stage timeout | Build | G | done | [#105](https://github.com/Niksa1101/grounded/pull/105) |
-| [R.22](phase-5/R.22-readyz-secret.md) | `/readyz` requires the proxy secret | Build | G | todo | |
+| [R.22](phase-5/R.22-readyz-secret.md) | `/readyz` requires the proxy secret | Build | G | done | [#106](https://github.com/Niksa1101/grounded/pull/106) |
 | [R.23](phase-5/R.23-cold-start-questions.md) | Cold-start measurement: distinct questions, cold cache hits, cold retrieval | Build | G | todo | |
 | [R.24](phase-5/R.24-deterministic-deadline-tests.md) | Deterministic deadline tests and env isolation in tests | Build | G | todo | |
 | [R.25](phase-5/R.25-review-polish.md) | Small hardening and documentation drift | Build | G | todo | |

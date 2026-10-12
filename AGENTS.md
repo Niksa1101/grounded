@@ -242,7 +242,7 @@ uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key ../
 ```
 
 ```bash
-uv run grounded measure-cold-start --frontend-url <url> --backend-url <url> --idle-minutes 30 --first health   # times the LIVE deployment after an idle period (ticket 5.10, docs/runbooks/vercel-deploy.md step 9); --asks N (default 4, max 10) sends real questions and uses quota; the Author runs it
+uv run grounded measure-cold-start --frontend-url <url> --backend-url <url> --idle-minutes 30 --first health   # times the LIVE deployment after an idle period (ticket 5.10, docs/runbooks/vercel-deploy.md step 9); --asks N (default 4, max 10) sends real questions and uses quota; --backend-url needs PROXY_SHARED_SECRET exported (the production value, sent on /readyz only); the Author runs it
 ```
 
 ```bash

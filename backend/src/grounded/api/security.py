@@ -18,7 +18,9 @@ nothing to key the HMAC with, and the hash is ``None``: no hash is better than a
 
 ``authenticate`` runs before ``AskRoute`` starts the request trace, so a rejected request writes no
 ``request_logs`` row (``unauthorized`` is not an outcome in DB.md §4: unauthenticated callers must
-not be able to fill the table). The ``/healthz`` and ``/readyz`` routes do not call it.
+not be able to fill the table). ``/readyz`` checks the secret alone (``check_proxy_secret``, PRD
+D54c): it queries the database, so an anonymous caller must not be able to keep Neon awake.
+``/healthz`` touches nothing and stays public.
 """
 
 from __future__ import annotations
@@ -69,8 +71,9 @@ def _canonical_ip(value: str) -> str | None:
     return str(ip)
 
 
-def _is_proxy(request: Request, settings: Settings) -> bool:
-    """True for a valid secret, False for none at all; raises for a wrong one."""
+def check_proxy_secret(request: Request, settings: Settings) -> bool:
+    """True for a valid ``X-Proxy-Secret``; False for none at all when ``ALLOW_DIRECT_API`` allows
+    it. Raises ``ProxyAuthError`` (-> 401) for a missing secret otherwise, and for a wrong one."""
     supplied = request.headers.get(PROXY_SECRET_HEADER)
     if supplied is None:
         if settings.allow_direct_api:
@@ -88,7 +91,7 @@ def _is_proxy(request: Request, settings: Settings) -> bool:
 def authenticate(request: Request, settings: Settings | None = None) -> ClientIdentity:
     """Check the proxy secret and hash the client IP. Raises ``ProxyAuthError`` (-> 401)."""
     settings = settings or get_settings_dep(request)
-    proxied = _is_proxy(request, settings)
+    proxied = check_proxy_secret(request, settings)
 
     ip: str | None = None
     if proxied:

@@ -252,8 +252,17 @@ curl -s "$BACKEND_URL/healthz"
 
 Expect `{"status":"ok"}`.
 
+`/readyz` queries the database, so it needs the proxy secret, like `/v1` (PRD D54c; without it the
+answer is `401` and nothing is queried). Read the production `PROXY_SHARED_SECRET` from your password
+manager into the shell without echoing it (paste it at the empty prompt, then press Enter). Steps 8
+and 9 use the same variable:
+
 ```bash
-curl -s -i "$BACKEND_URL/readyz"
+read -rs PROXY_SHARED_SECRET && export PROXY_SHARED_SECRET
+```
+
+```bash
+curl -s -i -H "X-Proxy-Secret: $PROXY_SHARED_SECRET" "$BACKEND_URL/readyz"
 ```
 
 Expect `200` and `{"status":"ok","database":"ok","active_index_version":"<ref>@<hash8>"}`, the same
@@ -409,15 +418,23 @@ V7, a free request loop (no LLM, no quota). The same statement is executed far m
 per pooled connection, which is when psycopg starts preparing it:
 
 ```bash
-for i in $(seq 1 30); do curl -s -o /dev/null -w "%{http_code}\n" "$BACKEND_URL/readyz"; done | sort | uniq -c
+for i in $(seq 1 30); do curl -s -o /dev/null -w "%{http_code}\n" -H "X-Proxy-Secret: $PROXY_SHARED_SECRET" "$BACKEND_URL/readyz"; done | sort | uniq -c
 ```
 
 ## 9. Measure the cold start
 
 The question: do the function start and the Neon wake, which both happen **before** the handler's
 25 s deadline starts, fit in the 10 s between that deadline and the proxy's 35 s timeout (Tech §18,
-D53)? `grounded measure-cold-start` times it. It sends no secret: it calls the backend's public
-`/healthz` and `/readyz` and the frontend's public `/api/ask`, exactly what a visitor can reach.
+D53)? `grounded measure-cold-start` times it. It calls the backend's public `/healthz`, the
+backend's `/readyz` with `X-Proxy-Secret` (that one request only; D54c) and the frontend's public
+`/api/ask`, what a visitor can reach. The command reads the secret from `PROXY_SHARED_SECRET`
+through `Settings` and never prints it. Export the **production** value first (step 4 did, in the
+same shell): a variable in the environment wins over a development `.env`, whose value would only
+earn a 401. Without it, `--backend-url` is refused before anything is sent.
+
+```bash
+read -rs PROXY_SHARED_SECRET && export PROXY_SHARED_SECRET
+```
 
 Read before running:
 
@@ -488,6 +505,7 @@ the checklist (V1–V16)._
 | Backend `/healthz` is 500 | The lifespan failed: a missing `GEMINI_API_KEY` or `GEMINI_MODEL` (`ProviderConfigError`), or `Settings` refused the production values (the message names the missing variables) | Read the runtime log, fix the variable, create a new deployment (changes apply only to new ones) |
 | `/readyz` 503, `database: error` | The pooled URL, user or password is wrong, `app` lacks a grant, or Neon was slower than `DB_POOL_TIMEOUT_S` | Neon runbook step 7; retry once; V10 |
 | `/readyz` 503, `database: ok`, no index | No active index version | Neon runbook step 5 |
+| `/readyz` 401 | The request had no `X-Proxy-Secret`, or a value that differs from the backend's `PROXY_SHARED_SECRET` (D54c) | Step 4: export the production value and send the header; for `housekeeping.yml`, the repository secret `PROXY_SHARED_SECRET` (Neon runbook step 10) |
 | Frontend `500 proxy_misconfigured` | `BACKEND_URL` or `PROXY_SHARED_SECRET` is unset in the Production environment of the frontend, or the deployment predates them | Step 5.1, then a new deployment |
 | Frontend `502 upstream_unavailable` | `BACKEND_URL` points at a protected deployment URL (an HTML login page), or at nothing | Use the production domain |
 | Frontend `504 upstream_timeout` | The backend did not answer within 35 s | Step 9 tells whether it is the cold start |
@@ -504,7 +522,7 @@ Tick each box as you do it; the acceptance criteria of ticket 5.10 are the last 
 - [ ] `PROXY_SHARED_SECRET` and `IP_HASH_SECRET` generated, kept in the password manager
 - [ ] Backend project: root `backend`, production variables (9) set for Production only
 - [ ] Backend preview placeholders (7) set as Config
-- [ ] Backend deployed from `main`: `/healthz` 200, `/readyz` 200 with the active index, `/v1/ask` without a secret 401
+- [ ] Backend deployed from `main`: `/healthz` 200, `/readyz` with the secret 200 with the active index (without it 401), `/v1/ask` without a secret 401
 - [ ] Frontend project: root `frontend`, `BACKEND_URL` (production domain) and `PROXY_SHARED_SECRET` set for Production only
 - [ ] Frontend deployed from `main`; the page answers a question
 - [ ] Both functions in `cle1`, Fluid compute on, Branch Tracking `main`

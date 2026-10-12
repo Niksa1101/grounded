@@ -35,6 +35,9 @@ export interface paths {
          * Readyz
          * @description Database reachable, schema present and an index version active.
          *
+         *     Requires ``X-Proxy-Secret`` (or ``ALLOW_DIRECT_API`` in dev), checked before the pool is used,
+         *     so a rejected call is a 401 in the shared error shape with no database access and no log row.
+         *
          *     Querying ``index_versions`` doubles as a "migrations applied" check. Without an active index
          *     ``/v1/ask`` cannot retrieve anything, so that is a readiness failure too (503, with
          *     ``database: ok``).
@@ -247,6 +250,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ReadinessResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Service Unavailable */

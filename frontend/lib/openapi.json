@@ -33,7 +33,7 @@
           "health"
         ],
         "summary": "Readyz",
-        "description": "Database reachable, schema present and an index version active.\n\nQuerying ``index_versions`` doubles as a \"migrations applied\" check. Without an active index\n``/v1/ask`` cannot retrieve anything, so that is a readiness failure too (503, with\n``database: ok``).",
+        "description": "Database reachable, schema present and an index version active.\n\nRequires ``X-Proxy-Secret`` (or ``ALLOW_DIRECT_API`` in dev), checked before the pool is used,\nso a rejected call is a 401 in the shared error shape with no database access and no log row.\n\nQuerying ``index_versions`` doubles as a \"migrations applied\" check. Without an active index\n``/v1/ask`` cannot retrieve anything, so that is a readiness failure too (503, with\n``database: ok``).",
         "operationId": "readyz_readyz_get",
         "responses": {
           "200": {
@@ -42,6 +42,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }

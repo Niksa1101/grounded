@@ -1305,7 +1305,8 @@ def measure_cold_start(
     backend_url: Annotated[
         str | None,
         typer.Option(
-            help="The backend's production origin, for the public /healthz and /readyz probes.",
+            help="The backend's production origin, for the /healthz and /readyz probes "
+            "(/readyz needs PROXY_SHARED_SECRET in the environment).",
             show_default=False,
         ),
     ] = None,
@@ -1345,9 +1346,11 @@ def measure_cold_start(
 ) -> None:
     """Time the live deployment after an idle period and print a Markdown report (ticket 5.10).
 
-    Sends no secret: it uses the public backend probes and the public frontend route only. Run it
-    by hand (docs/runbooks/vercel-deploy.md); it is not for CI.
+    With --backend-url it sends PROXY_SHARED_SECRET (from Settings: export the production value) on
+    GET /readyz, and on nothing else; it never prints it. Run it by hand
+    (docs/runbooks/vercel-deploy.md); it is not for CI.
     """
+    configured = get_settings().proxy_shared_secret
     plan = Plan(
         frontend_url=frontend_url,
         backend_url=backend_url,
@@ -1359,6 +1362,7 @@ def measure_cold_start(
         timeout_s=timeout_s,
         margin_s=margin_s,
         waited=wait,
+        proxy_secret=configured.get_secret_value() if configured is not None else None,
     )
     try:
         plan.validate()
