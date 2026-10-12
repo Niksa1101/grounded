@@ -890,7 +890,7 @@ As built in 4.03 (the checks are the first two items; everything else is wiring 
 | Integration | migrations apply cleanly; dense/lexical/hybrid SQL on a small fixture index (~30 hand-made chunks with known vectors); budget atomicity under concurrency | pgvector service container |
 | Eval | retrieval eval + promptfoo (separate from pytest) | see §15 |
 
-Rules: **no real network calls in pytest.** A socket-blocking fixture fails any test that tries. Fixtures are small and committed. Every bug fix comes with a failing test first.
+Rules: **no real network calls in pytest.** A socket-blocking fixture fails any test that tries. Fixtures are small and committed. Every bug fix comes with a failing test first. **No inherited configuration** (R.24): an autouse fixture removes every environment variable named after a `Settings` field (except `TEST_DATABASE_URL`) and `FORCE_COLOR`, and sets `NO_COLOR=1`, so a developer's shell and the CI job see the same tests. **No wall-clock timing:** a timeout test never races a short real deadline; `tests/integration/test_deadline.py` records the request deadline's `asyncio.timeout` scope (it replaces the `asyncio` name inside `grounded.api.deadline` only) and the hanging stage expires it the moment it starts.
 
 ## 17. CI/CD workflows
 

@@ -28,14 +28,14 @@ needed per-test workarounds in #97.
   the test body. Remove the per-test workarounds added for #97 once the fixture covers them.
 
 **Acceptance criteria**
-- [ ] `test_deadline.py` has no timing-dependent assertion and no deadline below 30 s.
-- [ ] The autouse fixture exists and the #97 workarounds are gone.
-- [ ] The CI-like environment passes: `DATABASE_URL=postgresql://grounded:grounded@localhost:5433/grounded
+- [x] `test_deadline.py` has no timing-dependent assertion and no deadline below 30 s.
+- [x] The autouse fixture exists and the #97 workarounds are gone.
+- [x] The CI-like environment passes: `DATABASE_URL=postgresql://grounded:grounded@localhost:5433/grounded
       TEST_DATABASE_URL=postgresql://grounded:grounded@localhost:5433/grounded_test uv run pytest`.
-- [ ] `test_deadline.py` passes 20 times in a loop while 12 CPU-busy processes run: 20/20.
+- [x] `test_deadline.py` passes 20 times in a loop while 12 CPU-busy processes run: 20/20.
 
 **Verify:** standard checks plus the two runs above.
 
 **Eval impact:** none.
 
-**Docs to update:** none expected (tests only); Tech §16 if it describes the deadline tests.
+**Docs to update:** Tech §16 (the two testing rules).

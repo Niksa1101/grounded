@@ -101,8 +101,6 @@ def test_the_command_uses_the_owner_url_and_passes_dry_run_on(
         calls.append((conninfo, kwargs))
         return [RuleResult("rule_a", 0)]
 
-    for name in ("DATABASE_URL", "DATABASE_URL_DIRECT"):
-        monkeypatch.delenv(name, raising=False)  # the CI environment must not leak in
     settings = make_settings(
         database_url="postgresql://app@127.0.0.1:1/runtime",
         database_url_direct="postgresql://owner@127.0.0.1:1/owner",

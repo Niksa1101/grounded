@@ -1,16 +1,20 @@
 """The request deadline of ``POST /v1/ask`` against the real schema (5.08, Tech §6, §13, §18).
 
 A request that outlives ``REQUEST_DEADLINE_S`` ends as a 504 ``deadline_exceeded`` with a
-``request_id`` and a ``request_logs`` row that keeps the stage timings reached so far. The
-deadlines here are a fraction of a second (long enough for the fast stages to finish first on a
-warm pool, which is what each test does before it asks), and the slow work is an awaitable that
-never finishes, so it ends by cancellation: those deadlines are the only real waits.
+``request_id`` and a ``request_logs`` row that keeps the stage timings reached so far.
+
+No test depends on the wall clock (AGENTS.md §8, R.24). The deadline is 30 s, far longer than any
+stage, and the ``deadline_scopes`` fixture expires it at an exact moment instead: it replaces the
+``asyncio`` name inside ``grounded.api.deadline`` only, so it records the request deadline's real
+``asyncio.timeout`` scope, and the hanging stage, the moment it starts, reschedules that scope to
+"now". The stage then ends by cancellation, exactly as a real deadline would end it. Other
+timeouts (the retrieval stage, the LLM call) are untouched: they use ``asyncio`` directly.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -20,6 +24,7 @@ import psycopg
 import pytest
 from psycopg.rows import dict_row
 
+import grounded.api.deadline
 from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.ingest.embed import FakeEmbedder, TaskType, Vector
 from grounded.schemas.llm import LLMAnswer, LLMClaim
@@ -35,7 +40,7 @@ from tests.support import (
 pytestmark = pytest.mark.integration
 
 QUESTION = "Where does the quokka sleep?"
-DEADLINE_S = 0.2
+DEADLINE_S = 30.0  # never reached by the clock: ``DeadlineScopes.expire_now`` ends it
 TODAY = "(now() AT TIME ZONE 'utc')::date"
 
 
@@ -54,20 +59,46 @@ def db(test_database_url: str) -> Iterator[str]:
     wipe()
 
 
+class DeadlineScopes:
+    """Stands in for ``asyncio`` inside ``grounded.api.deadline``: ``timeout`` builds the real
+    scope and keeps it, so a test can make the request deadline expire at an exact moment."""
+
+    def __init__(self) -> None:
+        self.scopes: list[asyncio.Timeout] = []
+
+    def timeout(self, delay: float | None) -> asyncio.Timeout:
+        scope = asyncio.timeout(delay)
+        self.scopes.append(scope)
+        return scope
+
+    def expire_now(self) -> None:
+        """Make the newest request deadline expire at the next turn of the event loop."""
+        self.scopes[-1].reschedule(asyncio.get_running_loop().time())
+
+
+@pytest.fixture
+def deadline_scopes(monkeypatch: pytest.MonkeyPatch) -> DeadlineScopes:
+    scopes = DeadlineScopes()
+    monkeypatch.setattr(grounded.api.deadline, "asyncio", scopes)
+    return scopes
+
+
 def good() -> LLMAnswer:
     claim = LLMClaim(text="Quokkas sleep.", citation_ids=["c1"], self_confidence=0.9)
     return LLMAnswer(status="answered", answer_markdown="Quokkas sleep. [c1]", claims=[claim])
 
 
 class HangingProvider(FakeLLMProvider):
-    """Never answers: the call waits until it is cancelled, and says so."""
+    """Never answers: the call calls ``on_start``, waits until it is cancelled, and says so."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_start: Callable[[], None]) -> None:
         super().__init__()
         self.cancelled = False
+        self._on_start = on_start
 
     async def generate(self, **kwargs: Any) -> Any:  # pyright: ignore[reportIncompatibleMethodOverride]
         self.started = True
+        self._on_start()
         try:
             await asyncio.Event().wait()
         except asyncio.CancelledError:
@@ -90,8 +121,13 @@ class SlowProvider(FakeLLMProvider):
 
 
 class HangingEmbedder(FakeEmbedder):
+    def __init__(self, *, dim: int, on_start: Callable[[], None]) -> None:
+        super().__init__(dim=dim)
+        self._on_start = on_start
+
     async def embed(self, texts: Sequence[str], task_type: TaskType) -> list[Vector]:
         self.calls.append((list(texts), task_type))
+        self._on_start()
         await asyncio.Event().wait()
         raise AssertionError("unreachable")
 
@@ -118,9 +154,9 @@ def settings_for(db: str, **overrides: Any) -> Any:
 
 
 async def test_a_request_that_outlives_the_deadline_is_a_504_with_a_request_id_and_a_row(
-    db: str,
+    db: str, deadline_scopes: DeadlineScopes
 ) -> None:
-    llm = HangingProvider()
+    llm = HangingProvider(on_start=deadline_scopes.expire_now)
     async with app_client(settings_for(db), provider=llm) as client:
         response = await ask(client)
 
@@ -151,12 +187,15 @@ async def test_a_request_that_outlives_the_deadline_is_a_504_with_a_request_id_a
     assert row["latency_embed_ms"] is not None
     assert row["latency_retrieval_ms"] is not None
     assert row["latency_llm_ms"] is not None
-    assert row["latency_total_ms"] >= round(DEADLINE_S * 1000) - 5  # the real clock
+    assert row["latency_total_ms"] is not None
     assert row["input_tokens"] is None  # no usage was ever reported
 
 
-async def test_a_deadline_during_the_embed_stage_stops_before_any_llm_call(db: str) -> None:
-    embedder, llm = HangingEmbedder(dim=EMBEDDING_DIM), FakeLLMProvider([])
+async def test_a_deadline_during_the_embed_stage_stops_before_any_llm_call(
+    db: str, deadline_scopes: DeadlineScopes
+) -> None:
+    embedder = HangingEmbedder(dim=EMBEDDING_DIM, on_start=deadline_scopes.expire_now)
+    llm = FakeLLMProvider([])
     async with app_client(
         settings_for(db, daily_llm_budget=10), embedder=embedder, provider=llm
     ) as client:
@@ -173,11 +212,13 @@ async def test_a_deadline_during_the_embed_stage_stops_before_any_llm_call(db: s
     assert (row["outcome"], row["error_code"]) == ("deadline_exceeded", "deadline_exceeded")
 
 
-async def test_a_budget_unit_reserved_before_a_call_that_timed_out_stays_spent(db: str) -> None:
+async def test_a_budget_unit_reserved_before_a_call_that_timed_out_stays_spent(
+    db: str, deadline_scopes: DeadlineScopes
+) -> None:
     # The reserve is its own committed statement and the provider may have counted the request
     # (a call that fails after the reserve keeps its unit, Tech §12), so cancelling the call does
     # not give the unit back. No tokens are added: the call never reported any.
-    llm = HangingProvider()
+    llm = HangingProvider(on_start=deadline_scopes.expire_now)
     async with app_client(settings_for(db, daily_llm_budget=10), provider=llm) as client:
         response = await ask(client)
 
@@ -187,7 +228,9 @@ async def test_a_budget_unit_reserved_before_a_call_that_timed_out_stays_spent(d
     assert (row["llm_calls"], row["input_tokens"], row["output_tokens"]) == (1, 0, 0)
 
 
-async def test_eval_mode_has_no_deadline(db: str, tmp_path: Path) -> None:
+async def test_eval_mode_has_no_deadline(
+    db: str, tmp_path: Path, deadline_scopes: DeadlineScopes
+) -> None:
     # The same slow reply (60 ms against a 20 ms deadline) is a 200 in eval mode: eval runs have
     # their own, longer call timeout and never hit the deadline (Tech §15.6).
     settings = make_settings(
@@ -197,6 +240,7 @@ async def test_eval_mode_has_no_deadline(db: str, tmp_path: Path) -> None:
         response = await ask(client)
 
     assert response.status_code == 200
+    assert deadline_scopes.scopes == []  # no deadline scope was even created
     [row] = rows(db)
     assert (row["outcome"], row["source"]) == ("answered", "eval")
 

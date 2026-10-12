@@ -235,8 +235,6 @@ def test_telemetry_that_is_not_user_text_survives_the_text_removal(db: str) -> N
 
 @pytest.fixture
 def cli(db: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DATABASE_URL", raising=False)
-    monkeypatch.delenv("DATABASE_URL_DIRECT", raising=False)
     settings = make_settings(database_url=db, database_url_direct=db)
     monkeypatch.setattr(grounded.cli, "get_settings", lambda: settings)
 
