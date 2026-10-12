@@ -1,0 +1,129 @@
+# Daily retention and keep-warm for PRODUCTION (ticket 5.11, Tech.md §17; runbook:
+# docs/runbooks/neon-production.md, step 10). Retention is a write to production Neon with the owner
+# connection, so this workflow ships DISABLED on its schedule:
+#
+# - `workflow_dispatch` always works, from `main` only (the job's `if`): the Author runs it by hand
+#   first, with `dry_run` on if they want to see the counts before anything is changed.
+# - The daily `schedule` does nothing until the Author sets the repository variable
+#   `HOUSEKEEPING_ENABLED` to `true` (after one green manual run). Unset it is the empty string,
+#   so both jobs are skipped; the same pattern as EVAL_RECORD_RUNS in eval.yml. Setting it to
+#   anything else, or deleting it, switches the schedule off again.
+# - GitHub disables scheduled workflows after 60 days without repository activity (README
+#   limitations). A manual dispatch, or enabling the workflow again, restarts it.
+#
+# - `DATABASE_URL_DIRECT` (the owner role's DIRECT, non-pooled Neon URL: the `app` role cannot delete
+#   the log tables, DB.md §5) is a repository secret, as in Tech §17. It is passed to two steps and
+#   to nothing else: the guard (the same one as ingest.yml, kept in step with it by a test) and the
+#   retention command. Not the job, not a third-party action.
+# - No `environment:` on purpose. ingest.yml uses `neon-production` as an optional approval gate; a
+#   daily unattended run must never wait for a click, so it stays out of that environment.
+# - `dry_run` and the backend URL reach a script only through `env:`, never as an expression inside
+#   `run:`.
+# - `keep-warm` GETs `<BACKEND_URL>/readyz` (the backend's production origin, a repository VARIABLE
+#   named BACKEND_URL, not a secret: it is public). Unset: a notice and nothing else.
+name: housekeeping
+
+on:
+  schedule:
+    - cron: "23 3 * * *" # daily, 03:23 UTC (off the busy top of the hour)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Count what retention would change, then roll back (nothing is modified)."
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  retention:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'schedule' && vars.HOUSEKEEPING_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Two runs must never overlap; a queued run waits and none is cancelled.
+    concurrency:
+      group: housekeeping-neon-production
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Not prod: APP_ENV=prod demands the runtime's secrets, and this job is not the runtime.
+      # DATABASE_URL stays unset (Settings' local default), so nothing can fall back to a real
+      # database by accident: the command reads DATABASE_URL_DIRECT, checked first.
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fail before any install if the secret is missing or is the wrong kind of URL.
+      - name: Guard the production connection
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: |
+          url="$DATABASE_URL_DIRECT"
+          rest=${url#*://}
+          rest=${rest##*@}
+          host=${rest%%[:/?]*}
+          if [ -n "$host" ]; then echo "::add-mask::$host"; fi
+          if [ -z "$url" ]; then
+            echo "::error title=DATABASE_URL_DIRECT is not set::Create the repository secret first (runbook step 1)."
+            exit 1
+          fi
+          case "$url" in
+            postgresql://*|postgres://*) ;;
+            *) echo "::error title=DATABASE_URL_DIRECT is not a Postgres URL::It must start with postgresql://"; exit 1 ;;
+          esac
+          case "$url" in
+            *-pooler*) echo "::error title=DATABASE_URL_DIRECT is the pooled URL::Use the direct connection string (no -pooler in the host)."; exit 1 ;;
+          esac
+          case "$host" in
+            ""|localhost|127.*|*::1*) echo "::error title=DATABASE_URL_DIRECT is not a remote host::Refusing."; exit 1 ;;
+          esac
+          echo "The production connection looks like a direct, remote URL."
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      # One transaction (all rules or none). Counts only: no row content reaches the log.
+      - name: Retention
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          uv run grounded housekeeping "${args[@]}" > "$RUNNER_TEMP/housekeeping.txt"
+          cat "$RUNNER_TEMP/housekeeping.txt"
+          {
+            echo "### Retention on Neon"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/housekeeping.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  keep-warm:
+    # Same gate as `retention`: a scheduled run touches production only once the Author enabled it.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
+      || (github.event_name == 'schedule' && vars.HOUSEKEEPING_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Wake the backend and the database
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
+        run: bash .github/scripts/keep-warm.sh

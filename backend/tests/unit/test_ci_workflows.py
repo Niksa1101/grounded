@@ -16,6 +16,10 @@ The same file's ``eval`` job is a required status check of ``main`` (Tech §17),
 if every PR gets an ``eval`` status and a red one cannot be replaced by a green skipped one: the
 second half of the file pins the triggers, the job's ``if`` and the job name. The files are read as
 text: PyYAML is not a dependency of the project.
+
+``housekeeping.yml`` (ticket 5.11), the third workflow that writes to production, is pinned in
+``test_housekeeping_workflow.py``, which reuses the helpers above; only the list of steps that may
+see the secret lives here, with the other two workflows'.
 """
 
 from __future__ import annotations
@@ -79,6 +83,9 @@ INGEST_STEPS_WITH_THE_SECRET = {
 }
 
 
+HOUSEKEEPING_STEPS_WITH_THE_SECRET = {"Guard the production connection", "Retention"}
+
+
 @pytest.mark.parametrize("workflow", sorted(p.name for p in WORKFLOWS.glob("*.yml")))
 def test_the_production_secret_is_referenced_only_by_the_steps_that_need_it(
     workflow: str,
@@ -88,6 +95,10 @@ def test_the_production_secret_is_referenced_only_by_the_steps_that_need_it(
     if workflow == "eval.yml":
         assert len(holders) == 1
         assert f"- name: {RECORD_STEP}" in holders[0]
+    elif workflow == "housekeeping.yml":
+        # Retention is the second workflow made to write to production: the guard and the command.
+        assert {step_title(b) for b in holders} == HOUSEKEEPING_STEPS_WITH_THE_SECRET
+        assert all(f"{SECRET}: ${{{{ secrets.{SECRET} }}}}" in b for b in holders)
     elif workflow == "ingest.yml":
         # The one workflow made to write to production: four steps, each with its own env entry.
         assert {step_title(b) for b in holders} == INGEST_STEPS_WITH_THE_SECRET

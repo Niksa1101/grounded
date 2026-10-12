@@ -479,25 +479,51 @@ Percentiles over cached requests are excluded from stage latency, since a cache 
 
 ## 9. Retention and housekeeping
 
-Run daily by `housekeeping.yml` (owner connection):
+Run daily by `housekeeping.yml` (owner connection) through `grounded housekeeping`
+(`backend/src/grounded/infra/housekeeping.py`, ticket 5.11; implemented and integration-tested with rows of
+every age). The statements below are the ones in the module, with the periods bound as parameters
+(`tests/unit/test_housekeeping_docs.py` keeps the two identical):
 
 ```sql
 -- Privacy: strip user text and pseudonymous IDs after 30 days.
 UPDATE request_logs SET question = NULL, ip_hash = NULL
-WHERE created_at < now() - interval '30 days' AND (question IS NOT NULL OR ip_hash IS NOT NULL);
+WHERE created_at < now() - make_interval(days => %(text_days)s)
+  AND (question IS NOT NULL OR ip_hash IS NOT NULL);
 
 -- Telemetry rows (no user text left) kept 180 days.
-DELETE FROM request_logs WHERE created_at < now() - interval '180 days';
+DELETE FROM request_logs
+WHERE created_at < now() - make_interval(days => %(telemetry_days)s);
 
 -- Expired cache.
 DELETE FROM answer_cache WHERE expires_at < now();
 
 -- Old usage counters.
-DELETE FROM daily_usage WHERE day < (now() AT TIME ZONE 'utc')::date - 90;
+DELETE FROM daily_usage
+WHERE day < (now() AT TIME ZONE 'utc')::date - %(usage_days)s;
 
 -- Rate-limit windows (0003): the day window is the longest one, so two days is enough.
-DELETE FROM rate_limit_counters WHERE window_start < now() - interval '2 days';
+DELETE FROM rate_limit_counters
+WHERE window_start < now() - make_interval(days => %(window_days)s);
 ```
+
+| Parameter | Value | Source |
+|---|---|---|
+| `text_days` | 30 | PRD NFR-4, D32 |
+| `telemetry_days` | 180 | this section |
+| `usage_days` | 90 | this section |
+| `window_days` | 2 | 5.01 (the day window is the longest) |
+
+The periods are module constants, not `Settings` fields: they are the privacy contract, and a setting
+could only lengthen them (`ANSWER_CACHE_TTL_DAYS` is capped at the same 30 days).
+
+- **One transaction.** The five statements run in one transaction (one `now()` for all of them, all or nothing).
+  The command prints one line per rule with the affected rows, in the order above (`request_logs_text_removed`,
+  `request_logs_deleted`, `answer_cache_expired_deleted`, `daily_usage_deleted`, `rate_limit_counters_deleted`).
+  `--dry-run` runs the same statements and rolls back, so the counts are the real ones.
+- **Counts.** A row older than 180 days that still has its text is counted by the first statement (stripped) and by
+  the second (deleted). A second run counts 0 everywhere. `day = today - 90` is kept (the rule is `<`).
+- **Why the owner.** `app` has no DELETE on the log and counter tables and no UPDATE on `request_logs` (§5).
+
 Index versions: keep the active one plus at most 2 previous ones. Older versions are set to `retired`
 and then deleted by the ingest CLI (`grounded index prune`). Chunks and documents cascade.
 

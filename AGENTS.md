@@ -186,6 +186,10 @@ uv run grounded index list
 ```
 
 ```bash
+uv run grounded housekeeping --dry-run   # retention (DB.md §9) on DATABASE_URL_DIRECT, else DATABASE_URL: prints the counts and rolls back; without --dry-run it deletes. CI: housekeeping.yml (Tech §17)
+```
+
+```bash
 uv run grounded golden sections <page>.md
 ```
 

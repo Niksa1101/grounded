@@ -338,7 +338,7 @@ Known in advance (expanded with observed examples in Phase 9):
 - **Frozen corpus:** answers reflect the pinned FastAPI docs version, not the live site.
 - **Privacy:** the demo uses free AI API tiers, which may use inputs to improve models. Don't enter personal data.
 - **Cohere trial key** is non-production. Serving real users needs a paid key or a local re-ranker.
-- **Scheduled housekeeping** (retention SQL) stops if the repo has no activity for 60 days (GitHub policy).
+- **Scheduled housekeeping** (the daily retention SQL and the keep-warm ping, `housekeeping.yml`) stops if the repo has no activity for 60 days (GitHub policy): until someone re-enables the workflow, question text is no longer stripped after 30 days. The schedule also ships off and starts only when the repository owner sets `HOUSEKEEPING_ENABLED`. A daily ping does not keep the free tiers warm for a whole day, so the first visitor after a quiet period can still wait for a cold start.
 
 ## Tech stack
 

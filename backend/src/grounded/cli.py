@@ -121,6 +121,7 @@ from grounded.infra.cold_start import (
 )
 from grounded.infra.cold_start import render_report as render_cold_start_report
 from grounded.infra.event_loop import loop_factory
+from grounded.infra.housekeeping import render_results, run_housekeeping
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
 from grounded.infra.migrations import DEFAULT_MIGRATIONS_DIR, MigrationError
@@ -429,6 +430,38 @@ def migrate(
     typer.echo(
         f"Done: {len(report.applied)} applied, {len(report.already_applied)} already up to date."
     )
+
+
+@app.command()
+def housekeeping(
+    database_url: Annotated[
+        str | None,
+        typer.Option(
+            help="Target database. Default: DATABASE_URL_DIRECT, else DATABASE_URL.",
+            show_default=False,
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Run the rules and roll back: print the counts, change nothing.",
+        ),
+    ] = False,
+) -> None:
+    """Enforce retention (DB.md §9): strip old question text and IP hashes, delete old rows.
+
+    Needs the owner role (the runtime's `app` role cannot delete from the log tables). One
+    transaction, one line per rule; CI runs it daily (housekeeping.yml, Tech.md §17).
+    """
+    conninfo = database_url or get_settings().migration_database_url.get_secret_value()
+    typer.echo(f"Housekeeping on {_describe_target(conninfo)}{' (dry run)' if dry_run else ''}")
+    try:
+        results = run_housekeeping(conninfo, dry_run=dry_run)
+    except psycopg.Error as exc:
+        raise _fail(f"Housekeeping failed, nothing was changed: {exc}") from exc
+    for line in render_results(results, dry_run=dry_run):
+        typer.echo(line)
 
 
 class MeasureOrder(StrEnum):

@@ -29,6 +29,7 @@ created with SQL do not and get only what you grant. So `app` is created **with 
 | 7 | Least-privilege checks | `psql` as `app` |
 | 8 | Set Vercel's `DATABASE_URL` | Vercel |
 | 9 | Optional: record eval runs | GitHub |
+| 10 | Housekeeping: first manual run, then enable the daily schedule | GitHub |
 
 The role comes after the first workflow run because the grants name tables that the migrations
 create.
@@ -325,6 +326,60 @@ gh variable set EVAL_RECORD_RUNS --body true
 
 Skip it if you are not ready; nothing else depends on it.
 
+## 10. Housekeeping: retention and keep-warm (ticket 5.11)
+
+[`housekeeping.yml`](../../.github/workflows/housekeeping.yml) enforces the privacy retention in
+production (question text and IP hashes removed after 30 days, logs deleted after 180, expired cache
+rows, old usage and rate-limit windows; DB.md §9) and pings the backend's `/readyz`. It is a write to
+production with the owner URL, so it **ships with its daily schedule off**: until you set
+`HOUSEKEEPING_ENABLED`, the scheduled run skips both jobs, and only a manual run from `main` does
+anything. Do this after step 5 (the schema must exist) and after the backend is deployed (the Vercel
+runbook), because the keep-warm job needs its URL.
+
+Set the repository variable with the backend's **production origin**: the same value as the
+frontend's `BACKEND_URL` (no path, `https` only). It is a variable, not a secret; the URL is public.
+Unset, the keep-warm job prints a notice and does nothing.
+
+```bash
+gh variable set BACKEND_URL --body "https://<your-backend-production-domain>"
+```
+
+First, a dry run: the same statements, rolled back. The job summary lists one line per rule with its
+row count. On a young database most are `0`; what you check is that the run is green and the
+numbers are plausible.
+
+```bash
+gh workflow run housekeeping.yml --ref main -f dry_run=true
+```
+
+```bash
+gh run watch
+```
+
+Then the real run (both jobs: `retention` and `keep-warm`; the second needs `BACKEND_URL` and a
+backend that answers `/readyz` 200 within about three minutes):
+
+```bash
+gh workflow run housekeeping.yml --ref main -f dry_run=false
+```
+
+Only after one green real run, switch the daily schedule on. Setting the variable to anything but
+`true`, or deleting it, switches it off again:
+
+```bash
+gh variable set HOUSEKEEPING_ENABLED --body true
+```
+
+```bash
+gh variable delete HOUSEKEEPING_ENABLED
+```
+
+**The 60-day caveat.** GitHub disables scheduled workflows after 60 days without repository
+activity. A disabled workflow stops stripping question text, which breaks the 30-day promise of the
+privacy notice. If the repository goes quiet, re-enable the workflow in the Actions tab (or
+run the first command of this step again with `dry_run=false`) and check the date of the last
+scheduled run now and then. The README lists this limitation.
+
 ## When something fails
 
 | Symptom | What it means | What to do |
@@ -337,6 +392,11 @@ Skip it if you are not ready; nothing else depends on it.
 | A bad version was activated | the runtime refreshes the active version every 5 minutes (`ACTIVE_INDEX_TTL_S`) | in `psql` as the owner, put the previous version back (DB.md §7.3), replacing `<old>` and `<bad>`: see below |
 | A probe in step 7 that must fail succeeds | `app` has a grant it should not | revoke it (`REVOKE … ON <table> FROM app`), fix DB.md §5 and this file together if the doc was wrong |
 | The `app` password or an owner URL leaked | | owner: reset the password in the Neon console and update the secret; `app`: `\password app` as the owner, update Vercel and redeploy |
+| The `housekeeping` guard step fails | same as the ingest guard: `DATABASE_URL_DIRECT` is missing, pooled or local | fix the secret (step 1) |
+| `retention` fails with a connection error | the direct URL is wrong or Neon is unreachable (the job stops after 10 minutes at the latest) | fix the secret or wait, then re-run; nothing was changed (one transaction) |
+| `keep-warm` fails with `HTTP 000` after four tries | no answer: the backend URL is wrong, or the deployment is down | open the URL in a browser; fix `BACKEND_URL` or the deployment |
+| `keep-warm` fails with `HTTP 503` | `/readyz` says the database or the active index is not ready | Neon runbook steps 4 and 5; Vercel runbook V10 |
+| The scheduled run shows as skipped | `HOUSEKEEPING_ENABLED` is not `true` (the default) | step 10: set it after the first green manual run |
 | You want to start over with the role | | `DROP OWNED BY app; DROP ROLE app;` as the owner, then step 6 |
 
 Putting the previous index version back (only after the check that `<old>` is `ready`):
@@ -362,3 +422,5 @@ Tick each box as you do it; the acceptance criteria of ticket 5.09 are the last 
 - [ ] Every "must not" line failed with `permission denied`
 - [ ] Vercel production `DATABASE_URL` is the pooled `app` URL; no Preview or Development value
 - [ ] Optional: `EVAL_RECORD_RUNS` set, deliberately
+- [ ] `BACKEND_URL` variable set; `housekeeping.yml` run with `dry_run=true`, then `dry_run=false`: both jobs green (ticket 5.11 acceptance)
+- [ ] `HOUSEKEEPING_ENABLED=true` set after that run, deliberately; a calendar reminder to look at the scheduled runs within 60 days

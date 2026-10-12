@@ -310,7 +310,7 @@ trip the gate, and the block depends on the `run-eval` label being added (open i
 | Backend Vercel project config (root `backend/`, FastAPI entrypoint, function region, production-only secrets) | G |
 | Neon production: migrate, ingest via `workflow_dispatch` | G (run by A) |
 | Vercel projects (frontend root `frontend/`, backend root `backend/`), env vars | A |
-| `housekeeping.yml`: daily retention SQL | G |
+| `housekeeping.yml`: daily retention SQL (`grounded housekeeping`) and the keep-warm ping; the schedule ships off until the Author sets `HOUSEKEEPING_ENABLED` | G |
 | README v1: architecture, real eval table, cost/latency method, failure modes v1, live URL | G draft, A final |
 
 **Exit criteria (MVP definition of done)**
