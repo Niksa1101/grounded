@@ -2,14 +2,20 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phases 0–4 done (foundations; ingestion, golden set, dense baseline; hybrid retrieval and the CI retrieval gate; `/ask` with structured output, with 30/30 golden questions schema-valid on the real Gemini provider; the promptfoo generation eval with a judge on another provider, a committed baseline and a CI quality gate).** Everything below describes the target system. Sections marked
-> _TBD_ are filled in only from committed eval results and real measurements, never by hand.
+> 🚧 **Status: Phases 0–4 done, Phase 5 code complete, deployment pending. The MVP is not declared complete.**
+> Built and merged: the ingestion and the golden set, hybrid retrieval with a CI retrieval gate, `/v1/ask` with structured
+> output and citations, the promptfoo generation eval with a judge on another provider, a committed baseline and a CI
+> quality gate, and (Phase 5) the input limits, the Postgres rate limiter and daily budget, the proxy secret, the ask page,
+> the Vercel configuration, the Neon and Vercel runbooks and the housekeeping workflow. **Nothing is deployed yet:** the
+> production steps are the Author's, so two of the four MVP exit criteria are open ([MVP status](#mvp-status)). Parts of
+> this page describe the target system and say so (Phases 6–8). Sections and cells marked _TBD_ are filled in only from
+> committed eval results and real measurements, never by hand.
 
 | | |
 |---|---|
-| Live demo | _TBD (Phase 5)_ |
+| Live demo | _TBD_: no deployment exists yet. The URL is added after the first deployment ([runbook](docs/runbooks/vercel-deploy.md), step 6) |
 | Metrics dashboard | _TBD (Phase 8)_ |
-| Docs | [Product spec (PRD)](docs/PRD.md) · [Technical design](docs/Tech.md) · [Database](docs/DB.md) · [Rules for contributors & agents](AGENTS.md) |
+| Docs | [Product spec (PRD)](docs/PRD.md) · [Technical design](docs/Tech.md) · [Database](docs/DB.md) · [Rules for contributors & agents](AGENTS.md) · [Runbooks](docs/runbooks/) |
 
 ---
 
@@ -24,32 +30,49 @@ frozen snapshot of the official docs, and it **measures** how well it does that.
 
 ## What it does
 
-- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion, optionally re-ranked (Cohere).
-- **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry, then fallback.
+Built unless marked *planned*:
+
+- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is *planned* (Phase 6).
+- **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry. Falling back to a second provider after that is *planned* (Phase 7); until then a second invalid output is a `502`.
 - **Verifiable citations:** each claim cites source labels. The server validates them and maps them to exact `docs-page#section` links. The model never writes URLs.
 - **Honest refusals:** `answered | partial | insufficient_context`. Out-of-scope questions are refused, and that behavior is measured.
-- **Per-claim confidence:** computed server-side from retrieval signals, with calibration reported.
+- **Per-claim confidence:** computed server-side from retrieval signals. Whether it is calibrated is *planned* to be measured (Phase 8); today it is a documented heuristic.
 - **Evals as a gate:** golden set, retrieval metrics (Recall@k, MRR, nDCG), generation metrics (faithfulness, correctness, refusal accuracy) via promptfoo, and a CI gate that fails a PR on regression.
-- **Production habits on $0:** provider fallback with circuit breaker, rate limiting, daily budget, caching, request telemetry, p50/p95 latency and shadow cost.
+- **Protection on $0:** a per-client rate limit (5 a minute, 20 a day) and a global daily LLM budget (300 calls), the demo's configured values, whose counters are Postgres rows, an answer cache, input limits, a proxy secret between the two Vercel projects, and request telemetry with shadow cost. The public dashboard (p50/p95 per stage) is *planned* (Phase 8).
+
+## MVP status
+
+Phase 5 ends the MVP, and its four exit criteria ([PRD §9](docs/PRD.md#9-delivery-phases)) were checked one by one on
+2026-10-12. **The MVP is not declared complete**: two criteria need a live deployment, which exists only after the Author
+runs the production steps. The evidence for each row, the workflow-by-workflow CI table and the step-by-step manual check of
+the rate limit and the budget are in [docs/runbooks/mvp-closeout.md](docs/runbooks/mvp-closeout.md).
+
+| Exit criterion | Status |
+|---|---|
+| The live URL answers a question after the backend was idle; cold start measured and documented | **Pending the Author.** Nothing is deployed, so there is no URL and no measurement. The deployment and the measurement (`grounded measure-cold-start`) are scripted in the [Vercel runbook](docs/runbooks/vercel-deploy.md) |
+| Rate limit and budget verified manually | **Pending the Author.** Both are covered by tests against a real Postgres (exact counts, atomicity under parallel requests, the eval-mode switch), but "manually, on the live site" has not happened; the procedure is written |
+| README numbers are copied from committed eval results, never typed by hand | **Pass.** The eval and agreement blocks are the output of `grounded eval report` and `grounded eval agreement`, and a test fails if either drifts; every other number in this page was traced to committed output, a decision record or a dated measurement. Live numbers are `_TBD_` |
+| All CI workflows green on `main` | **Pass for the three that have run** (`ci` and `eval` on every push, `warm-cache` once by hand on 2026-10-02): the last completed run of each is green. `ingest.yml` and `housekeeping.yml` write to production, are run by the Author, and have never run |
 
 ## Architecture
 
 ```mermaid
 flowchart LR
     U[Browser] --> FE[Next.js on Vercel<br/>/api/ask proxy]
-    FE -- shared secret --> API[FastAPI on Vercel Functions]
+    FE -- "X-Proxy-Secret + X-Client-IP" --> API[FastAPI on Vercel Functions]
     API --> EMB[Gemini embeddings]
-    API --> DB[(Neon Postgres<br/>pgvector + FTS)]
-    API -. optional .-> RR[Cohere rerank]
-    API --> LLM[Gemini Flash]
-    API -. "fallback on 429/5xx" .-> LLM2[Groq]
+    API --> DB[(Neon Postgres<br/>pgvector + FTS<br/>rate limit · budget · cache · logs)]
+    API -. "planned: Phase 6" .-> RR[Cohere rerank]
+    API --> LLM[Gemini Flash-Lite]
+    API -. "planned: Phase 7<br/>fallback on 429/5xx" .-> LLM2[Groq]
     ING[Ingest CLI<br/>pinned FastAPI tag] --> DB
-    CI[GitHub Actions<br/>tests · retrieval eval · promptfoo gate] -.-> API
+    CI[GitHub Actions<br/>tests · retrieval eval · promptfoo gate] -. "judge today" .-> LLM2
 ```
 
-Request flow: validate → rate-limit → cache → embed → hybrid retrieve (dense ∪ FTS → RRF) → rerank → structured
-generation → validate/retry/fallback → map citations → score confidence → log → respond.
-Details: [docs/Tech.md](docs/Tech.md).
+Dotted edges are not in the request path today: rerank and the fallback are planned, and Groq is only the eval judge for now.
+Request flow: validate → rate-limit → cache lookup → budget check → embed → hybrid retrieve (dense ∪ FTS → RRF) →
+build context → reserve budget → structured generation → validate/retry → map citations → score confidence → log →
+respond. Details and the contracts: [docs/Tech.md §1](docs/Tech.md).
 
 ## Evaluation
 
@@ -203,7 +226,8 @@ At least 10 items labeled: yes (n = 20).
 ### Retrieval ablation: reading
 
 **Reading: hybrid did not beat dense here.** That misses the Phase 2 target (hybrid ≥ dense on Recall@5 and MRR).
-Per-question evidence from the results file of that run:
+Per-question evidence from the results file of that run (2026-10-01; the file is gitignored, so these counts are a dated
+reading and not a committed number):
 
 - **Recall@5 (−0.02) is within noise**: it moves with one question (q017 and q026 lose it, q019 gains it), and one
   question is worth 0.04.
@@ -253,9 +277,10 @@ n = 25, so differences under one question (0.04) are not claims either way.
 - **Free-tier constraints are part of the design.** The judge runs on Groq's free plan (a daily token quota, and 8K tokens
   a minute), the generator on Gemini's, and a full run uses most of the day's Groq quota ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)).
   A cache of LLM replies keeps what was paid for, so an identical re-run is free, and a run that hits a quota stops
-  asking and ends `inconclusive`. Most of the first CI runs ended that way (a quota already spent, and spells of
-  Gemini 503s); the only run on `main` that gated anything so far passed. Every push to `main` starts a real eval, so
-  merges spend quota too.
+  asking and ends `inconclusive`. The first CI runs mostly ended that way (a quota already spent, and spells of
+  Gemini 503s): of the 21 runs on `main` that finished green by 2026-10-12, the 6 of 2026-10-08 were `inconclusive` and
+  the 15 since 2026-10-09 gated and passed (verdicts read from the run logs; no run on `main` failed). Every push to
+  `main` starts a real eval, so merges spend quota too.
 - **What a red `eval` check does.** Since PR [#88](https://github.com/Niksa1101/grounded/pull/88) (2026-10-10) `eval` is
   reported on every PR, and it is a required status check of `main` next to `backend`, `frontend` and `retrieval-eval`
   (branch protection is a repository setting, not a file in the repository). A job skipped for want of the label counts
@@ -319,26 +344,111 @@ not a probability. Details and the invariants: [docs/Tech.md §9.8](docs/Tech.md
 
 ## Cost and latency
 
-_TBD (Phase 8)._ Will show p50/p95 per stage (embed, retrieval, rerank, LLM), cold-start latency, cache hit rate,
-fallback rate and shadow cost per 1k questions, with methodology.
+**Method.** What is measured, how, and where each number comes from. A figure appears below only when a committed
+output or a dated measurement produced it; otherwise the cell says `_TBD_` and names the step that fills it.
+
+- **Per-request timing.** Every `/v1/ask` is timed by a monotonic-clock `StageTimer` per stage (embed, retrieval, rerank,
+  LLM) and for the whole request, and one `request_logs` row stores it (Tech §14, DB §4). A stage that did not run is
+  `NULL`, never 0, and an answer served from the cache reports the real time of the lookup. The ask page's debug row shows
+  the same numbers for the request you just made.
+- **Shadow cost** is real token counts times *paid* list prices: `in/1e6 × input price + out/1e6 × output price` (plus the
+  query embedding), in `Decimal`, from `backend/pricing.toml`, which dates every price and its source (Gemini rows read on
+  2026-10-06, the Groq judge row on 2026-10-08, and an embedding row that is a 2025 announcement, flagged as such in the
+  file). The demo itself runs on free tiers, so its real infrastructure cost is $0 (NFR-3); the shadow cost says what the same
+  traffic would cost at list prices. A request that fails halfway is charged for the part that ran.
+- **The numbers available today** are the two rows "Latency p50 / p95, ms (warm)" and "Shadow cost per 1k questions" of the
+  [generation table above](#evaluation), from `eval/baselines/generation.json` (30 golden questions, one run, 2026-10-08).
+  Their latency is the **in-process pipeline time of the warm cases** (a case replayed from the eval cache and the
+  harness's first call are left out, hence `n` below 30): it contains the embedding, retrieval and LLM calls, and **not**
+  the network hop through Vercel and the proxy, a function cold start or a Neon wake. It is therefore not the visitor's
+  end-to-end latency and is not compared with the NFR-1 targets (PRD §7: warm p50 ≤ 4 s, p95 ≤ 8 s). One run of 26 warm cases
+  is also too few for a tail claim.
+
+| Quantity | Value | Source |
+|---|---|---|
+| Warm pipeline latency p50 / p95 and shadow cost per 1k questions, `no_rag` and `hybrid` | in the [table above](#evaluation) | `eval/baselines/generation.json`, 2026-10-08 |
+| Function cold start (before the handler's deadline starts) | _TBD: measured after the first deployment_ | [Vercel runbook](docs/runbooks/vercel-deploy.md) step 9, `grounded measure-cold-start --first health` |
+| Neon wake after an idle period | _TBD: measured after the first deployment_ | the same report (`/readyz` row) |
+| First question after idle, end to end | _TBD: measured after the first deployment_ | `grounded measure-cold-start --first ask` |
+| Warm end-to-end latency through Vercel | _TBD: measured after the first deployment_ | the same report (warm probes; `n` is small, so a median and no p95) |
+| p50/p95 per stage in production, cache hit rate, fallback rate | _TBD (Phase 8)_ | the `request_logs` views and the public dashboard |
+
+The cold-start measurement times the function start and the Neon wake separately from a real question, and says plainly
+when the 10 s between the backend's 25 s deadline and the proxy's 35 s timeout (the budget for a cold start, PRD D53) is not
+enough. If it is not, the ask page shows its retry state and the number is published as it is.
 
 ## Failure modes and limitations
 
-Known in advance (expanded with observed examples in Phase 9):
+### Failure modes observed so far (v1)
+
+Only things that actually happened in this project, each with where it is recorded. Nothing has served real traffic yet,
+so there is no production failure here: the systematic analysis from request logs is Phase 9. `PRD §12` is the
+[assumptions and open items](docs/PRD.md#12-assumptions-and-open-items) section, which keeps the dated detail.
+
+| What happened | Evidence | Reading |
+|---|---|---|
+| **Hybrid retrieval scored below dense** on the golden set, and its Recall@5 target is not met | the retrieval table above and the [reading](#retrieval-ablation-reading) | The cause was not isolated by an experiment. Nothing was tuned on the golden set; the options (a lexical query closer to BM25, a smaller lexical weight, `RRF_K`) are listed in PRD §12 and would each be a PR that says it was tuned on this set |
+| **A retrieval miss becomes a false refusal** | In the baseline run the only refusal errors of `hybrid` are q016 and q026, the two questions the retrieval reading names (PRD §12, 4.09b) | A retrieval fix should show in the generation table too |
+| **Gemini `503` "high demand" spells** | The first push-to-`main` eval run (CI run 37817266433, 2026-10-08) lost 25 of 30 `hybrid` and 21 of 30 `no_rag` cases and ended `inconclusive` (PRD §12) | The eval wrapper now waits out a 503 with a bounded backoff. At the Phase 4 closeout five real runs since had never met a spell, so whether the backoff is enough is unproven |
+| **The Groq free plan's daily token quota stops the judge** | Six of the early CI runs ended on `ProviderRateLimited (daily quota)`, 24 to 74 judge calls each; the first full run used about 145K of the 200K tokens a day and waited out 68 per-minute `429`s (PRD §12, D48) | The gate reports `inconclusive` and never a pass, and a cache of LLM replies keeps what was paid for. One full uncached run a day fits; two do not |
+| **The model choice was dictated by a free quota** | `gemini-3.6-flash` showed 20 requests a day on the Author's free tier, too few for a 30-question eval; `gemini-3.5-flash-lite` has 500 (D46, PRD §12) | The generator is the smaller model, and its quality is whatever the eval table says |
+| **The demo and the evals share one Gemini quota** | On 2026-10-11 the AI Studio page showed 265 of 500 generator requests already used that day and the embedding quota over its limit (PRD §12, 5.01) | The demo's daily budget is 300 of 500, which leaves room for the evals; a busy eval day can still starve the demo |
+| **The generation gate did not see weakened instructions** | Six prompt edits that weaken the instructions moved no gated metric; the one edit that tripped the gate was a prompt/schema format mismatch (PRD §12, 4.12; the second demonstration above) | The gate is not a substitute for reading a prompt diff, and another model could behave differently |
+| **The judge was shown to be thin where it matters** | Correctness agreement with the Author is the weak spot of the [judge–human agreement](#judge-human-agreement), and no real claim in the sample was `NOT_SUPPORTED` | The faithfulness baseline means "the judge found no unsupported claim", not a verified zero hallucination rate |
+| **A red `eval` could be merged** | The demo PR #86 showed `MERGEABLE` because `eval` was not a required check; making it required (#88, 2026-10-10) turned it `BLOCKED` (PRD §12) | The label `run-eval` is still the weak point: a quality-affecting PR without it is not evaluated |
+| **Citation precision is the weakest scored generation metric** | the generation table above (it has no PRD §8 target) | Not analysed yet |
+
+### Limitations
+
+- **Nothing is verified on the live platform yet.** No deployment exists. The client IP in Vercel's logs, the forwarded-for
+  header, the build and bundle, the Neon pooler and the cold start are numbered checks (V1 to V16) of the
+  [Vercel runbook](docs/runbooks/vercel-deploy.md), answered after the first deployment; until then those are readings of
+  the platform's documentation (Tech §12, §18).
+- **Free tiers.** Daily quotas can exhaust the demo's budget (the page then says so), and the same quotas limit the CI eval.
+  Vercel Hobby is non-commercial use only. The Cohere trial key (Phase 6) is non-production.
+- **Cold start.** The first request after idle pays a serverless function start plus a Neon wake (Neon scales to zero after 5
+  minutes). It is *not measured yet* ([cost and latency](#cost-and-latency)); the ask page shows a "waking up" state.
+- **No fallback yet.** Until Phase 7, a Gemini outage or an exhausted quota is a `503` for the demo.
+- **Single region.** Both Vercel projects run in `cle1`, next to Neon in AWS `us-east-2`. Hobby allows one region and no
+  failover; what happens to a project pinned to `cle1` during a `cle1` outage is unverified (PRD §12).
+- **The rate limiter is per client address, in fixed windows.** Up to twice the per-minute limit can pass across a minute
+  boundary (the day counter and the budget bound it), several people behind one NAT share a bucket, and the client address is
+  the first entry of `X-Forwarded-For`, which Vercel overwrites (documented, not yet observed: V2).
+- **Frozen corpus.** Answers reflect the FastAPI docs at tag `0.141.1`, not the live site. One version, English only, one
+  question per answer, no streaming.
 - **Postgres full-text search is not true BM25.** The ablation rows show what lexical search actually contributes.
-- **Small golden set.** With ~25 answerable questions, one question ≈ 4 percentage points. Tolerances reflect that.
-- **Free-tier constraints:** the first request after idle pays a cold start (serverless function + Neon wake-up); daily quotas can exhaust the demo budget. The same quotas limit the CI eval: a full run uses most of the day's free judge quota, so back-to-back runs end `inconclusive`.
-- **The generation gate sees some regressions and not others.** The one degraded prompt that tripped it was a prompt/schema
-  format mismatch. Six attempts to weaken the instructions (drop the citation rule, allow outside knowledge, narrow the
-  refusal rule, shorten the answer) moved no gated metric on `gemini-3.5-flash-lite`, whose output schema keeps it citing and
-  refusing. So the gate is not a substitute for reading a prompt diff, and a different model could behave differently
-  ([PRD §12](docs/PRD.md#12-assumptions-and-open-items)).
-- **The judge is checked on a small sample.** 20 items, one rater who wrote the rubrics; correctness agreement is the weak
-  spot ([above](#judge-human-agreement)). The faithfulness baseline means "the judge found no unsupported claim".
-- **Frozen corpus:** answers reflect the pinned FastAPI docs version, not the live site.
-- **Privacy:** the demo uses free AI API tiers, which may use inputs to improve models. Don't enter personal data.
-- **Cohere trial key** is non-production. Serving real users needs a paid key or a local re-ranker.
-- **Scheduled housekeeping** (the daily retention SQL and the keep-warm ping, `housekeeping.yml`) stops if the repo has no activity for 60 days (GitHub policy): until someone re-enables the workflow, question text is no longer stripped after 30 days. The schedule also ships off and starts only when the repository owner sets `HOUSEKEEPING_ENABLED`. A daily ping does not keep the free tiers warm for a whole day, so the first visitor after a quiet period can still wait for a cold start.
+- **Small golden set.** With 25 answerable questions, one question is 4 percentage points. Tolerances reflect that.
+- **The judge is checked on a small sample:** 20 items and one rater, who also wrote the rubrics.
+- **Answer cache key** lowercases the question, so `Path` and `path` are one entry (Tech §11, PRD §12).
+- **A client that disconnects leaves no `request_logs` row** (PRD §12).
+- **Privacy:** the demo uses free AI API tiers, which may use inputs to improve models. Don't enter personal data. See
+  [Privacy](#privacy).
+- **Scheduled housekeeping** (the daily retention SQL and the keep-warm ping, `housekeeping.yml`) stops if the repo has no
+  activity for 60 days (GitHub policy): until someone re-enables the workflow, question text is no longer stripped after 30
+  days. The schedule also ships off and starts only when the repository owner sets `HOUSEKEEPING_ENABLED`. A daily ping does
+  not keep the free tiers warm for a whole day, so the first visitor after a quiet period can still wait for a cold start.
+- **CI platform drift:** the workflows run on `ubuntu-latest`, which GitHub moves to Ubuntu 26 from 2026-10-19; a workflow
+  may fail on the new image (PRD §12).
+
+## Privacy
+
+The notice the ask page shows under the input (`frontend/components/ask-form.tsx`): *"Privacy: this demo calls free AI APIs,
+so do not enter personal data. Questions are kept for at most 30 days to measure quality, and never shown publicly."* What
+stands behind it (NFR-4, PRD D32, [Tech §12](docs/Tech.md)):
+
+- **Question text** is stored in the request log and, normalized, in the answer cache, and is removed after at most 30 days
+  (DB §9). Rows without text are kept 180 days for the statistics.
+- **No raw IP is stored or logged.** The client address is hashed (HMAC-SHA256 with a server-side secret) inside the
+  request's auth check and only the hash is kept, for rate limiting; the hash is removed from the log after 30 days and the
+  limiter's counters after 2 days. The API's own logs carry no address and no question text (only a hash of the question),
+  and the server's access log is off. Vercel's runtime logs are documented to show no client IP; that is a reading of the
+  documentation until the first deployment confirms it (check V1 of the [runbook](docs/runbooks/vercel-deploy.md)).
+- **Public surfaces show aggregates only**, never question text.
+- **Questions go to Google's Gemini API** (the answer and the query embedding) on its free tier, which may use inputs to
+  improve models. That is why the notice says not to enter personal data.
+- **The 30 days are enforced by a scheduled workflow** (`housekeeping.yml`) that ships switched off and that GitHub stops
+  after 60 days without repository activity ([limitations](#failure-modes-and-limitations)). Until the owner enables it
+  and while it runs, the retention promise holds; otherwise it does not.
 
 ## Tech stack
 
@@ -396,6 +506,8 @@ cd frontend && npm ci && npm run dev   # http://localhost:3000
 
 Every state of the ask page without a backend or an LLM call (development only, never in a production build): open `http://localhost:3000/?fake=answered` and press Ask. The names are `answered`, `partial`, `insufficient`, `slow`, `rate_limited`, `rate_limited_day`, `budget`, `error`, `proxy_timeout` and `network` (Tech §19).
 
+Without spending generator quota: `uv run grounded ask "How do I declare a query parameter?" --fake` (after the migrate and ingest steps) runs the whole pipeline with a canned stub in place of the LLM, so the answer text is not real. The question's embedding still comes from the Gemini API (or from a cached vector), so it needs `GEMINI_API_KEY` unless that question was embedded before.
+
 Run checks and evals:
 
 ```bash
@@ -446,6 +558,28 @@ pooler) and the cold-start measurement: `grounded measure-cold-start` times the 
 question after an idle period, using only the public URLs, and says plainly when the 10 s between the backend deadline and
 the proxy timeout is not enough. Numbers are recorded in the runbook after the first measurement, never typed by hand.
 
+## Operations
+
+Production is changed by hand, from reviewed procedures; an agent writes them and the Author runs them. Neither an agent nor
+CI touches Neon production or a Vercel project on its own.
+
+| Runbook | What it covers |
+|---|---|
+| [docs/runbooks/neon-production.md](docs/runbooks/neon-production.md) | migrate and seed Neon, the least-privilege `app` role and its checks, rollback, enabling housekeeping |
+| [docs/runbooks/vercel-deploy.md](docs/runbooks/vercel-deploy.md) | the two Vercel projects, environment variables, previews without secrets, the first-deployment checklist (V1 to V16), the cold-start measurement |
+| [docs/runbooks/mvp-closeout.md](docs/runbooks/mvp-closeout.md) | the MVP exit criteria with evidence, the manual check of the rate limit and the budget, what is deferred |
+
+| Workflow | Trigger | State on 2026-10-12 |
+|---|---|---|
+| `ci.yml` | every PR and push to `main` | green on `main`; `backend`, `frontend`, `retrieval-eval` are required checks |
+| `eval.yml` | labeled PRs (`run-eval`), every push to `main`, manual | green on `main`; `eval` is a required check. Uses free-tier quota: [CI quality gate](#ci-quality-gate) |
+| `warm-cache.yml` | manual | seeds the CI embeddings cache (one run, 2026-10-02); the re-seed procedure after an eviction |
+| `ingest.yml` | manual, from `main` only | builds and activates the index in Neon production. Never run |
+| `housekeeping.yml` | daily schedule and manual | retention and the keep-warm ping. The schedule is off until `HOUSEKEEPING_ENABLED` is set; never run |
+
+The repository variables that switch production-touching steps on (`EVAL_RECORD_RUNS`, `HOUSEKEEPING_ENABLED`) and the
+`BACKEND_URL` of the keep-warm ping are all unset (`gh variable list` was empty on 2026-10-12).
+
 ## Roadmap
 
 | Phase | Scope | Status |
@@ -455,16 +589,21 @@ the proxy timeout is not enough. Numbers are recorded in the runbook after the f
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ✅ done |
 | 3 | `/v1/ask` with structured output, citations, confidence | ✅ done ([closeout](tickets/phase-3/3.14-closeout.md)) |
 | 4 | promptfoo generation eval + CI quality gate | ✅ done ([closeout](tickets/phase-4/4.12-closeout.md)) |
-| 5 | UI, abuse protection, deployment. **MVP** | ⬜ |
+| 5 | UI, abuse protection, deployment. **MVP** | 🟡 code complete, deployment pending ([closeout](docs/runbooks/mvp-closeout.md); [MVP status](#mvp-status)) |
 | 6 | Re-ranking with measured lift | ⬜ |
 | 7 | Provider fallback + circuit breaker | ⬜ |
 | 8 | Observability dashboard, cost, calibration | ⬜ |
 | 9 | Failure-mode analysis, polish | ⬜ |
 
+✅ done · 🟡 code complete, waiting for the Author's production steps · ⬜ not started
+
 Phase details and exit criteria: [docs/PRD.md §9](docs/PRD.md#9-delivery-phases).
 
 ## License and attribution
 
-Code: MIT (see [`LICENSE`](LICENSE)).
-Corpus: [FastAPI documentation](https://github.com/fastapi/fastapi) at tag `0.141.1` (commit `95f8322`) © Sebastián Ramírez, MIT License. Grounded is an
-independent project, not affiliated with or endorsed by FastAPI.
+- **Code:** MIT, Copyright (c) 2026 Niksa Halas (see [`LICENSE`](LICENSE)).
+- **Corpus:** the [FastAPI documentation](https://github.com/fastapi/fastapi) at tag `0.141.1` (commit `95f8322`), MIT License,
+  Copyright (c) 2018 Sebastián Ramírez (read from the `LICENSE` file of the pinned clone on 2026-10-12). Grounded splits that
+  text into chunks, embeds them and shows short snippets of it with a link to the original section; the documentation is not
+  modified or republished as a whole. The permission notice is the one in the FastAPI repository at that tag.
+- Grounded is an independent project, not affiliated with or endorsed by FastAPI.
