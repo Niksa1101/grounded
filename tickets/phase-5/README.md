@@ -8,6 +8,8 @@
 - README numbers are copied from committed eval results, never typed by hand.
 - All CI workflows green on `main`.
 
+**Status of the exit criteria (5.12, 2026-10-12):** README numbers, pass; CI on `main`, pass for the three workflows that have run; live URL with a measured cold start and the manual rate-limit and budget check, pending the Author's deployment. The MVP is not declared complete. Evidence and the Author's manual procedure: [docs/runbooks/mvp-closeout.md](../../docs/runbooks/mvp-closeout.md).
+
 **Production note for the whole phase:** anything touching Neon production, Vercel production, secrets or production
 workflows needs the Author's explicit go-ahead **each time** (AGENTS.md §5, §11). The Agent writes workflows and
 runbooks, and the Author runs or approves them.
