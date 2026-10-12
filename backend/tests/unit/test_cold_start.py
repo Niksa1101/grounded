@@ -518,3 +518,83 @@ def test_the_command_fails_when_not_one_request_succeeded() -> None:
     )
     assert result.exit_code == 1
     assert "No request succeeded" in result.output
+
+
+# --- R.23: distinct questions per order, cold cache hits, cold retrieval -------------------------
+
+
+def asked_questions(site: FakeSite) -> list[str]:
+    return [json.loads(raw)["question"] for method, _, _, raw in site.requests if method == "POST"]
+
+
+def test_ask_order_starts_halfway_through_the_default_questions(site: FakeSite) -> None:
+    # Run 2 of the runbook must not ask what run 1 (--first health) already put in the cache.
+    run_measurement(plan(site, first="ask", asks=3))
+    half = len(DEFAULT_QUESTIONS) // 2
+    assert asked_questions(site) == list(DEFAULT_QUESTIONS[half : half + 3])
+
+
+def test_health_order_starts_at_the_first_default_question(site: FakeSite) -> None:
+    run_measurement(plan(site, first="health", asks=2))
+    assert asked_questions(site) == list(DEFAULT_QUESTIONS[:2])
+
+
+def test_a_question_list_of_the_operator_starts_at_its_beginning(site: FakeSite) -> None:
+    run_measurement(plan(site, first="ask", asks=3, questions=("one?", "two?")))
+    assert asked_questions(site) == ["one?", "two?", "one?"]
+
+
+def test_a_cold_ask_that_hit_the_answer_cache_is_still_judged_and_marked(site: FakeSite) -> None:
+    site.ask_replies = [(200, answer(cache_hit=True, total_ms=40))]
+    run = run_measurement(plan(site, first="ask", asks=1, warm_probes=0))
+    fits, text = judge_margin(run)
+    assert fits is True  # end to end minus the server total does not depend on the cache
+    assert "enough" in text
+    report = render_report(run)
+    assert "| ask end to end, cold (cache hit) |" in report
+    assert "answer-cache hit: no retrieval ran" in report
+
+
+def retrieval_answer(retrieval_ms: int) -> dict[str, Any]:
+    reply = answer()
+    reply["meta"]["latency_ms"]["retrieval"] = retrieval_ms
+    return reply
+
+
+def test_the_report_compares_the_cold_retrieval_with_the_timeout(site: FakeSite) -> None:
+    site.ask_replies = [(200, retrieval_answer(300))]
+    report = render_report(run_measurement(plan(site, first="ask", asks=1, warm_probes=0)))
+    assert "### Retrieval" in report
+    assert "Retrieval of the cold ask: 0.30 s against `RETRIEVAL_TIMEOUT_S` = 2 s (15% of it)." in (
+        report
+    )
+    assert "raise `RETRIEVAL_TIMEOUT_S`" not in report
+
+
+def test_a_cold_retrieval_within_a_quarter_of_the_timeout_recommends_raising_it(
+    site: FakeSite,
+) -> None:
+    site.ask_replies = [(200, retrieval_answer(1_600))]  # 80% of 2 s
+    report = render_report(run_measurement(plan(site, first="ask", asks=1, warm_probes=0)))
+    assert "(80% of it)" in report
+    assert "**Within 25% of the timeout:** raise `RETRIEVAL_TIMEOUT_S`" in report
+
+
+def test_in_health_order_the_retrieval_line_names_the_after_probes_ask(site: FakeSite) -> None:
+    site.ask_replies = [(200, retrieval_answer(250))]
+    report = render_report(run_measurement(plan(site, asks=1, retrieval_timeout_s=5.0)))
+    assert "Retrieval of the first ask (after probes): 0.25 s against" in report
+    assert "= 5 s" in report
+
+
+def test_a_cold_deadline_exceeded_points_at_request_logs_not_at_the_margin(
+    site: FakeSite,
+) -> None:
+    error = {"code": "deadline_exceeded", "message": "too long", "retry_after_s": None}
+    site.ask_replies = [(504, {"error": error, "request_id": "0b7c-req"})]
+    run = run_measurement(plan(site, first="ask", asks=1, warm_probes=0))
+    fits, text = judge_margin(run)
+    assert fits is None
+    assert "deadline or retrieval timeout fired" in text
+    assert "request_logs" in text
+    assert "`0b7c-req`" in text

@@ -401,7 +401,7 @@ so there is no production failure here: the systematic analysis from request log
 ### Limitations
 
 - **Nothing is verified on the live platform yet.** No deployment exists. The client IP in Vercel's logs, the forwarded-for
-  header, the build and bundle, the Neon pooler and the cold start are numbered checks (V1 to V16) of the
+  header, the build and bundle, the Neon pooler and the cold start are numbered checks (V1 to V17) of the
   [Vercel runbook](docs/runbooks/vercel-deploy.md), answered after the first deployment; until then those are readings of
   the platform's documentation (Tech §12, §18).
 - **Free tiers.** Daily quotas can exhaust the demo's budget (the page then says so), and the same quotas limit the CI eval.
@@ -566,7 +566,7 @@ CI touches Neon production or a Vercel project on its own.
 | Runbook | What it covers |
 |---|---|
 | [docs/runbooks/neon-production.md](docs/runbooks/neon-production.md) | migrate and seed Neon, the least-privilege `app` role and its checks, rollback, enabling housekeeping |
-| [docs/runbooks/vercel-deploy.md](docs/runbooks/vercel-deploy.md) | the two Vercel projects, environment variables, previews without secrets, the first-deployment checklist (V1 to V16), the cold-start measurement |
+| [docs/runbooks/vercel-deploy.md](docs/runbooks/vercel-deploy.md) | the two Vercel projects, environment variables, previews without secrets, the first-deployment checklist (V1 to V17), the cold-start measurement |
 | [docs/runbooks/mvp-closeout.md](docs/runbooks/mvp-closeout.md) | the MVP exit criteria with evidence, the manual check of the rate limit and the budget, what is deferred |
 
 | Workflow | Trigger | State on 2026-10-12 |

@@ -1350,7 +1350,8 @@ def measure_cold_start(
     GET /readyz, and on nothing else; it never prints it. Run it by hand
     (docs/runbooks/vercel-deploy.md); it is not for CI.
     """
-    configured = get_settings().proxy_shared_secret
+    settings = get_settings()
+    configured = settings.proxy_shared_secret
     plan = Plan(
         frontend_url=frontend_url,
         backend_url=backend_url,
@@ -1363,6 +1364,7 @@ def measure_cold_start(
         margin_s=margin_s,
         waited=wait,
         proxy_secret=configured.get_secret_value() if configured is not None else None,
+        retrieval_timeout_s=settings.retrieval_timeout_s,
     )
     try:
         plan.validate()
