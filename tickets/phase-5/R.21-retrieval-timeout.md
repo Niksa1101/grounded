@@ -34,12 +34,12 @@ timeout answers 504 `deadline_exceeded` with outcome `deadline_exceeded` (R.20).
   `trace.latency_ms()`, then `_fail(504, "deadline_exceeded", …)`. Register it in `install_error_handlers`.
 
 **Acceptance criteria**
-- [ ] With `hybrid_search` patched to await `asyncio.Event().wait()`, `retrieval_timeout_s=0.05` and
+- [x] With `hybrid_search` patched to await `asyncio.Event().wait()`, `retrieval_timeout_s=0.05` and
       `request_deadline_s=30`: 504 `deadline_exceeded`; the row has outcome `deadline_exceeded`,
       `latency_retrieval_ms` set and `latency_llm_ms` NULL; the LLM was never called; `daily_usage` has no row.
-- [ ] Eval mode (`EVAL_SETTINGS`): a search that sleeps 0.1 s with `retrieval_timeout_s=0.02` gives 200.
-- [ ] A request within the timeout is unaffected.
-- [ ] `grounded serve` with `GENERATOR_PROVIDERS=fake` answers normally.
+- [x] Eval mode (`EVAL_SETTINGS`): a search that sleeps 0.1 s with `retrieval_timeout_s=0.02` gives 200.
+- [x] A request within the timeout is unaffected.
+- [x] `grounded serve` with `GENERATOR_PROVIDERS=fake` answers normally.
 
 **Verify:** standard checks.
 
