@@ -1,9 +1,11 @@
 """Timed requests against a live deployment: cold start and warm latency (ticket 5.10).
 
 ``grounded measure-cold-start`` drives this module. It answers one question with numbers instead
-of guesses: does everything that happens *before* the backend handler's 25 s deadline starts
-(function start, Neon wake) fit in the 10 s between that deadline and the proxy's 35 s fetch
-timeout (Tech §18, D53)? When it does not, the UI's retry state covers it and the numbers say so.
+of guesses: does what happens *before* the backend handler's 25 s deadline starts (the function
+start) fit in the 10 s between that deadline and the proxy's 35 s fetch timeout (Tech §18, D53)?
+The Neon wake runs inside the deadline (the first database call), so including it, as the health
+order does, makes the estimate stricter. When it does not fit, the UI's retry state covers it and
+the numbers say so.
 
 What it sends, and what it never sends:
 

@@ -84,7 +84,7 @@ describe("state notices", () => {
     expect(html).toContain("Request id: r1");
   });
 
-  it("says try again tomorrow, with no ticking counter, past an hour", () => {
+  it("says the UTC day's limit is used up, with no ticking counter, past an hour", () => {
     const html = renderToStaticMarkup(
       <RateLimitedNotice
         message="Daily limit."
@@ -93,8 +93,10 @@ describe("state notices", () => {
         onDone={noop}
       />,
     );
-    expect(html).toContain("try again tomorrow");
-    expect(html).not.toMatch(/\d+:\d\d/);
+    // The same day boundary as the budget notice: the limit resets at 00:00 UTC, not local time.
+    expect(html).toContain("question limit (per UTC day) is used up. It resets at 00:00 UTC.");
+    expect(html).not.toContain("tomorrow");
+    expect(html).not.toMatch(/\d+:\d\d(?! UTC)/); // no countdown; "00:00 UTC" is the reset time
   });
 
   it("budget_exhausted is friendly; an error shows the request id or says there is none", () => {

@@ -165,6 +165,22 @@ describe("forwardAsk", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("refuses a declared content-length over the limit without reading the body", async () => {
+    const fetchImpl = vi.fn();
+    const text = vi.fn(async () => JSON.stringify({ question: "How do I use Depends?" }));
+    const oversized = {
+      headers: new Headers({ "content-length": String(MAX_BODY_BYTES + 1) }),
+      text,
+    } as unknown as Request;
+
+    const res = await forwardAsk(oversized, { ...CONFIG, fetchImpl });
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ error: { code: "bad_request" } });
+    expect(text).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("never puts the secret in a response", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error(`boom ${SECRET}`));
     const res = await forwardAsk(askRequest(), { ...CONFIG, fetchImpl });

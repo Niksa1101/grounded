@@ -214,7 +214,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.22](phase-5/R.22-readyz-secret.md) | `/readyz` requires the proxy secret | Build | G | done | [#106](https://github.com/Niksa1101/grounded/pull/106) |
 | [R.23](phase-5/R.23-cold-start-questions.md) | Cold-start measurement: distinct questions, cold cache hits, cold retrieval | Build | G | done | [#107](https://github.com/Niksa1101/grounded/pull/107) |
 | [R.24](phase-5/R.24-deterministic-deadline-tests.md) | Deterministic deadline tests and env isolation in tests | Build | G | done | [#108](https://github.com/Niksa1101/grounded/pull/108) |
-| [R.25](phase-5/R.25-review-polish.md) | Small hardening and documentation drift | Build | G | todo | |
+| [R.25](phase-5/R.25-review-polish.md) | Small hardening and documentation drift | Build | G | done | [#109](https://github.com/Niksa1101/grounded/pull/109) |
 | **6** | **[Re-ranking with measured lift](phase-6/README.md)** | | | | |
 | [6.01](phase-6/6.01-decision-cohere.md) | Decision: Cohere rerank model, trial limits, cap, price | Decision | D | todo | |
 | [6.02](phase-6/6.02-rerank-adapter.md) | Cohere rerank adapter and rerank cache | Build | G | todo | |

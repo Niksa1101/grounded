@@ -134,8 +134,8 @@ curl -s -i -X POST "$FRONTEND_URL/api/ask" -H 'content-type: application/json' -
 
 Expected: status `429`, a `Retry-After` header of up to 86400 (the seconds to 00:00 UTC), and the body
 `{"error":{"code":"rate_limited","message":"Daily question limit reached. Try again in about <N> h.","retry_after_s":<S>},…}`
-with `<S>` equal to the header. The page shows "try again tomorrow" and no ticking counter (a wait over an
-hour is not counted down, Tech §19). Rerun the SQL: your bucket's `hits` is 21 or more (the counter also
+with `<S>` equal to the header. The page shows "Today's question limit (per UTC day) is used up. It resets at
+00:00 UTC." and no ticking counter (a wait over an hour is not counted down, Tech §19). Rerun the SQL: your bucket's `hits` is 21 or more (the counter also
 counts the rejected tries; 20 were admitted). A second client (a phone on mobile data) asking the same
 question at this moment gets `200`: the buckets are per IP hash.
 

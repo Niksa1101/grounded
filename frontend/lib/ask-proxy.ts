@@ -10,8 +10,9 @@ import type { ProxyErrorCode, ProxyErrorResponse } from "./api";
 // problem answers first. The rest of the 35 s is the budget for a backend cold start.
 export const UPSTREAM_TIMEOUT_MS = 35_000;
 
-// POST /v1/ask refuses a larger body (MAX_BODY_BYTES in schemas/api.py). Refusing here first keeps
-// the proxy from buffering something the backend would reject anyway.
+// POST /v1/ask refuses a larger body (MAX_BODY_BYTES in schemas/api.py). The proxy refuses it first:
+// a declared content-length over the limit before the body is read, so it is never buffered; a body
+// without a length (chunked) after reading, since only then is its size known.
 export const MAX_BODY_BYTES = 4096;
 
 export interface ProxyConfig {
@@ -63,6 +64,10 @@ export async function forwardAsk(
     return failure(500, "proxy_misconfigured", "The server is not configured.");
   }
 
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+    return failure(422, "bad_request", "The request is too large.");
+  }
   const raw = await request.text();
   if (new TextEncoder().encode(raw).length > MAX_BODY_BYTES) {
     return failure(422, "bad_request", "The request is too large.");

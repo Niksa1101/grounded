@@ -424,9 +424,10 @@ for i in $(seq 1 30); do curl -s -o /dev/null -w "%{http_code}\n" -H "X-Proxy-Se
 
 ## 9. Measure the cold start
 
-The question: do the function start and the Neon wake, which both happen **before** the handler's
-25 s deadline starts, fit in the 10 s between that deadline and the proxy's 35 s timeout (Tech §18,
-D53)? `grounded measure-cold-start` times it. It calls the backend's public `/healthz`, the
+The question: does the function start, which happens **before** the handler's 25 s deadline starts,
+fit in the 10 s between that deadline and the proxy's 35 s timeout (Tech §18, D53)? The Neon wake
+runs at the first database call, inside the deadline, so counting it here (order `health`) only makes
+the estimate stricter. `grounded measure-cold-start` times it. It calls the backend's public `/healthz`, the
 backend's `/readyz` with `X-Proxy-Secret` (that one request only; D54c) and the frontend's public
 `/api/ask`, what a visitor can reach. The command reads the secret from `PROXY_SHARED_SECRET`
 through `Settings` and never prints it. Export the **production** value first (step 4 did, in the
