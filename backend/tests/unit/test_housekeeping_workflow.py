@@ -33,6 +33,7 @@ from tests.unit.test_ci_workflows import (
 )
 
 HOUSEKEEPING = "housekeeping.yml"
+PROXY_SECRET = "PROXY_SHARED_SECRET"
 KEEP_WARM = ROOT / ".github" / "scripts" / "keep-warm.sh"
 
 
@@ -96,14 +97,17 @@ def test_the_guard_is_the_one_of_ingest_yml() -> None:
     assert step_named(HOUSEKEEPING, title) == step_named("ingest.yml", title)
 
 
-def test_the_database_secret_is_the_only_secret_and_keep_warm_sees_none() -> None:
+def test_keep_warm_sees_only_the_proxy_secret_and_never_the_database_one() -> None:
     text = code(HOUSEKEEPING)
 
-    assert set(re.findall(r"secrets\.([A-Z_]+)", text)) == {SECRET}
+    assert set(re.findall(r"secrets\.([A-Z_]+)", text)) == {SECRET, PROXY_SECRET}
     assert text.count(f"secrets.{SECRET}") == 2  # the guard and the command, nothing else
     keep_warm = text.split("\n  keep-warm:\n", 1)[1]
-    assert SECRET not in keep_warm  # a public GET needs no credential
-    assert "secrets." not in keep_warm
+    assert SECRET not in keep_warm  # the probe needs no database credential
+    # /readyz needs the proxy secret (PRD D54c): that one step gets it, and only through env:.
+    assert re.findall(r"secrets\.([A-Z_]+)", keep_warm) == [PROXY_SECRET]
+    step = step_named(HOUSEKEEPING, "Wake the backend and the database")
+    assert f"{PROXY_SECRET}: ${{{{ secrets.{PROXY_SECRET} }}}}" in step
 
 
 def test_inputs_reach_scripts_only_through_env() -> None:
@@ -130,7 +134,7 @@ def test_it_never_prints_a_secret_and_pins_every_action() -> None:
     for script in run_blocks(HOUSEKEEPING):
         for line in script.splitlines():
             if re.search(r"\b(echo|printf|tee)\b", line):
-                assert not re.search(r"\$\{?(DATABASE_URL_DIRECT|url)\b", line), line
+                assert not re.search(r"\$\{?(DATABASE_URL_DIRECT|PROXY_SHARED_SECRET|url)\b", line)
     uses = re.findall(r"(?m)^\s+(?:- )?uses: (\S+)", code(HOUSEKEEPING))
     assert uses
     for action in uses:
@@ -157,11 +161,13 @@ class ReadyzServer:
     def __init__(self, codes: list[int]) -> None:
         outer = self
         self.requests: list[tuple[str, str]] = []
+        self.secrets: list[str | None] = []  # the X-Proxy-Secret header of each request
         self.codes = codes
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:
                 outer.requests.append((self.path, self.headers.get("User-Agent", "")))
+                outer.secrets.append(self.headers.get("X-Proxy-Secret"))
                 index = min(len(outer.requests), len(outer.codes)) - 1
                 self.send_response(outer.codes[index])
                 self.send_header("Content-Length", "0")
@@ -186,13 +192,15 @@ def readyz(request: pytest.FixtureRequest) -> Iterator[ReadyzServer]:
     server.close()
 
 
-FAST = {"KEEP_WARM_PAUSE": "0", "KEEP_WARM_TIMEOUT": "5"}
+TEST_SECRET = "keep-warm-test-secret"
+FAST = {"KEEP_WARM_PAUSE": "0", "KEEP_WARM_TIMEOUT": "5", PROXY_SECRET: TEST_SECRET}
 
 
 def keep_warm(url: str | None, **env: str) -> subprocess.CompletedProcess[str]:
     bash = usable_bash()
     assert bash is not None
-    variables = {k: v for k, v in os.environ.items() if not k.startswith(("BACKEND_", "KEEP_WARM"))}
+    prefixes = ("BACKEND_", "KEEP_WARM", PROXY_SECRET)
+    variables = {k: v for k, v in os.environ.items() if not k.startswith(prefixes)}
     variables.update(env)
     if url is not None:
         variables["BACKEND_URL"] = url
@@ -213,7 +221,30 @@ def test_keep_warm_asks_readyz_once_when_it_answers(readyz: ReadyzServer) -> Non
 
     assert done.returncode == 0, done.stdout + done.stderr
     assert readyz.requests == [("/readyz", "grounded-keep-warm")]
+    assert readyz.secrets == [TEST_SECRET]  # /readyz needs the proxy secret (PRD D54c)
     assert "attempt 1/4: HTTP 200" in done.stdout
+    assert TEST_SECRET not in done.stdout + done.stderr  # never printed
+
+
+@needs_bash
+@pytest.mark.parametrize("readyz", [[401]], indirect=True)
+def test_keep_warm_stops_at_a_401_and_says_the_secret_differs(readyz: ReadyzServer) -> None:
+    done = keep_warm(readyz.url, **FAST)
+
+    assert done.returncode == 1
+    assert len(readyz.requests) == 1  # a wrong secret does not get better with retries
+    assert "the secret differs from the backend's" in done.stdout
+    assert TEST_SECRET not in done.stdout + done.stderr
+
+
+@needs_bash
+@pytest.mark.parametrize("readyz", [[200]], indirect=True)
+def test_keep_warm_refuses_to_run_without_the_secret(readyz: ReadyzServer) -> None:
+    done = keep_warm(readyz.url, **{**FAST, PROXY_SECRET: ""})
+
+    assert done.returncode == 1
+    assert readyz.requests == []  # nothing was requested
+    assert "::error title=PROXY_SHARED_SECRET is not set" in done.stdout
 
 
 @needs_bash

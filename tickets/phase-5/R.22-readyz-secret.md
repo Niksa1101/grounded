@@ -32,13 +32,13 @@ and 9; `docs/runbooks/neon-production.md` step 10; AGENTS.md §6.7.
   The module docstring no longer says "this module never has a secret".
 
 **Acceptance criteria**
-- [ ] `test_health.py`, `test_readyz.py`: 401 without a secret when direct API is off, with no pool use; 200 with the
+- [x] `test_health.py`, `test_readyz.py`: 401 without a secret when direct API is off, with no pool use; 200 with the
       right secret; 401 with a wrong secret.
-- [ ] `test_housekeeping_workflow.py`: the local HTTP server received the header; the missing-secret error; the 401
+- [x] `test_housekeeping_workflow.py`: the local HTTP server received the header; the missing-secret error; the 401
       message. `test_ci_workflows.py` allows `PROXY_SHARED_SECRET` for that one step.
-- [ ] `test_cold_start.py`: the header goes to `/readyz` only (not `/healthz`, not the frontend); the missing-secret
+- [x] `test_cold_start.py`: the header goes to `/readyz` only (not `/healthz`, not the frontend); the missing-secret
       error.
-- [ ] `npm run generate:api` leaves no diff after the commit.
+- [x] `npm run generate:api` leaves no diff after the commit.
 
 **Verify:** standard checks plus the frontend checks; `curl -i localhost:8000/readyz` with `ALLOW_DIRECT_API=false`
 gives 401 without the header and 200 with it; `bash .github/scripts/keep-warm.sh` against the local server exits 0

@@ -20,7 +20,9 @@
 # - `dry_run` and the backend URL reach a script only through `env:`, never as an expression inside
 #   `run:`.
 # - `keep-warm` GETs `<BACKEND_URL>/readyz` (the backend's production origin, a repository VARIABLE
-#   named BACKEND_URL, not a secret: it is public). Unset: a notice and nothing else.
+#   named BACKEND_URL, not a secret: it is public). Unset: a notice and nothing else. /readyz needs
+#   the proxy secret (PRD D54c), so that one step also gets the repository secret
+#   PROXY_SHARED_SECRET (the Vercel value); the script sends it on curl's stdin, never in argv.
 name: housekeeping
 
 on:
@@ -126,4 +128,5 @@ jobs:
       - name: Wake the backend and the database
         env:
           BACKEND_URL: ${{ vars.BACKEND_URL }}
+          PROXY_SHARED_SECRET: ${{ secrets.PROXY_SHARED_SECRET }}
         run: bash .github/scripts/keep-warm.sh

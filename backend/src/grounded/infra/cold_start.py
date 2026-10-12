@@ -7,10 +7,15 @@ timeout (Tech §18, D53)? When it does not, the UI's retry state covers it and t
 
 What it sends, and what it never sends:
 
-* ``GET /healthz`` and ``GET /readyz`` of the backend: public, no secret. ``/healthz`` touches
-  nothing but the function (function cold start); ``/readyz`` queries the database (Neon wake).
-* ``POST /api/ask`` of the **frontend**: the public route a visitor uses. The proxy secret lives in
-  the frontend's environment, so this module never has one.
+* ``GET /healthz`` of the backend: public, no secret. It touches nothing but the function
+  (function cold start).
+* ``GET /readyz`` of the backend, with ``X-Proxy-Secret``: it queries the database (Neon wake), so
+  it needs the proxy secret (PRD D54c). The secret comes from ``Settings`` (``PROXY_SHARED_SECRET``,
+  the production value exported by the operator), goes on this one request only, over https
+  (``_check_url`` allows plain http for localhost only), and is never printed, logged or put in an
+  error message. ``Plan`` keeps it out of its ``repr``.
+* ``POST /api/ask`` of the **frontend**: the public route a visitor uses, without any secret (the
+  frontend adds its own).
 
 Each request opens a new connection (``urllib`` keeps none alive), so every figure includes DNS,
 TCP and TLS setup: tens of milliseconds, which does not matter next to a cold start of seconds.
@@ -27,8 +32,8 @@ import statistics
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Literal, cast
@@ -87,11 +92,18 @@ class Plan:
     timeout_s: float = 45.0  # above the frontend route's maxDuration (40 s): see the platform's 504
     margin_s: float = 10.0  # proxy timeout 35 s minus backend deadline 25 s (Tech §18)
     waited: bool = False  # the run slept the idle period itself, rather than the operator having
+    # Sent as X-Proxy-Secret on GET /readyz only (PRD D54c). Never in the repr, so never printed.
+    proxy_secret: str | None = field(default=None, repr=False)
 
     def validate(self) -> None:
         _check_url("--frontend-url", self.frontend_url)
         if self.backend_url is not None:
             _check_url("--backend-url", self.backend_url)
+            if not self.proxy_secret:
+                raise MeasureError(
+                    "--backend-url probes /readyz, which needs the proxy secret: export "
+                    "PROXY_SHARED_SECRET (the production value from Vercel) first"
+                )
         if not 0 <= self.asks <= MAX_ASKS:
             raise MeasureError(f"--asks must be between 0 and {MAX_ASKS} (it spends real quota)")
         if not 0 <= self.warm_probes <= MAX_PROBES:
@@ -139,9 +151,17 @@ class HttpResult:
     error: str | None
 
 
-def http_call(method: str, url: str, *, body: bytes | None, timeout_s: float) -> HttpResult:
+def http_call(
+    method: str,
+    url: str,
+    *,
+    body: bytes | None,
+    timeout_s: float,
+    extra_headers: Mapping[str, str] | None = None,
+) -> HttpResult:
     """One request, one connection. Never raises: a failure is a result with ``status`` None."""
     headers = {"user-agent": "grounded-measure-cold-start/1", "accept": "application/json"}
+    headers.update(extra_headers or {})
     if body is not None:
         headers["content-type"] = "application/json"
     request = urllib.request.Request(url, data=body, method=method, headers=headers)
@@ -170,6 +190,8 @@ def _details(step: Step, result: HttpResult) -> tuple[str | None, int | None, bo
     if result.status is None:
         return result.error, None, None
     if step is not Step.ASK:
+        if result.status == 401:  # /readyz refused X-Proxy-Secret: not the backend's value
+            return "unauthorized", None, None
         return (None if result.status == 200 else "http_error"), None, None
     try:
         payload = _dict(json.loads(result.body))
@@ -229,8 +251,11 @@ def run_measurement(
         else:
             assert plan.backend_url is not None
             url, method, body = f"{plan.backend_url.rstrip('/')}/{step.value}", "GET", None
+        # The proxy secret goes to /readyz and nowhere else (not /healthz, not the frontend).
+        secret = plan.proxy_secret if step is Step.READYZ else None
+        headers = {"X-Proxy-Secret": secret} if secret else None
         began = time.perf_counter()
-        result = http_call(method, url, body=body, timeout_s=plan.timeout_s)
+        result = http_call(method, url, body=body, timeout_s=plan.timeout_s, extra_headers=headers)
         elapsed = (time.perf_counter() - began) * 1000
         error, total, hit = _details(step, result)
         samples.append(

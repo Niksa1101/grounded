@@ -383,6 +383,17 @@ Unset, the keep-warm job prints a notice and does nothing.
 gh variable set BACKEND_URL --body "https://<your-backend-production-domain>"
 ```
 
+`/readyz` needs the proxy secret (PRD D54c), so create the repository **secret**
+`PROXY_SHARED_SECRET` with the same value as the backend's in Vercel, before the first keep-warm run.
+The command prompts for the value, so it does not enter your shell history. Only the keep-warm step
+receives it, and the script never prints it. Without it the keep-warm job fails with
+`PROXY_SHARED_SECRET is not set`; with a different value, with a 401 ("the secret differs from the
+backend's"). Rotate it together with Vercel's.
+
+```bash
+gh secret set PROXY_SHARED_SECRET
+```
+
 First, a dry run: the same statements, rolled back. The job summary lists one line per rule with its
 row count. On a young database most are `0`; what you check is that the run is green and the
 numbers are plausible.
@@ -434,6 +445,7 @@ scheduled run now and then. The README lists this limitation.
 | The `housekeeping` guard step fails | same as the ingest guard: `DATABASE_URL_DIRECT` is missing, pooled or local | fix the secret (step 1) |
 | `retention` fails with a connection error | the direct URL is wrong or Neon is unreachable (the job stops after 10 minutes at the latest) | fix the secret or wait, then re-run; nothing was changed (one transaction) |
 | `keep-warm` fails with `HTTP 000` after four tries | no answer: the backend URL is wrong, or the deployment is down | open the URL in a browser; fix `BACKEND_URL` or the deployment |
+| `keep-warm` fails with `PROXY_SHARED_SECRET is not set` or `Keep-warm rejected (401)` | the repository secret is missing, or differs from the backend's `PROXY_SHARED_SECRET` in Vercel | step 10: `gh secret set PROXY_SHARED_SECRET` with the Vercel value |
 | `keep-warm` fails with `HTTP 503` | `/readyz` says the database or the active index is not ready | Neon runbook steps 4 and 5; Vercel runbook V10 |
 | The scheduled run shows as skipped | `HOUSEKEEPING_ENABLED` is not `true` (the default) | step 10: set it after the first green manual run |
 | You want to start over with the role | | `DROP OWNED BY app; DROP ROLE app;` as the owner, then step 6 |

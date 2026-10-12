@@ -107,6 +107,18 @@ def test_the_production_secret_is_referenced_only_by_the_steps_that_need_it(
         assert holders == []  # a PR workflow, the cache seeding, the retrieval eval: none of them
 
 
+@pytest.mark.parametrize("workflow", sorted(p.name for p in WORKFLOWS.glob("*.yml")))
+def test_the_proxy_secret_reaches_only_the_keep_warm_step(workflow: str) -> None:
+    # /readyz needs it (PRD D54c); no other step of any workflow may see it.
+    holders = [b for b in steps(workflow) if "PROXY_SHARED_SECRET" in b]
+
+    if workflow == "housekeeping.yml":
+        assert [step_title(b) for b in holders] == ["Wake the backend and the database"]
+        assert "PROXY_SHARED_SECRET: ${{ secrets.PROXY_SHARED_SECRET }}" in holders[0]
+    else:
+        assert holders == []
+
+
 def test_the_secret_is_not_in_the_job_environment_or_anywhere_else_in_eval_yml() -> None:
     block = step_named("eval.yml", RECORD_STEP)
 
