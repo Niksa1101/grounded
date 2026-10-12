@@ -111,8 +111,11 @@ def test_both_projects_use_the_region_of_d53() -> None:
 
 
 def test_the_measurement_commands_use_flags_the_command_has() -> None:
-    result = CliRunner().invoke(app, ["measure-cold-start", "--help"], env={"COLUMNS": "200"})
-    help_text = result.output
+    result = CliRunner().invoke(
+        app, ["measure-cold-start", "--help"], env={"COLUMNS": "200", "NO_COLOR": "1"}
+    )
+    # CI forces colour, and rich then splits "--frontend-url" into styled pieces.
+    help_text = re.sub(r"\[[0-9;]*m", "", result.output)
     used = re.findall(r"(?m)^.*grounded measure-cold-start (.*?)(?: \| tee .*)?$", RUNBOOK)
     assert len(used) == 2
     for arguments in used:
