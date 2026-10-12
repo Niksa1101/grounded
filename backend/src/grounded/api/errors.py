@@ -66,15 +66,14 @@ async def _fail(
     message: str,
     *,
     retry_after_s: float | None = None,
-    outcome: Outcome | None = None,
 ) -> JSONResponse:
     trace: RequestTrace | None = getattr(request.state, "trace", None)
     if trace is not None:
-        # Every ErrorCode but one is also a request_logs outcome (DB.md §4); the exception passes
-        # ``outcome`` (see ``_deadline_exceeded``).
+        # Every ErrorCode but ``unauthorized`` is also a request_logs outcome (DB.md §4), and an
+        # ``unauthorized`` request never has a trace: it is rejected before the trace exists.
         await get_request_logger(request).write(
             trace,
-            outcome=outcome or cast(Outcome, code),
+            outcome=cast(Outcome, code),
             http_status=http_status,
             error_code=code,
         )
@@ -174,14 +173,11 @@ async def _deadline_exceeded(request: Request, exc: Exception) -> JSONResponse:
             "stage_latency_ms": trace.latency_ms() if trace is not None else None,
         },
     )
-    # The outcome is ``internal_error``: DB.md §4's CHECK has no value for a deadline and a new one
-    # needs a migration. The row's ``error_code`` and ``http_status`` (504) tell it apart.
     return await _fail(
         request,
         status.HTTP_504_GATEWAY_TIMEOUT,
         "deadline_exceeded",
         "The request took too long and was stopped. Try again shortly.",
-        outcome="internal_error",
     )
 
 

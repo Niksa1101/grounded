@@ -6,6 +6,7 @@ import re
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
+from typing import get_args
 
 import psycopg
 import pytest
@@ -17,6 +18,7 @@ from grounded.infra.migrations import (
     ChecksumMismatchError,
     migrate,
 )
+from grounded.observability.request_log import Outcome
 
 pytestmark = pytest.mark.integration
 
@@ -233,7 +235,11 @@ def test_0002_applies_over_a_database_that_already_holds_v1_data(
             conn.execute(_INSERT_CHUNK, (version, _insert_document(conn, version)))
             conn.commit()
 
-        assert migrate(url).applied == ["0002_index_integrity", "0003_rate_limit"]
+        assert migrate(url).applied == [
+            "0002_index_integrity",
+            "0003_rate_limit",
+            "0004_deadline_outcome",
+        ]
 
         with psycopg.connect(url) as conn:
             assert conn.execute("SELECT count(*) FROM index_versions").fetchone() == (1,)
@@ -244,3 +250,30 @@ def test_0002_applies_over_a_database_that_already_holds_v1_data(
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:
             admin.execute(drop)
+
+
+_INSERT_REQUEST_LOG = """
+INSERT INTO request_logs (source, question_hash, http_status, outcome, latency_total_ms)
+VALUES ('api', 'h', 504, %s, 1)
+"""
+
+
+def test_the_outcome_check_allows_exactly_the_outcomes_of_the_code(
+    conn: psycopg.Connection,
+) -> None:
+    # 0004 (PRD D54b) added deadline_exceeded; the CHECK and ``Outcome`` must name the same values.
+    row = conn.execute(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint"
+        " WHERE conrelid = 'request_logs'::regclass AND conname = 'request_logs_outcome_check'"
+    ).fetchone()
+    assert row is not None
+    assert set(re.findall(r"'(\w+)'", row[0])) == set(get_args(Outcome))
+
+
+def test_a_deadline_exceeded_row_inserts(conn: psycopg.Connection) -> None:
+    conn.execute(_INSERT_REQUEST_LOG, ("deadline_exceeded",))
+
+
+def test_an_unknown_outcome_is_still_refused(conn: psycopg.Connection) -> None:
+    with pytest.raises(psycopg.errors.CheckViolation):
+        conn.execute(_INSERT_REQUEST_LOG, ("timed_out",))

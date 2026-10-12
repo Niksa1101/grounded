@@ -26,10 +26,10 @@ schema change is approved by D54b; show the DDL in the PR.
   outcome, and `unauthorized` never has a trace.
 
 **Acceptance criteria**
-- [ ] `0004_deadline_outcome.sql` applies on the dev DB (`uv run grounded migrate`) and on a fresh test DB (0001–0004).
-- [ ] `tests/integration/test_deadline.py` expects outcome `deadline_exceeded`.
-- [ ] The test that pins the CHECK values adds the new value.
-- [ ] A row with `deadline_exceeded` inserts; an unknown outcome is still refused.
+- [x] `0004_deadline_outcome.sql` applies on the dev DB (`uv run grounded migrate`) and on a fresh test DB (0001–0004).
+- [x] `tests/integration/test_deadline.py` expects outcome `deadline_exceeded`.
+- [x] The test that pins the CHECK values adds the new value.
+- [x] A row with `deadline_exceeded` inserts; an unknown outcome is still refused.
 
 **Verify:** standard checks; `uv run grounded migrate` on the dev DB.
 

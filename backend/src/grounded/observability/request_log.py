@@ -58,6 +58,7 @@ Outcome = Literal[
     "validation_failed",
     "provider_unavailable",
     "internal_error",
+    "deadline_exceeded",
 ]
 
 Source = Literal["web", "api", "eval"]

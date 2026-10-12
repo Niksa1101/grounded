@@ -139,9 +139,9 @@ async def test_a_request_that_outlives_the_deadline_is_a_504_with_a_request_id_a
     assert llm.cancelled  # the call in flight was cancelled, not left running
     [row] = rows(db)
     assert row["id"] == request_id
-    # DB.md §4 has no deadline outcome; the row reuses internal_error and says the rest itself.
+    # Its own outcome since migration 0004 (PRD D54b), not internal_error.
     assert (row["outcome"], row["http_status"], row["error_code"]) == (
-        "internal_error",
+        "deadline_exceeded",
         504,
         "deadline_exceeded",
     )
@@ -170,7 +170,7 @@ async def test_a_deadline_during_the_embed_stage_stops_before_any_llm_call(db: s
     [row] = rows(db)
     assert row["latency_embed_ms"] is not None
     assert row["latency_llm_ms"] is None  # never reached: NULL, not 0
-    assert row["error_code"] == "deadline_exceeded"
+    assert (row["outcome"], row["error_code"]) == ("deadline_exceeded", "deadline_exceeded")
 
 
 async def test_a_budget_unit_reserved_before_a_call_that_timed_out_stays_spent(db: str) -> None:

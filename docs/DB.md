@@ -110,7 +110,7 @@ Tables by lifecycle:
 Not in the database, on purpose:
 - **Embedding cache, rerank cache, eval LLM-response cache.** These are SQLite files under `.cache/` used by ingest/eval locally and restored in CI via `actions/cache`. This keeps CI independent of production and avoids re-embedding the corpus on every run.
 
-## 4. Schema (migrations `0001_init.sql`, `0002_index_integrity.sql`)
+## 4. Schema (migrations `0001_init.sql` to `0004_deadline_outcome.sql`)
 
 ```sql
 -- 0001_init.sql
@@ -229,6 +229,7 @@ CREATE TABLE request_logs (
                                'answered', 'partial', 'insufficient_context',
                                'rate_limited', 'budget_exhausted', 'bad_request',
                                'validation_failed', 'provider_unavailable', 'internal_error')),
+                                                      -- 0004 adds 'deadline_exceeded' (below)
     cache_hit              boolean  NOT NULL DEFAULT false,
     provider               text,                      -- 'gemini' | 'groq' | 'fake'
     model                  text,
@@ -250,7 +251,7 @@ CREATE TABLE request_logs (
     citation_count         smallint,
     invalid_citation_count smallint,
     min_claim_confidence   real,
-    error_code             text                       -- the API ErrorCode; no CHECK. A deadline (504) is outcome internal_error + error_code deadline_exceeded
+    error_code             text                       -- the API ErrorCode; no CHECK. A deadline or retrieval timeout (504) is outcome deadline_exceeded + error_code deadline_exceeded
 );
 CREATE INDEX request_logs_created_idx ON request_logs (created_at DESC);
 CREATE INDEX request_logs_source_created_idx ON request_logs (source, created_at DESC);
@@ -307,6 +308,20 @@ CREATE TABLE rate_limit_counters (
     PRIMARY KEY (ip_hash, window_kind, window_start)
 );
 ```
+
+**`0004_deadline_outcome.sql`** (applied; decided in PRD D54b, written in R.20) adds `'deadline_exceeded'` to the `request_logs.outcome` CHECK. A request stopped by `REQUEST_DEADLINE_S` or by the retrieval stage timeout (`RETRIEVAL_TIMEOUT_S`, Tech §6) gets that outcome, with `error_code = 'deadline_exceeded'` and `http_status = 504`; before `0004` such a row reused `internal_error`, which mixed timeouts with bugs. It shipped before the first production `grounded migrate`, so no row needed a backfill. The CHECK is replaced, not altered (Postgres cannot change a CHECK in place); `request_logs_outcome_check` is the name Postgres generated for the inline CHECK of `0001`:
+
+```sql
+-- 0004_deadline_outcome.sql
+ALTER TABLE request_logs DROP CONSTRAINT request_logs_outcome_check;
+ALTER TABLE request_logs ADD CONSTRAINT request_logs_outcome_check CHECK (outcome IN (
+    'answered', 'partial', 'insufficient_context',
+    'rate_limited', 'budget_exhausted', 'bad_request',
+    'validation_failed', 'provider_unavailable', 'internal_error',
+    'deadline_exceeded'));
+```
+
+`tests/integration/test_schema.py` checks that the CHECK names exactly the values of `Outcome` (`observability/request_log.py`).
 
 No secondary index: the table holds the windows of two days at most, so the retention delete (§9) scans a few thousand rows, and an index would only add write cost to a table written on every request. The pseudonymous `ip_hash` is kept 2 days here, well inside the 30-day rule of `request_logs`.
 
@@ -531,6 +546,7 @@ and then deleted by the ingest CLI (`grounded index prune`). Chunks and document
 ## 10. Migrations
 
 - Files: `backend/migrations/NNNN_short_name.sql` (4-digit, sequential). Forward-only; no down migrations.
+- Applied so far: `0001_init` (the schema), `0002_index_integrity` (index integrity, R.05), `0003_rate_limit` (rate-limit counters, 5.04), `0004_deadline_outcome` (the `deadline_exceeded` outcome, R.20), all in §4.
 - Runner (`grounded migrate`) applies pending files in order, each in its own transaction, and records `version` + `checksum` in `schema_migrations`.
 - A pending file numbered below the newest applied one aborts the run (e.g. a late-merged branch): renumber it instead.
 - **Never edit an applied migration.** If the checksum differs from the recorded one, the runner aborts. Fixes go into a new migration.
