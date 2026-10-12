@@ -1,0 +1,20 @@
+{
+ "_synthetic": true,
+ "_note": "NOT RECORDED. No real Cohere call was made (no key in .env, 6.01/6.02). Hand-built from the documented shape of POST /v2/rerank (docs.cohere.com/reference/rerank, read 2026-10-12): `results` best first, each {index, relevance_score}, an `id` and `meta.billed_units.search_units`. It answers a request of FIVE documents with no `top_n`, so every document comes back. The scores are made up. Replace it with a recording after the first real call and delete this field.",
+ "status_code": 200,
+ "headers": {},
+ "body": {
+  "id": "07734bd2-2473-4f07-94e1-0d9f0e6843cf",
+  "results": [
+   {"index": 3, "relevance_score": 0.9990712},
+   {"index": 0, "relevance_score": 0.7867867},
+   {"index": 4, "relevance_score": 0.4812119},
+   {"index": 1, "relevance_score": 0.2771274},
+   {"index": 2, "relevance_score": 0.0153044}
+  ],
+  "meta": {
+   "api_version": {"version": "2", "is_experimental": false},
+   "billed_units": {"search_units": 1}
+  }
+ }
+}

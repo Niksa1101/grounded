@@ -1,0 +1,10 @@
+{
+ "_synthetic": true,
+ "_note": "NOT RECORDED. The same 429 without a Retry-After header, which is the shape the API reference documents (only `message` and `id`; the header is not mentioned). The adapter must treat the wait as unknown. The message wording is modeled.",
+ "status_code": 429,
+ "headers": {},
+ "body": {
+  "id": "5ab4f4d3-8a3c-4d54-9f55-2b8e2d3b0c12",
+  "message": "Too many requests: rate limit exceeded for this key."
+ }
+}

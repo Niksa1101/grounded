@@ -1,0 +1,10 @@
+{
+ "_synthetic": true,
+ "_note": "NOT RECORDED. A model ID the key cannot use (the case Tech 8 expects if the Trial key does not accept `rerank-v4.0-pro`: a 404 or 403 means the fallback `rerank-v4.0-fast`). Shape: the SDK's NotFoundError (status 404, headers, body) with the {id, message} error body of the API reference; the message wording is modeled.",
+ "status_code": 404,
+ "headers": {},
+ "body": {
+  "id": "5ab4f4d3-8a3c-4d54-9f55-2b8e2d3b0c15",
+  "message": "model not found, make sure the correct model ID was used and that you have access to the model."
+ }
+}

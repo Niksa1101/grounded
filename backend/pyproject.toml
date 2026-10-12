@@ -5,6 +5,7 @@ description = "Cited, schema-validated answers over the FastAPI docs, with an ev
 license = "MIT"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "cohere==7.2.0",
     "fastapi>=0.141.1",
     "google-genai>=2.25.0",
     "groq>=1.7.0",

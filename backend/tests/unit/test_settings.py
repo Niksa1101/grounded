@@ -330,6 +330,34 @@ def test_the_judge_output_cap_is_its_own_positive_setting(monkeypatch: pytest.Mo
         make_settings(judge_max_output_tokens=0)
 
 
+def test_the_rerank_defaults_are_the_ones_of_the_phase_6_decision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # PRD D55 (6.01): a cap of 30 a day, a 3 s stage, no pinned model in code (it is set in .env).
+    for name in ("RERANK_PROVIDER", "RERANK_MODEL", "RERANK_DAILY_CAP", "RERANK_TIMEOUT_S"):
+        monkeypatch.delenv(name, raising=False)
+    s = make_settings()
+    assert (s.rerank_provider, s.rerank_model) == ("none", None)
+    assert (s.rerank_daily_cap, s.rerank_timeout_s) == (30, 3.0)
+
+
+def test_the_rerank_timeout_is_read_from_the_environment_and_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RERANK_TIMEOUT_S", "1.5")
+    assert make_settings().rerank_timeout_s == 1.5
+    for bad in (0, -1):
+        with pytest.raises(ValidationError):
+            make_settings(rerank_timeout_s=bad)
+
+
+def test_selecting_cohere_is_valid_settings_even_without_a_key_or_model() -> None:
+    # Like the Gemini key and model: `Settings` does not check them, `build_reranker` does when
+    # the adapter is built, so a command that never reranks (migrate, ingest) needs neither.
+    s = make_settings(rerank_provider="cohere")
+    assert (s.rerank_provider, s.cohere_api_key, s.rerank_model) == ("cohere", None, None)
+
+
 def test_env_example_lists_every_setting() -> None:
     # .env.example is the documented config surface (Tech.md §4); it must not drift from Settings.
     env_example = Path(__file__).resolve().parents[3] / ".env.example"
