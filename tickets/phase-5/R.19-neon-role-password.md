@@ -31,12 +31,12 @@ AGENTS.md §5 (secrets), §6.13.
 - Rotation (the leak and rotation table) uses the same three commands.
 
 **Acceptance criteria**
-- [ ] Runbook step 6 uses the `\getenv` / `ALTER ROLE … PASSWORD :'app_password'` / `\unset` sequence, with the why.
-- [ ] The preflight checks psql ≥ 15; the rotation row uses the same commands; Console/CLI/API creation is forbidden.
-- [ ] `test_no_password_is_written_anywhere_in_the_role_sql`: `assert "\\password app" in RUNBOOK` is replaced by
+- [x] Runbook step 6 uses the `\getenv` / `ALTER ROLE … PASSWORD :'app_password'` / `\unset` sequence, with the why.
+- [x] The preflight checks psql ≥ 15; the rotation row uses the same commands; Console/CLI/API creation is forbidden.
+- [x] `test_no_password_is_written_anywhere_in_the_role_sql`: `assert "\\password app" in RUNBOOK` is replaced by
       three assertions: the runbook uses `\getenv app_password` and `PASSWORD :'app_password'`; it contains no
       `\password` command; no literal `PASSWORD '` appears (the existing regex stays).
-- [ ] DB §5 prose matches the runbook.
+- [x] DB §5 prose matches the runbook.
 
 **Verify:** standard checks.
 

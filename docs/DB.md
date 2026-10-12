@@ -330,9 +330,10 @@ Design notes:
 
 ```sql
 -- Run once per environment by the owner (Neon: the project owner role), after the migrations.
--- The role is created without a password; the password is set afterwards in psql with `\password app`
--- (generated, kept in a secret manager, never in a migration, a file or a shell history).
--- Created in SQL, not in the Neon console: console roles join `neon_superuser`, SQL roles do not.
+-- The role is created without a password; the password is set afterwards in psql from a variable,
+-- `ALTER ROLE app PASSWORD :'app_password'` (generated, kept in a secret manager, never in a migration,
+-- a file or a shell history). Plain text, not `\password app`: Neon does not accept a hashed password.
+-- Created in SQL, not in the Neon console, CLI or API: those roles join `neon_superuser`, SQL roles do not.
 CREATE ROLE app LOGIN;
 
 GRANT USAGE ON SCHEMA public TO app;

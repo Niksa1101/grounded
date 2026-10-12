@@ -14,7 +14,10 @@ Facts checked on 2026-10-11 against Neon's docs (`neon.com/docs/manage/roles`,
 added to the endpoint id; migrations should use the direct connection, because the pooler is
 PgBouncer in transaction mode, which does not support session-level advisory locks (the migration
 runner takes one, DB.md §10); roles created in the Console, CLI or API join `neon_superuser`, roles
-created with SQL do not and get only what you grant. So `app` is created **with SQL**.
+created with SQL do not and get only what you grant. So `app` is created **with SQL**. **Never create
+`app` in the Console, the CLI or the API:** Neon's docs say such roles are granted membership in
+`neon_superuser` (`pg_read_all_data`, `pg_write_all_data`, `CREATEROLE`, `BYPASSRLS`), which would
+let the public runtime read and write every table.
 
 ## Order of steps
 
@@ -39,11 +42,18 @@ create.
 - A Neon project `grounded` (Postgres 17, AWS US East 2), default branch `production`, with a
   database and the default owner role. Neon's console shows two connection strings per role: the
   **direct** one (`ep-…`) and the **pooled** one (`ep-…-pooler`). Keep both in your secret manager.
-- `psql` (any recent version), `gh` (logged in to this repository), `vercel` (the CLI, step 8; the
+- `psql` **15 or newer** (step 6 uses `\getenv`, which psql 15 added; check with the command
+  below), `gh` (logged in to this repository), `vercel` (the CLI, step 8; the
   dashboard works too) and `uv` (run `uv sync` once in `backend/`).
 - The extension `vector` is created by migration `0001` (`CREATE EXTENSION IF NOT EXISTS vector`),
   which the owner role may run on Neon. Unverified until the first run: if step 3 stops there with a
   permission error, run that one statement in the Neon SQL editor and re-run.
+
+Check the `psql` version (the first line must say 15 or higher):
+
+```bash
+psql --version
+```
 
 ## 1. Secrets and the approval gate
 
@@ -157,7 +167,18 @@ uv run grounded index list
 
 ## 6. Create the `app` role and its grants
 
-Do this after step 3, when the tables exist. Open a session as the owner on the **direct** URL:
+Do this after step 3, when the tables exist. Generate a long random password for `app` in your
+secret manager first: Neon refuses a password with less than 60 bits of entropy (a random string
+of 20 letters and digits has about 119).
+
+In the shell, read the password without echoing it and export it for `psql` (paste it at the empty
+prompt, then press Enter):
+
+```bash
+read -rs APP_DB_PASSWORD && export APP_DB_PASSWORD
+```
+
+Open a session as the owner on the **direct** URL:
 
 ```bash
 psql "$DATABASE_URL_DIRECT"
@@ -178,16 +199,34 @@ GRANT INSERT, SELECT ON request_logs TO app;
 GRANT SELECT, INSERT, UPDATE ON rate_limit_counters TO app;
 ```
 
-Still in `psql`, set the password. Generate a long random one in your secret manager first and paste
-it at the prompt. `\password` hashes it on your side, so the clear text is not sent to the server
-and not stored in `psql`'s history:
+Still in `psql`, copy the shell variable into a `psql` variable, set the password from it, and drop
+the `psql` variable:
 
 ```text
-\password app
+\getenv app_password APP_DB_PASSWORD
+ALTER ROLE app PASSWORD :'app_password';
+\unset app_password
 ```
 
-Leave `psql` with `\q`. Then build the runtime URL: take the owner's **pooled** string from the
-Console and replace the user with `app` and the password with the one you just set. It has this shape, and goes into your secret manager as "grounded app pooled URL":
+Leave `psql` with `\q` and clear the variable in the shell:
+
+```bash
+unset APP_DB_PASSWORD
+```
+
+Why this form:
+
+- Neon needs the password in plain text. Its docs (`neon.com/docs/manage/roles`, read 2026-10-12)
+  say: "Passwords must be supplied in plain text … Hashed passwords are not supported". psql's
+  `\password` command sends a hash computed on your side, so it cannot be used here.
+- No history keeps the value: `psql`'s history stores `:'app_password'`, the name of the variable,
+  and the shell's history stores `read -rs APP_DB_PASSWORD`, without the value.
+- The value travels to Neon over TLS (`sslmode=require` in the URL).
+- Unverified: whether Neon's server log records the text of DDL statements (and so the password). The
+  docs read on 2026-10-12 do not say.
+- `\getenv` needs `psql` 15 or newer (the version check under Prerequisites).
+
+Then build the runtime URL: take the owner's **pooled** string from the Console and replace the user with `app` and the password with the one you just set. It has this shape, and goes into your secret manager as "grounded app pooled URL":
 
 ```text
 postgresql://app:<password>@ep-<id>-pooler.us-east-2.aws.neon.tech/<database>?sslmode=require
@@ -391,7 +430,7 @@ scheduled run now and then. The README lists this limitation.
 | Migrate aborts | each file runs in its own transaction, so earlier files stay applied and the failing one is rolled back. A changed checksum means an applied file was edited | never edit an applied migration (DB.md §10): fix forward with a new numbered file in a PR |
 | A bad version was activated | the runtime refreshes the active version every 5 minutes (`ACTIVE_INDEX_TTL_S`) | in `psql` as the owner, put the previous version back (DB.md §7.3), replacing `<old>` and `<bad>`: see below |
 | A probe in step 7 that must fail succeeds | `app` has a grant it should not | revoke it (`REVOKE … ON <table> FROM app`), fix DB.md §5 and this file together if the doc was wrong |
-| The `app` password or an owner URL leaked | | owner: reset the password in the Neon console and update the secret; `app`: `\password app` as the owner, update Vercel and redeploy |
+| The `app` password or an owner URL leaked | | owner: reset the password in the Neon console and update the secret; `app`: as the owner, the same commands as step 6 with a new password (`read -rs`, then in `psql` `\getenv`, `ALTER ROLE app PASSWORD :'app_password'` and `\unset`, then `unset`), update Vercel and redeploy |
 | The `housekeeping` guard step fails | same as the ingest guard: `DATABASE_URL_DIRECT` is missing, pooled or local | fix the secret (step 1) |
 | `retention` fails with a connection error | the direct URL is wrong or Neon is unreachable (the job stops after 10 minutes at the latest) | fix the secret or wait, then re-run; nothing was changed (one transaction) |
 | `keep-warm` fails with `HTTP 000` after four tries | no answer: the backend URL is wrong, or the deployment is down | open the URL in a browser; fix `BACKEND_URL` or the deployment |
@@ -416,7 +455,7 @@ Tick each box as you do it; the acceptance criteria of ticket 5.09 are the last 
 - [ ] `ingest.yml` run with `activate=false`: three migrations applied, a `ready` version, `docs`/`chunks` plausible
 - [ ] `grounded golden validate … --against-index` passes against Neon
 - [ ] `ingest.yml` run with `activate=true`: one active version
-- [ ] `app` role created with SQL, grants applied, password set with `\password` and kept in the secret manager
+- [ ] `app` role created with SQL, grants applied, password set from a `psql` variable (`ALTER ROLE app PASSWORD :'app_password'`) and kept in the secret manager
 - [ ] Catalog table of step 7 matches exactly
 - [ ] The "must be able to" transaction ran as `app` over the pooled URL, upserts returned 2
 - [ ] Every "must not" line failed with `permission denied`
