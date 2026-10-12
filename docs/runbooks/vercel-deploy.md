@@ -109,11 +109,27 @@ Dashboard, Add New, Project, import the GitHub repository, then set:
   therefore start without configuration and fail at startup (a missing `GEMINI_API_KEY`). That is
   expected and harmless: `/v1/*` refuses everything without the proxy secret anyway.
 
-Then link the directory to the project (it creates `backend/.vercel/`, which `.gitignore` excludes):
+Then link the directory to the project:
 
 ```bash
 cd backend && vercel link
 ```
+
+When it asks which project, pick the existing one (marked `linked by git`), not "Create a new
+project". What Vercel CLI 63 does here (2026-10-12): it links the whole repository, in
+`.vercel/repo.json` at the repository root (one entry per project, with its directory), not in
+`backend/.vercel/`; it writes `<directory>/.env.local` with a `VERCEL_OIDC_TOKEN`; and it appends
+`.vercel` and `.env*` to `.gitignore`. The existing rules already ignore both files. Undo the
+`.gitignore` edit, because `.env*` would also match the committed `.env.example`:
+
+```bash
+git checkout -- .gitignore
+```
+
+The project name decides the domain only when it is free. On the first run both names were taken:
+the backend project `grounded` got `grounded-snowy.vercel.app`, and the frontend project was created
+as `grounded-11zh`. Use the domain that Settings, Domains shows, wherever this runbook says
+`BACKEND_URL` or `FRONTEND_URL`.
 
 ### 3.2 Production variables
 
@@ -186,6 +202,23 @@ vercel env add GEMINI_API_KEY production --sensitive
 If `DATABASE_URL` was already set in step 8 of the Neon runbook, `vercel env ls production` shows it
 and you skip the first of these two.
 
+On Windows, `vercel` is a `.cmd` shim, so `cmd.exe` parses its arguments: an `&` in a value (Neon's
+URL ends in `&channel_binding=require`) splits the command, which is one more reason to type every
+secret at the prompt. PowerShell has no `printf`: put the generated value in the clipboard
+(`$env:PROXY_SHARED_SECRET | Set-Clipboard`), run the command without the pipe and paste at the
+prompt; the same for `IP_HASH_SECRET`:
+
+```powershell
+vercel env add PROXY_SHARED_SECRET production --sensitive
+```
+
+The two secrets of step 2 in PowerShell (the `openssl rand -hex 32` equivalent), each to the session
+and the clipboard; paste it into the password manager before generating the next:
+
+```powershell
+$b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $env:PROXY_SHARED_SECRET = ([BitConverter]::ToString($b) -replace '-','').ToLower(); $env:PROXY_SHARED_SECRET | Set-Clipboard
+```
+
 ### 3.3 Preview variables (placeholders, not secrets)
 
 A preview must still start (Tech §18), and `APP_ENV=prod` refuses to start without the four required
@@ -228,12 +261,17 @@ branch (`environment-variables` [2026-09-17]).
 
 Environment changes apply only to **new** deployments (`environment-variables` [2026-09-17]). Make
 one from the dashboard: Deployments, Create Deployment, branch `main` (`git` [2026-09-18], "Creating
-a deployment from a Git reference"). Watch the build log: that log is the evidence for several lines
+a deployment from a Git reference"). Where the dashboard shows no Create Deployment (2026-10-12),
+open the latest production deployment and use the menu next to Visit, Redeploy: it builds the same
+commit with the current variables. Untick "Use existing Build Cache" for a complete build log. Watch the build log: that log is the evidence for several lines
 of the checklist (V3, V4, V14). Then check the project settings once:
 
 - Settings, Functions: the region reads `cle1` (it comes from `vercel.json`, which overrides the
   dashboard value: `fluid-compute` [2026-08-24], "Order of settings precedence") and Fluid compute
-  is on (it is the default for projects created after 2025-04-23).
+  is on (it is the default for projects created after 2025-04-23). The project settings may still
+  show the default `iad1` (`vercel project inspect` did on 2026-10-12): what counts is the
+  deployment, whose function is listed as `λ fastapi (… MB) [cle1]` (`vercel inspect <url>`), and
+  the `x-vercel-id` header of a response, `…::cle1::…`.
 - Settings, Deployment Protection: Standard Protection with Vercel Authentication. The production
   domain stays public, deployment URLs and previews require a Vercel login.
 - Settings, Environments, Production: Branch Tracking is `main`.
@@ -367,8 +405,22 @@ logged in to Vercel (a preview is protected):
 - Backend preview `/healthz` answers `{"status":"ok"}` and `/readyz` answers `503` with
   `"database":"error"` and `"active_index_version":null`. It starts (V9) and it cannot reach the
   production database. Had it the production `DATABASE_URL`, `/readyz` would be `200` with an index.
+  Since R.22 `/readyz` needs `X-Proxy-Secret`, which an address bar cannot send: open the preview's
+  `/docs`, then run this in the browser console (the value is the preview placeholder of 3.3, not a
+  secret). Not from the `/healthz` page: Firefox shows JSON in a viewer whose content security policy
+  blocks `fetch`.
+
+  ```js
+  fetch('/readyz',{headers:{'X-Proxy-Secret':'preview-placeholder-not-a-secret'}}).then(r=>r.text().then(t=>console.log(r.status,t)))
+  ```
+
 - Frontend preview: ask a question on the page. Expect the error state (HTTP `500`,
   `proxy_misconfigured`).
+
+A preview can end in Error before its build starts, with the reason "Git information retrieval
+failed for this deployment" (`vercel inspect <url>`). On 2026-10-12 that was a Vercel incident
+(vercel-status.com, "Increased build and deployment failures"); another empty commit on the branch
+built both previews.
 
 Delete the branch afterwards:
 
@@ -525,6 +577,7 @@ the checklist (V1–V17)._
 | `/readyz` 401 | The request had no `X-Proxy-Secret`, or a value that differs from the backend's `PROXY_SHARED_SECRET` (D54c) | Step 4: export the production value and send the header; for `housekeeping.yml`, the repository secret `PROXY_SHARED_SECRET` (Neon runbook step 10) |
 | Frontend `500 proxy_misconfigured` | `BACKEND_URL` or `PROXY_SHARED_SECRET` is unset in the Production environment of the frontend, or the deployment predates them | Step 5.1, then a new deployment |
 | Frontend `502 upstream_unavailable` | `BACKEND_URL` points at a protected deployment URL (an HTML login page), or at nothing | Use the production domain |
+| A deployment stays in Initializing for minutes | Usually on Vercel's side: check vercel-status.com. The previous deployment keeps serving with its own variables | Wait; if it does not start, cancel it and redeploy later |
 | Frontend `504 upstream_timeout` | The backend did not answer within 35 s | Step 9 tells whether it is the cold start |
 | The cold ask of step 9 is `504 deadline_exceeded` | Our own backend 504: the 25 s deadline or the 2 s retrieval timeout fired (D53, D54a) | Look up the printed `request_id` in `request_logs` (Neon runbook step 4 shows how to connect as the owner): `latency_retrieval_ms` near 2000 and `latency_llm_ms` NULL is the retrieval timeout (raise `RETRIEVAL_TIMEOUT_S`, V17); otherwise the stage timings show where the 25 s went |
 | Every question is `401 unauthorized` through the frontend | The two projects hold different `PROXY_SHARED_SECRET` values | Set the same value in both, redeploy both |
