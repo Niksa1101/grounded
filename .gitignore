@@ -19,6 +19,9 @@ htmlcov/
 dist/
 build/
 
+# Vercel CLI link directories (`vercel link` writes one into backend/ and frontend/)
+.vercel/
+
 # Node / Next.js (frontend/.gitignore covers the rest)
 node_modules/
 .next/
