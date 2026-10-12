@@ -4,7 +4,8 @@
 #
 # The file-level as_of and source below describe the Gemini rows (the Google pages read on 2026-10-06).
 # A row from another page or another day carries its own price_source and price_as_of (Tech §14 rule 1):
-# the Groq row (read 2026-10-08, console.groq.com) and the embedding row (a 2025 announcement) do.
+# the Groq row (read 2026-10-08, console.groq.com), the embedding row (a 2025 announcement) and the Cohere
+# rerank rows (read 2026-10-12, cohere.com/pricing; USD per 1,000 searches, not per 1M tokens) do.
 as_of = "2026-10-06"  # the day the pages were read; the pricing page itself says "Last updated 2026-10-01"
 source = "https://ai.google.dev/gemini-api/docs/pricing, https://ai.google.dev/gemini-api/docs/deprecations"
 
@@ -32,3 +33,20 @@ price_as_of = "2026-10-08"
 input_per_mtok = 0.15
 price_source = "https://developers.googleblog.com/gemini-embedding-available-gemini-api/"
 price_as_of = "2025-07-14"  # date of the announcement; not confirmed on the pricing page on 2026-10-06
+
+# Cohere Rerank (Phase 6, PRD D55): USD per 1,000 searches. One search is one query with up to 100 documents; a
+# document over 500 tokens (query included) is split and each piece counts toward the 100 (cohere.com/pricing, FAQ),
+# so a call with the 40 candidates of K_FUSED is one search. Read on cohere.com/pricing, tab "Advanced retrieval
+# models", on 2026-10-12: "Rerank 4 Pro $2.50 / 1K searches", "Rerank 4 Fast $2.00 / 1K searches". Trial-key calls
+# are free; these are the pay-as-you-go list prices ("what this traffic would cost"). The page lists no pay-as-you-go
+# price for rerank-v3.5 or the 3.0 models (only Model Vault instance rates), so they have no row here. The pinned
+# model is rerank-v4.0-pro; rerank-v4.0-fast is the documented fallback, priced in advance so a switch is one setting.
+[rerank."rerank-v4.0-pro"]
+per_1k_searches = 2.50
+price_source = "https://cohere.com/pricing"
+price_as_of = "2026-10-12"
+
+[rerank."rerank-v4.0-fast"]
+per_1k_searches = 2.00
+price_source = "https://cohere.com/pricing"
+price_as_of = "2026-10-12"

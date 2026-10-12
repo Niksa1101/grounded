@@ -132,6 +132,18 @@ def test_the_committed_pricing_file_prices_the_pinned_groq_model() -> None:
     assert cost == Decimal("1.35000000")
 
 
+def test_the_committed_pricing_file_prices_the_pinned_rerank_models() -> None:
+    # PRD D55 pins rerank-v4.0-pro and keeps rerank-v4.0-fast as the fallback; cohere.com/pricing,
+    # read 2026-10-12: $2.50 and $2.00 per 1K searches. 1,000 calls cost exactly the list price.
+    loaded = load_pricing()
+    pro = loaded.shadow_cost(rerank_model="rerank-v4.0-pro", rerank_calls=1_000)
+    fast = loaded.shadow_cost(rerank_model="rerank-v4.0-fast", rerank_calls=1_000)
+    assert (pro, fast) == (Decimal("2.50000000"), Decimal("2.00000000"))
+    # A model without a verified price is refused, never priced at 0 (Tech §14).
+    with pytest.raises(PricingError, match=r"rerank model 'rerank-v3\.5'"):
+        loaded.shadow_cost(rerank_model="rerank-v3.5", rerank_calls=1)
+
+
 def test_a_missing_or_invalid_file_is_a_pricing_error(tmp_path: Path) -> None:
     with pytest.raises(PricingError, match="cannot load"):
         load_pricing(tmp_path / "missing.toml")
