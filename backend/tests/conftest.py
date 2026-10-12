@@ -7,6 +7,12 @@ Two guarantees for every test (AGENTS.md §8):
 - **Never a real database.** Integration tests get a fresh local ``*_test`` database, migrated
   once per session and dropped at the end. The fixture refuses any non-local host or non-``_test``
   name, so a misconfigured TEST_DATABASE_URL can't touch Neon.
+
+And one for determinism: **no inherited configuration.** Every environment variable named after a
+``Settings`` field is removed before each test (``TEST_DATABASE_URL`` excepted: it names the
+throwaway database), so a developer's shell or the CI job cannot change what a test sees; a test
+that needs one sets it itself. ``FORCE_COLOR`` is removed and ``NO_COLOR`` set, so CLI output is
+plain text everywhere.
 """
 
 from __future__ import annotations
@@ -23,6 +29,7 @@ from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
 
 from grounded.infra.migrations import migrate
+from grounded.settings import Settings
 from tests.support import NetworkBlockedError, make_settings
 
 if sys.platform == "win32":
@@ -52,6 +59,19 @@ def _check_conninfo(conninfo: str, kwargs: dict[str, Any]) -> None:
         for host in str(value or "").split(","):
             if host.strip():
                 _check_host(host.strip())
+
+
+# Kept: the session fixture below needs it to find the throwaway database.
+_KEPT_SETTINGS_VARIABLES = frozenset({"TEST_DATABASE_URL"})
+_SETTINGS_VARIABLES = frozenset(name.upper() for name in Settings.model_fields)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in sorted(_SETTINGS_VARIABLES - _KEPT_SETTINGS_VARIABLES):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    monkeypatch.setenv("NO_COLOR", "1")
 
 
 @pytest.fixture(autouse=True)
