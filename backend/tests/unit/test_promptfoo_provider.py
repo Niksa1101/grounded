@@ -187,6 +187,30 @@ def test_success_metadata_carries_what_the_assertions_and_the_gate_read() -> Non
     assert metadata["tokens"] == {"input": 1_000, "output": 200}
 
 
+def test_rerank_state_is_in_the_metadata_of_a_success_and_of_a_failure() -> None:
+    # 6.04 refuses a baseline built from a run in which a rerank degraded: it needs to see which.
+    plain = trace_after(hybrid=True)
+    used = trace_after(hybrid=True)
+    used.rerank_used = True
+    degraded = trace_after(hybrid=True)
+    degraded.rerank_error = "cap_reached"
+
+    def metadata_of(trace: RequestTrace) -> dict[str, Any]:
+        return success_payload(response_for(trace), trace, AskMode.HYBRID, cold_start=False)[
+            "metadata"
+        ]
+
+    assert [
+        (m["rerank_used"], m["rerank_error"]) for m in map(metadata_of, (plain, used, degraded))
+    ] == [
+        (False, None),
+        (True, None),
+        (False, "cap_reached"),
+    ]
+    failed = failure(ProviderUnavailable("down"), degraded)["metadata"]
+    assert (failed["rerank_used"], failed["rerank_error"]) == (False, "cap_reached")
+
+
 def test_context_has_the_chunk_text_and_ids_the_judge_and_precision_need() -> None:
     trace = trace_after(hybrid=True)
 

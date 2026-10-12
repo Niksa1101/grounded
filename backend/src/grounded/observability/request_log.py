@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import psycopg
@@ -44,6 +44,9 @@ from grounded.observability.cost import Pricing
 from grounded.retrieval.types import RetrievedChunk
 from grounded.schemas.api import ErrorCode
 from grounded.schemas.llm import AnswerStatus
+
+if TYPE_CHECKING:
+    from grounded.retrieval.rerank import RerankErrorCode
 
 logger = logging.getLogger(__name__)
 
@@ -109,13 +112,22 @@ class RequestTrace:
     # Generation attempts the eval LLM cache served (4.03). No column: only eval runs have any, and
     # they read it from the trace to leave a cached latency out of the latency statistics.
     llm_cache_hits: int = 0
-    # What retrieval returned (section ids, rank order) and what the model could cite (label ->
-    # chunk). The eval harness scores citations and judges claims against this text (4.05, Tech
-    # §15.3). No column, not in the response, empty in ``no_rag``.
+    # What retrieval returned (section ids, RRF order, before any rerank) and what the model could
+    # cite (label -> chunk, after it). The eval harness scores citations and judges claims against
+    # this text (4.05, Tech §15.3). No column, not in the response, empty in ``no_rag``.
     retrieved_section_ids: list[str] = field(default_factory=lambda: list[str]())
     context_chunks: dict[str, RetrievedChunk] = field(
         default_factory=lambda: dict[str, RetrievedChunk]()
     )
+    # Rerank (6.03, Tech §8). ``rerank_used``: the context was built from the reranked order.
+    # ``rerank_error``: why the RRF order stood although a reranker is configured (None when
+    # rerank is off, had nothing to rank, or worked). ``rerank_calls``: calls attempted, which the
+    # shadow cost charges (a failed one included, like a failed generation attempt). The eval
+    # harness reads all three from here, so it can refuse a result built from degraded cases.
+    rerank_used: bool = False
+    rerank_error: RerankErrorCode | None = None
+    rerank_calls: int = 0
+    rerank_model: str | None = None
     citation_count: int | None = None
     invalid_citation_count: int | None = None
     dropped_claim_count: int | None = None
@@ -138,6 +150,8 @@ class RequestTrace:
             output_tokens=self.output_tokens or 0,
             embedding_model=self.embedding_model,
             embedding_tokens=self.embedding_tokens,
+            rerank_model=self.rerank_model if self.rerank_calls else None,
+            rerank_calls=self.rerank_calls,
         )
 
     def total_ms(self) -> int:
@@ -228,6 +242,8 @@ class RequestLogger:
                 "invalid_citation_count": trace.invalid_citation_count,
                 "dropped_claim_count": trace.dropped_claim_count,
                 "removed_url_count": trace.removed_url_count,
+                "rerank_used": trace.rerank_used,
+                "rerank_error": trace.rerank_error,
                 "question_hash": trace.digest(),
             },
         )
@@ -255,8 +271,8 @@ class RequestLogger:
             "model": trace.model,
             "fallback_used": False,  # Phase 7
             "validation_retries": trace.validation_retries,
-            "rerank_used": False,  # Phase 6
-            "rerank_error": None,
+            "rerank_used": trace.rerank_used,
+            "rerank_error": trace.rerank_error,
             "prompt_version": trace.prompt_version,
             "index_version_id": trace.index_version_id,
             "retrieval_config_hash": trace.retrieval_config_hash,

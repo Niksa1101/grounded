@@ -25,7 +25,7 @@ from grounded.generation.providers.eval_wrappers import EvalLLM
 from grounded.generation.providers.fake import StubJudgeProvider, StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
 from grounded.generation.providers.groq import GroqProvider
-from grounded.infra.budget import DailyBudget
+from grounded.infra.budget import DailyBudget, RerankCap
 from grounded.infra.db import create_pool
 from grounded.infra.kvcache import KVCache
 from grounded.infra.ratelimit import RateLimiter
@@ -212,8 +212,11 @@ async def open_runtime(
     pricing: Pricing | None = None,
     clock: Clock = time.perf_counter,
     wall_clock: Callable[[], datetime] | None = None,
+    reranker: Reranker | None = None,
 ) -> AsyncGenerator[Runtime]:
-    """``wall_clock`` replaces the database's ``now()`` as the rate limiter's clock (tests only)."""
+    """``wall_clock`` replaces the database's ``now()`` as the rate limiter's clock, and
+    ``reranker`` the one ``build_reranker`` makes from the settings (tests only; it must go with a
+    ``RERANK_PROVIDER`` other than ``none``, the pipeline checks)."""
     async with AsyncExitStack() as stack:
         pool = create_pool(settings)
         # wait=False: start serving even if the database is unreachable; /readyz reports it.
@@ -237,6 +240,17 @@ async def open_runtime(
             if settings.daily_llm_budget is not None and settings.app_env != "eval"
             else None
         )
+        # Built from the settings unless a test hands one in: the factory refuses a missing key or
+        # model before the first request. ``None`` for RERANK_PROVIDER=none, the shipped default.
+        if reranker is None:
+            reranker = build_reranker(settings, stack)
+        # No cap in eval mode, like no budget (Tech §15.6, §8): the manual eval runs have the
+        # Author's own call budget for the phase. Everywhere else a reranker is capped per UTC day.
+        rerank_cap = (
+            RerankCap(pool, limit=settings.rerank_daily_cap)
+            if reranker is not None and settings.app_env != "eval"
+            else None
+        )
         pipeline = AskPipeline(
             settings=settings,
             pool=pool,
@@ -248,6 +262,8 @@ async def open_runtime(
             pricing=pricing,
             clock=clock,
             budget=budget,
+            reranker=reranker,
+            rerank_cap=rerank_cap,
         )
         # Eval runs are told apart from real traffic in the table (DB.md §4, CI database only).
         request_logger = RequestLogger(

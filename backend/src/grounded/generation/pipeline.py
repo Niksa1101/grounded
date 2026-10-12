@@ -31,6 +31,15 @@ today is marked below.
   call, a validation retry included. Its token totals are added after each call.
   ``no_rag`` and ``APP_ENV=eval`` never read or write the cache. Only a response that was built
   successfully is stored; every failure raises before that point, so errors are never cached.
+- Rerank (6.03, Tech §8) is optional and sits between the search and the context. With a
+  ``Reranker`` configured the K_FUSED candidates are reranked to K_CONTEXT inside the ``rerank``
+  stage, after one atomic reserve on ``daily_usage.rerank_calls`` (``RerankCap``; none in eval
+  mode). Every way it can fail to produce a ranking (the cap, a database error on the reserve,
+  a typed provider error, the stage timeout) **degrades**: the context is built from the RRF order
+  exactly as without a reranker, ``trace.rerank_error`` names the reason and the request goes on.
+  The ``rerank`` stage never aborts a request: only a cancellation (the request deadline) passes
+  through it. A degraded answer is not stored in the answer cache, because the key of a reranked
+  configuration must only ever hold reranked answers.
 """
 
 from __future__ import annotations
@@ -38,30 +47,34 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 from uuid import UUID
 
+import psycopg
+from psycopg import AsyncConnection
 from psycopg_pool import AsyncConnectionPool
 from pydantic import ValidationError
 
 from grounded.generation.citations import MappedAnswer, map_citations
 from grounded.generation.confidence import ConfidenceConfig, score_claims
-from grounded.generation.context import build_context, escape_content
+from grounded.generation.context import BuiltContext, build_context, escape_content
 from grounded.generation.params import GenerationParams
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
 from grounded.infra.answer_cache import AnswerCache, CacheKey, from_stored
-from grounded.infra.budget import DailyBudget
-from grounded.infra.provider_errors import ProviderBadOutput
+from grounded.infra.budget import DailyBudget, RerankCap, RerankCapReachedError
+from grounded.infra.provider_errors import ProviderBadOutput, ProviderError
 from grounded.infra.timing import Clock, StageTimer
-from grounded.ingest.embed import Embedder
+from grounded.ingest.embed import Embedder, Vector
 from grounded.observability.cost import Pricing
 from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.hybrid import hybrid_search
 from grounded.retrieval.index import ActiveIndexCache, chunk_titles
+from grounded.retrieval.rerank import Reranker, RerankErrorCode, rerank_error_code
 from grounded.retrieval.types import IndexVersion, RetrievedChunk
 from grounded.schemas.api import AskResponse, Claim, Meta
 from grounded.schemas.llm import LLMAnswer
@@ -90,6 +103,15 @@ class Generation:
 
     result: GenerationResult[LLMAnswer]  # the successful attempt
     mapped: MappedAnswer
+
+
+@dataclass(frozen=True, slots=True)
+class _Degraded:
+    """Why the RRF order stands: the ``rerank_error`` code, and the exception type behind it for
+    the log line (never a message: a provider's text has no business in our logs)."""
+
+    code: RerankErrorCode
+    cause: str
 
 
 class IndexMismatchError(RuntimeError):
@@ -121,6 +143,8 @@ class AskPipeline:
         pricing: Pricing,
         clock: Clock = time.perf_counter,
         budget: DailyBudget | None = None,
+        reranker: Reranker | None = None,
+        rerank_cap: RerankCap | None = None,
     ) -> None:
         self._settings = settings
         self._pool = pool
@@ -137,6 +161,19 @@ class AskPipeline:
         self._clock = clock
         # None when no cap is set (dev, test) and in eval mode (Tech §12, §15.6).
         self._budget = budget
+        # The config hash says whether retrieval is reranked, and it keys the answer cache, so the
+        # pipeline must do exactly what the hash says: no reranker with RERANK_PROVIDER=cohere (or
+        # one with ``none``) would file plain answers under the reranked key, or the reverse.
+        if (reranker is not None) != (self._cfg.rerank_provider != "none"):
+            raise ValueError(
+                "a reranker must be passed exactly when RERANK_PROVIDER is not 'none' "
+                f"(RERANK_PROVIDER={self._cfg.rerank_provider}, reranker "
+                f"{'passed' if reranker is not None else 'missing'})"
+            )
+        self._reranker = reranker
+        # None when no cap applies (eval mode: the Author's manual runs have their own call budget,
+        # Tech §15.6). With a reranker and no cap the stage still runs; it is the caller's choice.
+        self._rerank_cap = rerank_cap
         # Off in eval mode, like the request deadline: eval runs measure, they do not time out.
         self._retrieval_timeout_s = (
             None if settings.app_env == "eval" else settings.retrieval_timeout_s
@@ -152,6 +189,11 @@ class AskPipeline:
         # is the model whose price the shadow cost uses.
         pricing.require_generator(provider.name, provider.model)
         pricing.require_embedding(settings.embedding_model)
+        if reranker is not None:
+            rerank_model = (self._cfg.rerank_model or "").strip()
+            if not rerank_model:
+                raise ValueError("RERANK_MODEL must be set when a reranker is configured")
+            pricing.require_rerank(rerank_model)
 
     async def ask(
         self,
@@ -217,25 +259,9 @@ class AskPipeline:
             with timer.stage("embed"):
                 [vector] = await self._embedder.embed([question], "RETRIEVAL_QUERY")
 
-            with timer.stage("retrieval"):
-                # Only this scope's own expiry is the retrieval timeout; a TimeoutError from the
-                # work inside, or the request deadline around it, passes through unchanged (the
-                # same rule as api/deadline.py). ``None`` (eval mode) never expires.
-                limit = self._retrieval_timeout_s
-                scope = asyncio.timeout(limit)
-                try:
-                    async with scope, self._pool.connection() as conn:
-                        chunks = await hybrid_search(
-                            conn, question, vector, index_version_id=index.id, cfg=self._cfg
-                        )
-                        context = build_context(chunks, k_context=self._cfg.k_context)
-                        titles = await chunk_titles(
-                            conn, [c.chunk_id for c in context.labels.values()]
-                        )
-                except TimeoutError as exc:
-                    if limit is not None and scope.expired():
-                        raise RetrievalTimeoutError(limit) from exc
-                    raise
+            chunks, context, titles = await self._retrieve(
+                question, vector, index.id, request_id, trace
+            )
             labels = context.labels
             trace.retrieved_section_ids = [chunk.section_id for chunk in chunks]
             trace.context_chunks = dict(context.labels)
@@ -291,7 +317,7 @@ class AskPipeline:
                 model=result.model,
                 fallback_used=False,
                 cache_hit=False,
-                rerank_used=False,
+                rerank_used=trace.rerank_used,
                 prompt_version=prompt.version,
                 index_version=index_version,
                 retrieval_config_hash=config_hash,
@@ -300,9 +326,154 @@ class AskPipeline:
                 shadow_cost_usd=float(shadow_cost),
             ),
         )
-        if self._cache is not None and cache_key is not None:
+        # An answer built from the RRF order because the rerank degraded is not what this key (it
+        # holds the rerank config) stands for, and a hit would serve it for up to 30 days after
+        # the reranker is back. It is simply not stored.
+        if self._cache is not None and cache_key is not None and trace.rerank_error is None:
             await self._cache.put(cache_key, response)
         return response
+
+    async def _retrieve(
+        self,
+        question: str,
+        vector: Vector,
+        index_version_id: int,
+        request_id: UUID,
+        trace: RequestTrace,
+    ) -> tuple[list[RetrievedChunk], BuiltContext, dict[int, str]]:
+        """The candidates (RRF order), the context built from them and the titles of its chunks.
+
+        Without a reranker this is the single scope of before 6.03: one pool connection and one
+        ``RETRIEVAL_TIMEOUT_S`` cover the search, the context build and the title lookup, so a
+        deployment with ``RERANK_PROVIDER=none`` behaves exactly as it did.
+
+        With one, the connection goes back to the pool before the rerank call, because a pooled
+        connection must not sit idle for up to ``RERANK_TIMEOUT_S`` of someone else's latency.
+        The titles are needed only for the chunks that reach the context, and those are known only
+        after the rerank, so a second short scope (same timeout) reads them.
+        """
+        cfg = self._cfg
+        timer = trace.timer
+
+        async def search(conn: AsyncConnection[Any]) -> list[RetrievedChunk]:
+            return await hybrid_search(
+                conn, question, vector, index_version_id=index_version_id, cfg=cfg
+            )
+
+        if self._reranker is None:
+
+            async def search_and_build(
+                conn: AsyncConnection[Any],
+            ) -> tuple[list[RetrievedChunk], BuiltContext, dict[int, str]]:
+                found = await search(conn)
+                built = build_context(found, k_context=cfg.k_context)
+                titles = await chunk_titles(conn, [c.chunk_id for c in built.labels.values()])
+                return found, built, titles
+
+            with timer.stage("retrieval"):
+                return await self._in_retrieval_scope(search_and_build)
+
+        with timer.stage("retrieval"):
+            candidates = await self._in_retrieval_scope(search)
+        reranked = await self._rerank(self._reranker, question, candidates, request_id, trace)
+        with timer.stage("retrieval"):
+            context = build_context(
+                candidates if reranked is None else reranked, k_context=cfg.k_context
+            )
+            chunk_ids = [c.chunk_id for c in context.labels.values()]
+            titles = await self._in_retrieval_scope(lambda conn: chunk_titles(conn, chunk_ids))
+        return candidates, context, titles
+
+    async def _in_retrieval_scope[T](
+        self, work: Callable[[AsyncConnection[Any]], Awaitable[T]]
+    ) -> T:
+        """Run ``work`` on a pooled connection inside the retrieval stage timeout.
+
+        Only this scope's own expiry is the retrieval timeout; a ``TimeoutError`` from the work
+        inside, or the request deadline around it, passes through unchanged (the same rule as
+        api/deadline.py). ``None`` (eval mode) never expires.
+        """
+        limit = self._retrieval_timeout_s
+        scope = asyncio.timeout(limit)
+        try:
+            async with scope, self._pool.connection() as conn:
+                return await work(conn)
+        except TimeoutError as exc:
+            if limit is not None and scope.expired():
+                raise RetrievalTimeoutError(limit) from exc
+            raise
+
+    async def _rerank(
+        self,
+        reranker: Reranker,
+        question: str,
+        candidates: Sequence[RetrievedChunk],
+        request_id: UUID,
+        trace: RequestTrace,
+    ) -> list[RetrievedChunk] | None:
+        """The candidates reranked to ``K_CONTEXT``, or ``None`` when the RRF order stands.
+
+        Never raises for a reason of the rerank itself (Tech §8): the cap, a failed reserve, a
+        typed provider error and the stage timeout each become ``trace.rerank_error`` and a
+        WARNING with the code and the exception type (no question, no provider text). Only
+        ``CancelledError`` (the request deadline, a client that left) and a bug propagate; so does
+        the ``ValueError`` of a bad ``top_n``, which ``K_CONTEXT`` never is.
+
+        The ``rerank`` stage times the call alone: a request that reached the cap or failed the
+        reserve has ``latency_rerank_ms`` NULL, so the column describes what the reranker
+        costs in time. The unit is reserved before the call and counted on the trace right
+        before it (``rerank_calls``): a call that then fails or is cut off was attempted, and
+        the shadow cost and the daily cap both charge it.
+        """
+        if not candidates:
+            return None  # nothing to rank: no unit, no call, and not a degradation
+        degraded = await self._reserve_rerank_call()
+        if degraded is None:
+            trace.rerank_model = self._cfg.rerank_model
+            trace.rerank_calls += 1
+            try:
+                with trace.timer.stage("rerank"):
+                    # The adapter bounds its own call; this scope makes the bound ours, whatever
+                    # ``Reranker`` is injected. A TimeoutError here cannot be the request
+                    # deadline: that one arrives as a cancellation and is not caught below.
+                    async with asyncio.timeout(self._settings.rerank_timeout_s):
+                        ranked = await reranker.rerank(
+                            question, candidates, top_n=self._cfg.k_context
+                        )
+            except ProviderError as exc:
+                degraded = _Degraded(rerank_error_code(exc), type(exc).__name__)
+            except TimeoutError as exc:
+                degraded = _Degraded("timeout", type(exc).__name__)
+            else:
+                trace.rerank_used = True
+                return ranked
+        trace.rerank_error = degraded.code
+        logger.warning(
+            "rerank degraded, using the RRF order",
+            extra={
+                "request_id": str(request_id),
+                "rerank_error": degraded.code,
+                "error": degraded.cause,
+            },
+        )
+        return None
+
+    async def _reserve_rerank_call(self) -> _Degraded | None:
+        """Take one unit of today's cap, or say why no call may be made (``None``: go ahead).
+
+        Fail-closed: when the unit cannot be counted (the database errors), no call is made. The
+        quota behind the cap is the scarce thing, a rerank is an optimization, and ``unavailable``
+        is the nearest code of Tech §8; the exception type in the log tells it from a Cohere outage.
+        """
+        if self._rerank_cap is None:
+            return None
+        try:
+            await self._rerank_cap.reserve()
+        except RerankCapReachedError as exc:
+            return _Degraded("cap_reached", type(exc).__name__)
+        except psycopg.Error as exc:
+            return _Degraded("unavailable", type(exc).__name__)
+        return None
 
     async def _cached_response(
         self, key: CacheKey, request_id: UUID, trace: RequestTrace, index_version: str

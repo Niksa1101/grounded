@@ -20,6 +20,7 @@ from grounded.infra.timing import Clock
 from grounded.ingest.embed import Embedder, FakeEmbedder
 from grounded.main import create_app
 from grounded.observability.cost import EmbeddingPrice, Pricing, load_pricing
+from grounded.retrieval.rerank import Reranker
 from grounded.settings import Settings
 
 EMBEDDING_DIM = 768
@@ -86,12 +87,15 @@ async def app_client(
     direct_api: bool = True,
     wall_clock: Callable[[], datetime] | None = None,
     no_peer: bool = False,
+    reranker: Reranker | None = None,
 ) -> AsyncGenerator[httpx.AsyncClient]:
     """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client.
 
-    The embedder and provider default to fakes, so no test builds a real one. A real server turns an
-    unhandled error into a 500 response; pass ``raise_app_exceptions=False`` to see that here
-    instead of having the exception re-raised in the test. ``client`` is the socket peer the app
+    The embedder and provider default to fakes, so no test builds a real one; the reranker defaults
+    to none, as ``RERANK_PROVIDER`` does (a test that sets it to ``cohere`` passes a
+    ``FakeReranker``). A real server turns an unhandled error into a 500 response; pass
+    ``raise_app_exceptions=False`` to see that here instead of having the exception re-raised in
+    the test. ``client`` is the socket peer the app
     sees (``request.client``); ``no_peer`` gives the app none at all (``request.client`` is
     ``None``). ``direct_api`` lets a test call ``/v1/*`` without the proxy headers
     (``ALLOW_DIRECT_API``, 5.03); the tests of the proxy check itself pass ``False`` to use the
@@ -105,6 +109,7 @@ async def app_client(
         provider=provider or StubLLMProvider(),
         clock=clock,
         wall_clock=wall_clock,
+        reranker=reranker,
     )
     asgi: Any = app
     if no_peer:
