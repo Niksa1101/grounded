@@ -74,6 +74,27 @@ Keep the three parts on **different clients or days**, because part 1 and 2 use 
 your IP (5 a minute, 20 a UTC day; D31) and everything you asked earlier the same UTC day (the smoke
 tests, the cold-start asks) counts too. Do not run this close to 00:00 UTC.
 
+On Windows the loops below have PowerShell forms (first run, 2026-10-12). PowerShell 5.1 mangles
+the quotes of a JSON argument to `curl.exe`, so the body goes into a file once:
+
+```powershell
+'{"question":"How do I declare a query parameter?"}' | Set-Content -Encoding ascii -NoNewline $env:TEMP\q.json
+```
+
+Part 1, after waiting for the start of a UTC minute:
+
+```powershell
+while ((Get-Date).ToUniversalTime().Second -ne 1) { Start-Sleep -Milliseconds 200 }; 1..6 | ForEach-Object { $h = curl.exe -s -D - -o NUL -X POST "$env:FRONTEND_URL/api/ask" -H "content-type: application/json" --data-binary "@$env:TEMP\q.json"; "request $_ : " + ($h[0] -split ' ')[1] + "  " + (($h | Select-String -Pattern '^retry-after:') -join '') }
+```
+
+Part 2, one request every 13 seconds until the first 429:
+
+```powershell
+while ((Get-Date).ToUniversalTime().Second -ne 1) { Start-Sleep -Milliseconds 200 }; $n=0; do { $n++; $c = curl.exe -s -o NUL -w "%{http_code}" -X POST "$env:FRONTEND_URL/api/ask" -H "content-type: application/json" --data-binary "@$env:TEMP\q.json"; "request $n : $c"; if ($c -eq '429') { break }; Start-Sleep 13 } while ($n -lt 25)
+```
+
+Set `$env:FRONTEND_URL` to the frontend's production origin first.
+
 ### 1. The per-minute limit: 5 a minute, the 6th is a 429
 
 Windows are fixed UTC minutes (Tech §12), so a burst that straddles a minute boundary is not limited.
@@ -179,7 +200,10 @@ step is yours: it touches the production environment variables.
    ```
 
 4. Environment changes apply only to a new deployment (Vercel runbook 3.4): Dashboard, Deployments, the
-   latest production deployment, Redeploy; wait until it is Ready. **While the limit is lowered, a
+   latest production deployment, Redeploy; wait until it is Ready. Merge nothing to `main` while the
+   limit is lowered: every merge deploys production with the current variables. If the redeploy hangs
+   in Initializing, the old deployment keeps serving the old limit (Vercel runbook, "When something
+   fails"). **While the limit is lowered, a
    real visitor's uncached question is refused too** (cached answers are still served), so do this at
    a quiet time and finish step 8 promptly.
 5. Ask a question that was never asked (any new text, 3 to 500 characters) from the phone, in the UI

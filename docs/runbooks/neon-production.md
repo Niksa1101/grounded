@@ -42,6 +42,12 @@ create.
 - A Neon project `grounded` (Postgres 17, AWS US East 2), default branch `production`, with a
   database and the default owner role. Neon's console shows two connection strings per role: the
   **direct** one (`ep-…`) and the **pooled** one (`ep-…-pooler`). Keep both in your secret manager.
+  **Check the region and the version first**, on the project's overview (the Project panel shows
+  Region, the Postgres panel Version): AWS US East 2 (Ohio) and 17. The Vercel functions run in
+  `cle1`, the same AWS region (D53), and CI tests on 17. The console offers no way to move a project
+  to another region (as seen on 2026-10-12; not found in the docs either), so a project created
+  elsewhere is replaced while it is still empty. That happened on the first run: the first project
+  had been created in US East 1 with Postgres 18.
 - `psql` **15 or newer** (step 6 uses `\getenv`, which psql 15 added; check with the command
   below), `gh` (logged in to this repository), `vercel` (the CLI, step 8; the
   dashboard works too) and `uv` (run `uv sync` once in `backend/`).
@@ -138,13 +144,10 @@ Expect one row: status `ready`, not active, the pinned ref and sha, `docs` and `
 (about 1,045 chunks for the current tag), and token stats. Its `config` column (first 8 characters
 of the config hash) equals the one `grounded index list` shows on a local database built from the
 same commit, because the hash depends only on the corpus sha, the embedding model and dimension and
-the chunking config. Then check the golden set against it (read-only):
+the chunking config. Stop here if anything differs, and see "When something fails" below.
 
-```bash
-uv run grounded golden validate ../eval/golden/golden_set.v1.jsonl --against-index
-```
-
-Stop here if anything differs, and see "When something fails" below.
+The golden-set check against the index comes after step 5: `--against-index` reads the **active**
+version, so before activation it stops with `no active index version with chunks`.
 
 ## 5. Run the workflow with activation
 
@@ -163,6 +166,13 @@ The summary now shows `Active: yes` and a `*` in the active column. Check it fro
 
 ```bash
 uv run grounded index list
+```
+
+Then resolve every golden-set label against the active index (read-only). Expect the last line
+`All labels resolve in the corpus and the index.`:
+
+```bash
+uv run grounded golden validate ../eval/golden/golden_set.v1.jsonl --against-index
 ```
 
 ## 6. Create the `app` role and its grants
@@ -200,7 +210,11 @@ GRANT SELECT, INSERT, UPDATE ON rate_limit_counters TO app;
 ```
 
 Still in `psql`, copy the shell variable into a `psql` variable, set the password from it, and drop
-the `psql` variable:
+the `psql` variable. Paste these three lines **one at a time**: some terminals (Windows Terminal with
+`psql` in Docker, 2026-10-12) send a multi-line paste as one line, and a meta-command such as
+`\getenv` takes the rest of its line as arguments, so `ALTER ROLE` would never run (`psql` then
+prints `extra argument … ignored`). If `ALTER ROLE` fails with a syntax error at `:`, the variable
+was not loaded and nothing changed: repeat the `\getenv` line.
 
 ```text
 \getenv app_password APP_DB_PASSWORD
@@ -430,6 +444,55 @@ privacy notice. If the repository goes quiet, re-enable the workflow in the Acti
 run the first command of this step again with `dry_run=false`) and check the date of the last
 scheduled run now and then. The README lists this limitation.
 
+## Windows: PowerShell and `psql` through Docker
+
+The commands above are for Git Bash, Linux or macOS. On Windows in PowerShell (5.1), the first run
+(2026-10-12) used these equivalents. None of them puts a value in a command line or in a history.
+
+Read a secret into the session without echoing it (the `read -rs` of the steps above). Paste at
+the prompt, then press Enter. Check the host it holds without printing the password:
+
+```powershell
+$env:DATABASE_URL_DIRECT = [Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Direct URL')).Password
+```
+
+```powershell
+([uri]$env:DATABASE_URL_DIRECT).Host
+```
+
+`psql` 17 without installing it: the image of `infra/docker-compose.yml` has it, and `-e NAME`
+passes the session's variable into the container without writing its value anywhere. The same
+form with `-e APP_DB_PASSWORD` serves step 6, and with `-e APP_DATABASE_URL` step 7. `psql` shows
+long results in a pager that ends with `(END)`: press `q`.
+
+```powershell
+docker run --rm -it -e DATABASE_URL_DIRECT pgvector/pgvector:0.8.6-pg17-trixie sh -c 'exec psql "$DATABASE_URL_DIRECT"'
+```
+
+A random password for `app` (step 6), hex so it needs no escaping in a URL, 192 bits. It goes to the
+variable and to the clipboard; paste it into the secret manager at once:
+
+```powershell
+$b = New-Object byte[] 24; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $env:APP_DB_PASSWORD = ([BitConverter]::ToString($b) -replace '-','').ToLower(); $env:APP_DB_PASSWORD | Set-Clipboard
+```
+
+The `app` pooled URL of step 7, built from the owner's pooled URL (pasted at the prompt) with the
+user and password swapped:
+
+```powershell
+$p = [Net.NetworkCredential]::new('', (Read-Host -AsSecureString 'Owner pooled URL')).Password; $u = [uri]$p; $env:APP_DATABASE_URL = "postgresql://app:$($env:APP_DB_PASSWORD)@$($u.Host)$($u.PathAndQuery)"; Remove-Variable p
+```
+
+Pitfalls seen on the first run:
+
+- Never paste a URL or a password as a command. PowerShell keeps every line in a history file
+  (`(Get-PSReadLineOption).HistorySavePath`); if it happened, remove the line from that file and
+  reset the password in Neon.
+- A copied command overwrites the clipboard, so "copy the secret, then paste a command that reads
+  the clipboard" does not work. Use a prompt (`Read-Host`, `gh secret set NAME`) instead.
+- `gh` run outside the repository folder needs `--repo Niksa1101/grounded`.
+- `curl` in PowerShell is an alias of another command: call `curl.exe`.
+
 ## When something fails
 
 | Symptom | What it means | What to do |
@@ -465,8 +528,8 @@ Tick each box as you do it; the acceptance criteria of ticket 5.09 are the last 
 - [ ] Environment `neon-production` with a required reviewer (recommended)
 - [ ] Embeddings cache is warm (`gh cache list --key embeddings-`)
 - [ ] `ingest.yml` run with `activate=false`: four migrations applied, a `ready` version, `docs`/`chunks` plausible
-- [ ] `grounded golden validate … --against-index` passes against Neon
 - [ ] `ingest.yml` run with `activate=true`: one active version
+- [ ] `grounded golden validate … --against-index` passes against Neon (after activation)
 - [ ] `app` role created with SQL, grants applied, password set from a `psql` variable (`ALTER ROLE app PASSWORD :'app_password'`) and kept in the secret manager
 - [ ] Catalog table of step 7 matches exactly
 - [ ] The "must be able to" transaction ran as `app` over the pooled URL, upserts returned 2
