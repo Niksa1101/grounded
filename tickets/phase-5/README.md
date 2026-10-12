@@ -29,4 +29,35 @@ runbooks, and the Author runs or approves them.
 - [5.11 — `housekeeping.yml`: retention and daily keep-warm ping](5.11-housekeeping.md)
 - [5.12 — README v1 and MVP closeout](5.12-readme-v1.md)
 
+## Review follow-ups
+
+The code review of Phase 5 (PRs #89–#101, 2026-10-12) found no blocking bug in merged code. It found four issues to
+fix **before the Author runs the production runbooks**, plus small items: the Neon runbook sets the `app` password
+as a client-side hash, which Neon refuses; the public `/readyz` queries Neon on every call, so a 4-minute ping would
+use about 180 of the 100 CU-hours a month; `measure-cold-start` sends the same questions in both runs, so the second
+run cannot judge its cold ask; and `test_deadline.py` depends on wall-clock speed. Decisions of 2026-10-12 (PRD D54):
+
+- a. A new `Settings` field `RETRIEVAL_TIMEOUT_S` (default 2.0, off in eval mode) bounds the retrieval stage; a
+  timeout answers 504 `deadline_exceeded` (R.21).
+- b. Migration `0004` adds the outcome `deadline_exceeded`, used by deadline and retrieval-timeout rows (R.20).
+- c. `/readyz` requires the proxy secret; `/healthz` stays public; keep-warm and `measure-cold-start` send it (R.22).
+- d. The Gemini adapter stays eager (built in the lifespan): it supersedes "providers created lazily" of 5.08.
+- e. Requests without a client IP share one rate-limit bucket, `hash_ip("unknown", key)` (R.25).
+- f. One PR per ticket on `phase-5/<topic>`; the Agent squash-merges after green CI. Secrets, GitHub settings and
+  production stay the Author's.
+
+- R.18 — Review follow-ups: tickets and decisions (D54) (this section)
+- [R.19 — Neon runbook: set the `app` password in plain text from a psql variable](R.19-neon-role-password.md)
+- [R.20 — Migration `0004`: the `deadline_exceeded` outcome](R.20-deadline-outcome.md)
+- [R.21 — `RETRIEVAL_TIMEOUT_S`: the retrieval stage timeout](R.21-retrieval-timeout.md)
+- [R.22 — `/readyz` requires the proxy secret](R.22-readyz-secret.md)
+- [R.23 — Cold-start measurement: distinct questions, cold cache hits, cold retrieval](R.23-cold-start-questions.md)
+- [R.24 — Deterministic deadline tests and env isolation in tests](R.24-deterministic-deadline-tests.md)
+- [R.25 — Small hardening and documentation drift](R.25-review-polish.md)
+
+After the series, the Author's steps: create the repository secret `PROXY_SHARED_SECRET` (the Vercel value) before
+the first keep-warm run; run the Neon runbook (it now applies `0004` and sets the password the new way), then the
+Vercel runbook including V17, then the MVP closeout checks; set `HOUSEKEEPING_ENABLED=true` within 30 days of the
+first real question.
+
 Rules for working a ticket: [../README.md](../README.md).
