@@ -146,6 +146,9 @@ class Settings(BaseSettings):
     query_embedding_cache_size: int = Field(default=256, gt=0)  # in-memory LRU, prod (Tech.md §11)
     # The embed stage timeout of /v1/ask (Tech.md §6): one attempt, no retry, no sleep (§10).
     query_embedding_timeout_s: float = Field(default=3.0, gt=0)
+    # The retrieval stage timeout of /v1/ask (Tech.md §6, PRD D54a): pool checkout, hybrid search
+    # and context build together. Not applied in eval mode, like REQUEST_DEADLINE_S.
+    retrieval_timeout_s: float = Field(default=2.0, gt=0)
 
     # --- Confidence (generation/confidence.py, Tech §9.8) -------------------------------------
     # Relative importance of each signal. The defaults sum to 1.0 so they read as shares; the

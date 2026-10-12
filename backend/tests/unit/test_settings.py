@@ -361,6 +361,13 @@ def test_request_path_defaults_match_tech_md() -> None:
         300.0,
         256,
     )
+    assert (s.query_embedding_timeout_s, s.retrieval_timeout_s) == (3.0, 2.0)
+
+
+@pytest.mark.parametrize("value", [0.0, -1.0])
+def test_the_retrieval_timeout_must_be_positive(value: float) -> None:
+    with pytest.raises(ValidationError):
+        make_settings(retrieval_timeout_s=value)
 
 
 def test_confidence_weights_that_let_the_self_report_carry_a_claim_are_rejected() -> None:

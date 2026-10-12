@@ -25,6 +25,7 @@ from grounded.api.deadline import DeadlineExceededError
 from grounded.api.deps import get_request_logger, request_id_of
 from grounded.api.input_limits import InputRejectedError
 from grounded.api.security import ProxyAuthError
+from grounded.generation.pipeline import RetrievalTimeoutError
 from grounded.infra.budget import BudgetExhaustedError
 from grounded.infra.hashing import question_hash
 from grounded.infra.provider_errors import (
@@ -181,6 +182,26 @@ async def _deadline_exceeded(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+async def _retrieval_timeout(request: Request, exc: Exception) -> JSONResponse:
+    # The retrieval stage timeout (Tech §6, PRD D54a): the same answer and row as the deadline, so
+    # the caller sees one kind of timeout; the log line says which one fired.
+    trace: RequestTrace | None = getattr(request.state, "trace", None)
+    logger.warning(
+        "retrieval stage timeout",
+        extra={
+            "request_id": str(request_id_of(request)),
+            "timeout_s": exc.timeout_s if isinstance(exc, RetrievalTimeoutError) else None,
+            "stage_latency_ms": trace.latency_ms() if trace is not None else None,
+        },
+    )
+    return await _fail(
+        request,
+        status.HTTP_504_GATEWAY_TIMEOUT,
+        "deadline_exceeded",
+        "The request took too long and was stopped. Try again shortly.",
+    )
+
+
 async def _validation_failed(request: Request, exc: Exception) -> JSONResponse:
     logger.warning("model output invalid", extra={"request_id": str(request_id_of(request))})
     return await _fail(
@@ -220,6 +241,7 @@ def install_error_handlers(app: FastAPI) -> None:
         InputRejectedError: _input_rejected,
         RateLimitedError: _rate_limited,
         DeadlineExceededError: _deadline_exceeded,
+        RetrievalTimeoutError: _retrieval_timeout,
         BudgetExhaustedError: _budget_exhausted,
         ProviderRateLimited: _provider_unavailable,
         ProviderUnavailable: _provider_unavailable,

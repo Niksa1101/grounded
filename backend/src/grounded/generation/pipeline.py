@@ -35,6 +35,7 @@ today is marked below.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections.abc import Mapping
@@ -96,6 +97,16 @@ class IndexMismatchError(RuntimeError):
     be compared with chunk vectors from another space and rank nonsense without any error."""
 
 
+class RetrievalTimeoutError(Exception):
+    """The retrieval stage outlived ``RETRIEVAL_TIMEOUT_S`` (Tech §6, PRD D54a); ``api/errors.py``
+    turns it into a 504 ``deadline_exceeded``. It lives here, not in ``api/``: the pipeline never
+    imports from the HTTP layer."""
+
+    def __init__(self, timeout_s: float) -> None:
+        super().__init__(f"retrieval stage timeout of {timeout_s:g}s exceeded")
+        self.timeout_s = timeout_s
+
+
 class AskPipeline:
     def __init__(
         self,
@@ -126,6 +137,10 @@ class AskPipeline:
         self._clock = clock
         # None when no cap is set (dev, test) and in eval mode (Tech §12, §15.6).
         self._budget = budget
+        # Off in eval mode, like the request deadline: eval runs measure, they do not time out.
+        self._retrieval_timeout_s = (
+            None if settings.app_env == "eval" else settings.retrieval_timeout_s
+        )
         # Off in eval mode (Tech §11): eval runs must measure the pipeline, not the cache.
         self._cache = (
             None
@@ -203,12 +218,24 @@ class AskPipeline:
                 [vector] = await self._embedder.embed([question], "RETRIEVAL_QUERY")
 
             with timer.stage("retrieval"):
-                async with self._pool.connection() as conn:
-                    chunks = await hybrid_search(
-                        conn, question, vector, index_version_id=index.id, cfg=self._cfg
-                    )
-                    context = build_context(chunks, k_context=self._cfg.k_context)
-                    titles = await chunk_titles(conn, [c.chunk_id for c in context.labels.values()])
+                # Only this scope's own expiry is the retrieval timeout; a TimeoutError from the
+                # work inside, or the request deadline around it, passes through unchanged (the
+                # same rule as api/deadline.py). ``None`` (eval mode) never expires.
+                limit = self._retrieval_timeout_s
+                scope = asyncio.timeout(limit)
+                try:
+                    async with scope, self._pool.connection() as conn:
+                        chunks = await hybrid_search(
+                            conn, question, vector, index_version_id=index.id, cfg=self._cfg
+                        )
+                        context = build_context(chunks, k_context=self._cfg.k_context)
+                        titles = await chunk_titles(
+                            conn, [c.chunk_id for c in context.labels.values()]
+                        )
+                except TimeoutError as exc:
+                    if limit is not None and scope.expired():
+                        raise RetrievalTimeoutError(limit) from exc
+                    raise
             labels = context.labels
             trace.retrieved_section_ids = [chunk.section_id for chunk in chunks]
             trace.context_chunks = dict(context.labels)
