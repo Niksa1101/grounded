@@ -235,8 +235,8 @@ CREATE TABLE request_logs (
     model                  text,
     fallback_used          boolean  NOT NULL DEFAULT false,
     validation_retries     smallint NOT NULL DEFAULT 0,
-    rerank_used            boolean  NOT NULL DEFAULT false,
-    rerank_error           text,
+    rerank_used            boolean  NOT NULL DEFAULT false,  -- the context was built from the reranked order (6.03)
+    rerank_error           text,                      -- why the RRF order stood although rerank is on: 'cap_reached' | 'rate_limited' | 'timeout' | 'unavailable' | 'rejected' | 'bad_output' (Tech §8); NULL otherwise
     prompt_version         text,
     index_version_id       integer REFERENCES index_versions(id) ON DELETE SET NULL,
     retrieval_config_hash  text,
@@ -412,7 +412,17 @@ ON CONFLICT (day) DO UPDATE
     WHERE du.llm_calls < %(limit)s
 RETURNING du.llm_calls;
 ```
-Token totals are added after the call with a plain `UPDATE ... WHERE day = (now() AT TIME ZONE 'utc')::date` (`infra/budget.py`, 5.05; the `app` grant on `daily_usage` is exactly what the reserve, the advisory read and this update need, and `tests/integration/test_budget.py` runs them under a role with only that grant). `rerank_calls` uses the same pattern with its own cap.
+Token totals are added after the call with a plain `UPDATE ... WHERE day = (now() AT TIME ZONE 'utc')::date` (`infra/budget.py`, 5.05; the `app` grant on `daily_usage` is exactly what the reserve, the advisory read and this update need, and `tests/integration/test_budget.py` runs them under a role with only that grant). `rerank_calls` uses the same pattern with its own cap (6.03, `infra/budget.py:RerankCap`, `RERANK_DAILY_CAP`):
+
+```sql
+INSERT INTO daily_usage AS du (day, rerank_calls)
+VALUES ((now() AT TIME ZONE 'utc')::date, 1)
+ON CONFLICT (day) DO UPDATE
+    SET rerank_calls = du.rerank_calls + 1, updated_at = now()
+    WHERE du.rerank_calls < %(limit)s
+RETURNING du.rerank_calls;
+```
+No row back => the cap is reached. The insert branch takes the first unit of a day without looking at the limit, so a cap of 0 is decided in code and the statement is not run. There is no advisory check and no token total for rerank: the reserve is made right before each call, and a unit is never given back (a failed or cut-off call was attempted). The row of a day is shared with the LLM counters, which the two reserves leave alone (`tests/integration/test_rerank_cap.py` also runs it under a role with only the `app` grant).
 
 **Advisory check (5.01, D31).** After the answer-cache lookup and before the query is embedded, a plain read decides whether to refuse early; it reserves nothing, so it cannot leak a unit:
 ```sql

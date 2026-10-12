@@ -27,6 +27,7 @@ from psycopg.rows import dict_row
 import grounded.api.deadline
 from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.ingest.embed import FakeEmbedder, TaskType, Vector
+from grounded.retrieval.rerank import FakeReranker
 from grounded.schemas.llm import LLMAnswer, LLMClaim
 from tests.hybrid_corpus import CORPUS, insert_page
 from tests.support import (
@@ -106,6 +107,24 @@ class HangingProvider(FakeLLMProvider):
             raise
 
     started = False
+
+
+class HangingReranker(FakeReranker):
+    """Never answers: the call calls ``on_start``, waits until it is cancelled, and says so."""
+
+    def __init__(self, on_start: Callable[[], None]) -> None:
+        super().__init__()
+        self.cancelled = False
+        self._on_start = on_start
+
+    async def _scores(self, query: str, chunks: Sequence[Any]) -> list[float]:
+        self._on_start()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        raise AssertionError("unreachable")
 
 
 class SlowProvider(FakeLLMProvider):
@@ -226,6 +245,31 @@ async def test_a_budget_unit_reserved_before_a_call_that_timed_out_stays_spent(
     row = usage(db)
     assert row is not None
     assert (row["llm_calls"], row["input_tokens"], row["output_tokens"]) == (1, 0, 0)
+
+
+async def test_a_deadline_during_the_rerank_stage_is_a_504_not_a_degradation(
+    db: str, deadline_scopes: DeadlineScopes
+) -> None:
+    # A rerank that fails on its own degrades to the RRF order (Tech §8); the request deadline is
+    # not "its own": it arrives as a cancellation, and the request ends as a 504 like any other.
+    reranker = HangingReranker(on_start=deadline_scopes.expire_now)
+    llm = FakeLLMProvider([])
+    settings = settings_for(db, rerank_provider="cohere", rerank_model="rerank-v4.0-pro")
+    async with app_client(settings, provider=llm, reranker=reranker) as client:
+        response = await ask(client)
+
+    assert response.status_code == 504
+    assert response.json()["error"]["code"] == "deadline_exceeded"
+    assert reranker.cancelled
+    assert llm.calls == []  # it did not carry on in RRF order after the cut-off
+    [row] = rows(db)
+    assert (row["outcome"], row["error_code"]) == ("deadline_exceeded", "deadline_exceeded")
+    assert (row["rerank_used"], row["rerank_error"]) == (False, None)  # cut off, not degraded
+    assert row["latency_rerank_ms"] is not None  # the stage that was cut off is recorded
+    assert row["latency_llm_ms"] is None
+    used = usage(db)
+    assert used is not None
+    assert used["rerank_calls"] == 1  # the unit reserved before the call stays spent
 
 
 async def test_eval_mode_has_no_deadline(

@@ -98,6 +98,18 @@ def test_startup_checks_refuse_an_unknown_model() -> None:
         p.require_embedding("embed-y")
 
 
+def test_the_rerank_startup_check_refuses_an_unknown_or_unverified_model() -> None:
+    # 6.03: the pipeline calls require_rerank when a reranker is configured (cohere).
+    pricing().require_rerank(RERANK)
+    with pytest.raises(PricingError, match="rerank model 'rerank-y'"):
+        pricing().require_rerank("rerank-y")
+    unverified = pricing(rerank={RERANK: {"status": "unverified"}})
+    with pytest.raises(PricingError, match="unverified"):
+        unverified.require_rerank(RERANK)
+    with pytest.raises(PricingError, match="unverified"):
+        unverified.shadow_cost(rerank_model=RERANK, rerank_calls=1)
+
+
 def test_an_unverified_price_is_unknown_never_zero() -> None:
     p = pricing(models={GEMINI: {"status": "unverified"}})
     with pytest.raises(PricingError, match="unverified"):
@@ -142,6 +154,11 @@ def test_the_committed_pricing_file_prices_the_pinned_rerank_models() -> None:
     # A model without a verified price is refused, never priced at 0 (Tech §14).
     with pytest.raises(PricingError, match=r"rerank model 'rerank-v3\.5'"):
         loaded.shadow_cost(rerank_model="rerank-v3.5", rerank_calls=1)
+    # The startup check agrees: the pinned model and its fallback pass, an unpriced one does not.
+    loaded.require_rerank("rerank-v4.0-pro")
+    loaded.require_rerank("rerank-v4.0-fast")
+    with pytest.raises(PricingError, match=r"rerank model 'rerank-v3\.5'"):
+        loaded.require_rerank("rerank-v3.5")
 
 
 def test_a_missing_or_invalid_file_is_a_pricing_error(tmp_path: Path) -> None:

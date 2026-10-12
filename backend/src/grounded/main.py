@@ -25,6 +25,7 @@ from grounded.infra.logging import configure_logging
 from grounded.infra.timing import Clock
 from grounded.ingest.embed import Embedder
 from grounded.observability.cost import Pricing
+from grounded.retrieval.rerank import Reranker
 from grounded.runtime import open_runtime
 from grounded.settings import Settings, get_settings
 
@@ -53,11 +54,13 @@ def create_app(
     pricing: Pricing | None = None,
     clock: Clock = time.perf_counter,
     wall_clock: Callable[[], datetime] | None = None,
+    reranker: Reranker | None = None,
 ) -> FastAPI:
-    """``embedder`` and ``provider`` replace the real ones (tests); by default they are built from
-    ``settings`` in the lifespan, once per process. ``pricing`` defaults to ``pricing.toml`` and
-    ``clock`` to the monotonic clock; tests inject their own. ``wall_clock`` is the rate limiter's
-    clock (default: the database's ``now()``, Tech §12)."""
+    """``embedder``, ``provider`` and ``reranker`` replace the real ones (tests); by default they
+    are built from ``settings`` in the lifespan, once per process (no reranker for
+    ``RERANK_PROVIDER=none``). ``pricing`` defaults to ``pricing.toml`` and ``clock`` to the
+    monotonic clock; tests inject their own. ``wall_clock`` is the rate limiter's clock (default:
+    the database's ``now()``, Tech §12)."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
 
@@ -70,6 +73,7 @@ def create_app(
             pricing=pricing,
             clock=clock,
             wall_clock=wall_clock,
+            reranker=reranker,
         ) as runtime:
             app.state.db_pool = runtime.pool
             app.state.pipeline = runtime.pipeline

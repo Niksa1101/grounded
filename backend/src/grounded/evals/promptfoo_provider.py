@@ -226,6 +226,10 @@ def _common_metadata(trace: RequestTrace, mode: AskMode, *, cold_start: bool) ->
         "dropped_claim_count": trace.dropped_claim_count,
         "removed_url_count": trace.removed_url_count,
         "llm_cache_hits": trace.llm_cache_hits,
+        # Rerank (6.03): a case whose rerank degraded ran on the RRF order, so a baseline built from
+        # a `hybrid_rerank` run must be able to see it (6.04 refuses such a run).
+        "rerank_used": trace.rerank_used,
+        "rerank_error": trace.rerank_error,
     }
 
 

@@ -11,9 +11,9 @@ the response, in the log row and in a hand calculation agree to the digit.
 
 **A price is known or the program refuses to start.** ``Pricing.require_*`` raises ``PricingError``
 for a model that is missing from the file or marked ``status = "unverified"``; the pipeline
-calls them at construction (3.12), so an unpriced model is a startup error and never a silent
-``0`` (Tech §14). The ``fake`` provider is the one exemption: it makes no billable call, so its
-true cost is 0, not unknown.
+calls them at construction (3.12; ``require_rerank`` only when a reranker is configured, 6.03), so
+an unpriced model is a startup error and never a silent ``0`` (Tech §14). The ``fake`` provider is
+the one exemption: it makes no billable call, so its true cost is 0, not unknown.
 """
 
 from __future__ import annotations
@@ -97,6 +97,9 @@ class Pricing(BaseModel):
 
     def require_embedding(self, model: str) -> None:
         self._embedding(model)
+
+    def require_rerank(self, model: str) -> None:
+        self._rerank(model)
 
     def shadow_cost(
         self,

@@ -31,7 +31,7 @@ frozen snapshot of the official docs, and it **measures** how well it does that.
 
 Built unless marked *planned*:
 
-- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is *planned* (Phase 6).
+- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is built behind `RERANK_PROVIDER` (default `none`, and off in the deployed demo: Cohere's trial key may not be used in production). It degrades to the RRF order on any error, timeout or daily cap; its measured lift comes with the Phase 6 evals.
 - **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry. Falling back to a second provider after that is *planned* (Phase 7); until then a second invalid output is a `502`.
 - **Verifiable citations:** each claim cites source labels. The server validates them and maps them to exact `docs-page#section` links. The model never writes URLs.
 - **Honest refusals:** `answered | partial | insufficient_context`. Out-of-scope questions are refused, and that behavior is measured.
@@ -61,16 +61,16 @@ flowchart LR
     FE -- "X-Proxy-Secret + X-Client-IP" --> API[FastAPI on Vercel Functions]
     API --> EMB[Gemini embeddings]
     API --> DB[(Neon Postgres<br/>pgvector + FTS<br/>rate limit · budget · cache · logs)]
-    API -. "planned: Phase 6" .-> RR[Cohere rerank]
+    API -. "optional, off in the demo" .-> RR[Cohere rerank]
     API --> LLM[Gemini Flash-Lite]
     API -. "planned: Phase 7<br/>fallback on 429/5xx" .-> LLM2[Groq]
     ING[Ingest CLI<br/>pinned FastAPI tag] --> DB
     CI[GitHub Actions<br/>tests · retrieval eval · promptfoo gate] -. "judge today" .-> LLM2
 ```
 
-Dotted edges are not in the request path today: rerank and the fallback are planned, and Groq is only the eval judge for now.
+Dotted edges are not in the request path of the deployed demo: rerank is built but switched off, the fallback is planned, and Groq is only the eval judge for now.
 Request flow: validate → rate-limit → cache lookup → budget check → embed → hybrid retrieve (dense ∪ FTS → RRF) →
-build context → reserve budget → structured generation → validate/retry → map citations → score confidence → log →
+(optional rerank →) build context → reserve budget → structured generation → validate/retry → map citations → score confidence → log →
 respond. Details and the contracts: [docs/Tech.md §1](docs/Tech.md).
 
 ## Evaluation
@@ -332,7 +332,7 @@ next to the number:
 | `agreement` | whether *both* the dense and the lexical search found the best cited chunk (the weaker of their two verdicts, so 0 if only one list found it) | `CONFIDENCE_W_AGREEMENT` = 0.25 |
 | `citations` | how many distinct valid sources back the claim: `n / (n + 1)` | `CONFIDENCE_W_CITATIONS` = 0.20 |
 | `self_confidence` | what the model said about itself | `CONFIDENCE_W_SELF` = 0.15 (at most 0.6) |
-| `rerank` | rerank relevance of the cited chunks, `0` while rerank is off (Phase 6) | `CONFIDENCE_W_RERANK` = 0.0 |
+| `rerank` | rerank relevance of the cited chunks, `0` when rerank is off or degraded | `CONFIDENCE_W_RERANK` = 0.0 |
 
 The confidence is the weighted mean of the components (the weights are relative, they need not sum to 1). A claim
 with no valid citation is capped at `CONFIDENCE_UNCITED_CAP` (at most 0.2) whatever else it has. With several

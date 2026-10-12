@@ -476,7 +476,24 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   on a 429 stays hypothetical until one is seen). (2) The SDK has no public `close`; the adapter ends its client with
   `__aexit__`, the context-manager exit the SDK documents for this. Re-check on an SDK upgrade. (3) The check that
   `RERANK_PROVIDER=cohere` has a key and a model lives in `runtime.build_reranker`, like Gemini's in `open_runtime`:
-  `Settings` accepts the combination, and nothing calls the builder until 6.03 wires it into `open_runtime`.
+  `Settings` accepts the combination; 6.03 wired the builder into `open_runtime`.
+- **Phase 6 request path (6.03, 2026-10-12), what stays open.** Nothing is switched on anywhere: the default
+  `RERANK_PROVIDER=none` leaves a request exactly as it was, and tests use `FakeReranker` only. Decisions taken by the
+  Agent for the Author to veto: (1) a **failing cap reserve** (a database error) is fail-closed and logged as
+  `rerank_error = unavailable`, the nearest of the six codes of Tech §8; a seventh code would only need the Author's
+  word (the column is free text, no migration). (2) An answer whose rerank **degraded is not stored** in the answer
+  cache, so a reranked key never serves an RRF-order answer; the price is that, while the cap is reached, repeats of a
+  question are not cached either (moot while the deployed demo has rerank off). (3) The cap applies in every
+  environment but `APP_ENV=eval`, the local dev database included: a `grounded ask --golden` run with
+  `RERANK_PROVIDER=cohere` outside eval mode degrades after `RERANK_DAILY_CAP` questions, and the manual rerank evals
+  must run with `APP_ENV=eval` (Tech §15.6). (4) The shadow cost charges a call answered by the dev/eval rerank cache
+  as a call, like the query embedding (Tech §14). (5) An answer-cache **hit** reports `meta.rerank_used = false`
+  (this request did no rerank) although the stored answer may have been reranked; the collapsed debug row shows the
+  hit through `cache_hit`. (6) `confidence.py` was read against a reranked request and needed no change: the `rerank`
+  component is the maximum score of the cited chunks, `0.0` when degraded, and with `CONFIDENCE_W_RERANK = 0` it does
+  not move the number (tested). The guard item about the weight above 0 (below) is unchanged. (7) `trace.retrieved_section_ids`
+  stays the RRF candidates in RRF order, the context shows the reranked selection; 6.04 decides how the retrieval
+  eval reports the full reranked list.
 - Free-tier limits of `gemini-3.5-flash-lite` (read from the Author's AI Studio rate-limit page, project `grounded`, 2026-10-06; the docs only point to that dashboard): **500 requests per day** (the Limit line sits on the labelled 500 tick). RPM (15) and TPM (250K) are read off the chart as the midpoint of the axis, they are not printed, so treat them as approximate. For comparison `gemini-3.6-flash` showed 5 RPM, 20 RPD and ~250K TPM. The daily quota resets at midnight Pacific time. Ticket 5.01 set `DAILY_LLM_BUDGET` to 300, below 500, and every retry counts as a request.
 - The current list price of `gemini-embedding-001`: the pricing page now lists only `gemini-embedding-2` ($0.20 per 1M text tokens). `pricing.toml` uses $0.15 per 1M input tokens from Google's general-availability post (2025-07-14), a dated announcement and not a row of today's page. Re-check it if the page lists the model again.
 - `gemini-embedding-001` is still served (shutdown date 2028-05-14, Google's deprecations page, 2026-10-06), but Google's recommended replacement is `gemini-embedding-2`. Moving to it is a new index version (new vectors, new baselines) and is not planned in this project's phases.
