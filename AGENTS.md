@@ -202,6 +202,14 @@ uv run grounded eval retrieval --config dense --config fts --config hybrid
 ```
 
 ```bash
+uv run grounded eval retrieval --config hybrid --config hybrid_rerank --out ../eval/results/rerank-compare.json   # by hand only, never CI: needs RERANK_PROVIDER=cohere, COHERE_API_KEY and RERANK_MODEL in .env; up to 25 live Cohere calls (Trial key, 150 for the whole phase), paced EVAL_RERANK_MIN_INTERVAL_S apart; a reranker error ends the run with exit 3 and writes nothing; no --write-baseline here (it would rewrite the hybrid row). Steps: docs/runbooks/rerank-eval.md
+```
+
+```bash
+uv run grounded eval retrieval --config hybrid_rerank --write-baseline   # by hand, after the run above: every rerank call is now a cache hit; writes only the ungated hybrid_rerank row (baseline PR only, Tech §15.7)
+```
+
+```bash
 uv run grounded eval gate --suite retrieval --results <results-file>.json
 ```
 
@@ -219,6 +227,13 @@ PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 \
 
 ```bash
 EVAL_QUESTION_IDS=q003,q045,q036 <the promptfoo command above>   # a smoke run on a few golden questions
+```
+
+```bash
+# hybrid_rerank generation eval, by hand only (Cohere quota; the file is not read by any workflow). Needs RERANK_PROVIDER=cohere in .env; the first config file needs it to be none. PowerShell form and steps: docs/runbooks/rerank-eval.md
+export PROMPTFOO_PYTHON="$(uv run --project backend python -c 'import sys; print(sys.executable)')"
+PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1 \
+  npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.rerank.yaml -j 1 --no-cache -o eval/results/rerank-generation.json
 ```
 
 ```bash

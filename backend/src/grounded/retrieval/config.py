@@ -24,8 +24,9 @@ from grounded.settings import RerankProvider
 if TYPE_CHECKING:
     from grounded.settings import Settings
 
-# Phase 6 adds "hybrid_rerank".
-RetrievalMode = Literal["dense", "fts", "hybrid"]
+# "hybrid_rerank" (6.04) is the hybrid candidates reranked: only the evals name it, by hand
+# (Tech §8). The request path's config is mode "hybrid" whose rerank fields say whether it reranks.
+RetrievalMode = Literal["dense", "fts", "hybrid", "hybrid_rerank"]
 
 
 class RetrievalConfig(BaseModel):
@@ -45,6 +46,11 @@ class RetrievalConfig(BaseModel):
         # "No rerank" has one spelling, so it has one hash.
         if self.rerank_provider == "none" and self.rerank_model is not None:
             raise ValueError("rerank_model needs a rerank_provider")
+        # A "hybrid_rerank" config that does not rerank would be a mislabeled hybrid result.
+        if self.mode == "hybrid_rerank" and (
+            self.rerank_provider == "none" or not self.rerank_model
+        ):
+            raise ValueError("mode hybrid_rerank needs a rerank_provider and a rerank_model")
         return self
 
     @classmethod

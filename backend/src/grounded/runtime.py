@@ -35,7 +35,13 @@ from grounded.observability.cost import Pricing, load_pricing
 from grounded.observability.request_log import RequestLogger
 from grounded.retrieval.index import ActiveIndexCache
 from grounded.retrieval.query_embedding import build_query_embedder
-from grounded.retrieval.rerank import RERANK_CACHE_FILE, CachedReranker, CohereReranker, Reranker
+from grounded.retrieval.rerank import (
+    RERANK_CACHE_FILE,
+    CachedReranker,
+    CohereReranker,
+    PacedReranker,
+    Reranker,
+)
 from grounded.settings import Settings
 
 # Vercel gives a function 500 ms after SIGTERM and shows no shutdown logs (Tech §18), so closing the
@@ -128,7 +134,9 @@ def build_judge_provider(settings: Settings) -> GroqProvider | StubJudgeProvider
     return build_groq_provider(settings, model=settings.judge_model)
 
 
-def build_reranker(settings: Settings, stack: AsyncExitStack) -> Reranker | None:
+def build_reranker(
+    settings: Settings, stack: AsyncExitStack, *, paced: bool = False
+) -> Reranker | None:
     """The reranker for ``RERANK_PROVIDER``, or ``None`` when it is ``none`` (Tech §8, PRD D55).
 
     ``cohere`` needs ``COHERE_API_KEY`` and ``RERANK_MODEL`` (blank counts as unset, like the
@@ -136,9 +144,18 @@ def build_reranker(settings: Settings, stack: AsyncExitStack) -> Reranker | None
     eval and test put the SQLite cache in front of it (the manual evals re-run for free); prod does
     not, because the answer cache covers repeats there and a function's disk is ephemeral. The
     caller closes what this opens through ``stack``.
+
+    ``paced`` is for the eval harness (6.04): the live calls are spaced by
+    ``EVAL_RERANK_MIN_INTERVAL_S`` and metered by a ``PacedReranker`` that sits between the cache
+    and the adapter, so a cache hit never waits. The result is ``CachedReranker(PacedReranker(
+    CohereReranker))``. It is refused in prod, where nothing may sleep (AGENTS.md §6.12).
     """
     if settings.rerank_provider == "none":
         return None
+    if paced and settings.app_env == "prod":
+        raise ProviderConfigError(
+            "rerank pacing is an eval tool: it must not be used with APP_ENV=prod"
+        )
     key = settings.cohere_api_key.get_secret_value().strip() if settings.cohere_api_key else ""
     model = (settings.rerank_model or "").strip()
     if not key:
@@ -147,12 +164,16 @@ def build_reranker(settings: Settings, stack: AsyncExitStack) -> Reranker | None
         raise ProviderConfigError(
             "RERANK_MODEL must be set to a pinned model ID (PRD D55: rerank-v4.0-pro)"
         )
-    reranker = CohereReranker.create(key, model=model, timeout_s=settings.rerank_timeout_s)
-    stack.push_async_callback(reranker.aclose)
+    adapter = CohereReranker.create(key, model=model, timeout_s=settings.rerank_timeout_s)
+    stack.push_async_callback(adapter.aclose)
     if settings.app_env == "prod":
-        return reranker
+        return adapter
     cache = stack.enter_context(KVCache(settings.cache_dir / RERANK_CACHE_FILE))
-    return CachedReranker(reranker, cache)
+    if paced:
+        return CachedReranker(
+            PacedReranker(adapter, min_interval_s=settings.eval_rerank_min_interval_s), cache
+        )
+    return CachedReranker(adapter, cache)
 
 
 def check_judge_provider(judge: LLMProvider, generator: str) -> None:
@@ -243,7 +264,8 @@ async def open_runtime(
         # Built from the settings unless a test hands one in: the factory refuses a missing key or
         # model before the first request. ``None`` for RERANK_PROVIDER=none, the shipped default.
         if reranker is None:
-            reranker = build_reranker(settings, stack)
+            # The eval runtime paces its live calls to the Trial key's limit (6.04, Tech §15.6).
+            reranker = build_reranker(settings, stack, paced=settings.app_env == "eval")
         # No cap in eval mode, like no budget (Tech §15.6, §8): the manual eval runs have the
         # Author's own call budget for the phase. Everywhere else a reranker is capped per UTC day.
         rerank_cap = (

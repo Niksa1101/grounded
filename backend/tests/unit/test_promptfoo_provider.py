@@ -633,7 +633,7 @@ def test_mode_of_reads_the_provider_config(mode: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "options", [{}, {"config": {}}, {"config": {"mode": "hybrid_rerank"}}, {"config": 3}]
+    "options", [{}, {"config": {}}, {"config": {"mode": "dense"}}, {"config": 3}]
 )
 def test_mode_of_rejects_a_missing_or_unknown_mode(options: dict[str, Any]) -> None:
     with pytest.raises(ValueError, match=r"config\.mode must be one of"):

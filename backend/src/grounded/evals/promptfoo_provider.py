@@ -5,6 +5,14 @@ Python worker per provider entry of the config (here ``no_rag`` and ``hybrid``) 
 ``call_api(prompt, options, context)`` in it once per test, one at a time (``-j 1``). Module state
 survives between those calls, which is what ``PipelineRunner`` relies on.
 
+**``hybrid_rerank`` (6.04).** A third value of ``config.mode``, used only by the second config file
+(``eval/promptfoo/promptfooconfig.rerank.yaml``, a manual run: CI never reads it). It is the
+``hybrid`` pipeline with a reranker, so the ask mode is ``AskMode.HYBRID`` and the difference is the
+settings: the worker needs ``RERANK_PROVIDER=cohere``, and ``hybrid`` needs it *off*, so the two can
+never be mixed up (``PipelineRunner`` refuses the other combination before it asks anything). The
+trace's ``rerank_used`` / ``rerank_error`` are in every result's metadata, which is how the baseline
+writer refuses a run in which the reranker degraded.
+
 **Why a loop thread.** promptfoo runs an ``async def call_api`` with a plain ``asyncio.run`` per
 call, which on Windows is the Proactor loop where psycopg async cannot run, and it would also open
 and close the connection pool for every call. So ``call_api`` is synchronous: it hands the work to
@@ -93,6 +101,9 @@ _TAGGED_FAILURES: Final = (
     psycopg.Error,
 )
 _IGNORED_BASES: Final = (Exception, BaseException, object)
+
+# A provider ``config.mode`` that is not an ``AskMode``: the hybrid pipeline with the reranker on.
+HYBRID_RERANK: Final = "hybrid_rerank"
 
 # promptfoo's "do not retry this result" switch (see the module docstring), on every tagged error.
 _NO_PROMPTFOO_RETRY: Final = {"rateLimitKind": "quota"}
@@ -308,10 +319,14 @@ class PipelineRunner:
         *,
         pricing: Pricing,
         clock: Clock = time.perf_counter,
+        rerank_on: bool = False,
     ) -> None:
         self._open_asker = open_asker
         self._pricing = pricing
         self._clock = clock
+        # Whether the opened pipeline reranks (RERANK_PROVIDER is not ``none``): a hybrid provider
+        # entry must agree with it, see ``_check_rerank``.
+        self._rerank_on = rerank_on
         self._guard = threading.Lock()
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -322,9 +337,32 @@ class PipelineRunner:
         self._calls = 0
         self._halt: dict[str, Any] | None = None
 
-    def call(self, question: str, mode: AskMode) -> dict[str, Any]:
+    def call(self, question: str, mode: AskMode, *, rerank: bool = False) -> dict[str, Any]:
+        """``rerank`` is whether this provider entry is ``hybrid_rerank`` (``AskMode.HYBRID`` plus
+        the reranker); it must agree with the settings or the call is refused."""
+        self._check_rerank(mode, rerank)
         loop = self._ensure_loop()
         return asyncio.run_coroutine_threadsafe(self._call(question, mode), loop).result()
+
+    def _check_rerank(self, mode: AskMode, rerank: bool) -> None:
+        """A ``hybrid_rerank`` entry needs the reranker and a ``hybrid`` entry must not have it.
+
+        Raised (a bad configuration, like a missing key), before anything is opened or asked, so
+        no quota is spent on a row that would carry the wrong label. ``no_rag`` never retrieves, so
+        the setting does not matter to it.
+        """
+        if mode is not AskMode.HYBRID or rerank == self._rerank_on:
+            return
+        if rerank:
+            raise ProviderConfigError(
+                f"provider mode {HYBRID_RERANK} needs RERANK_PROVIDER=cohere (with COHERE_API_KEY "
+                "and RERANK_MODEL) in .env; it never falls back to hybrid"
+            )
+        raise ProviderConfigError(
+            "provider mode hybrid would be answered with the reranker, because RERANK_PROVIDER is "
+            "not none: set it to none for this config, or run the hybrid_rerank config "
+            "(eval/promptfoo/promptfooconfig.rerank.yaml) instead"
+        )
 
     def close(self) -> None:
         """Close what the first call opened and stop the loop thread. Safe to call twice."""
@@ -411,22 +449,33 @@ def default_runner() -> PipelineRunner:
             f"the promptfoo provider runs the pipeline in eval mode, got APP_ENV={settings.app_env}"
         )
     configure_logging(settings.log_level)
-    runner = PipelineRunner(lambda: open_pipeline(settings), pricing=load_pricing())
+    runner = PipelineRunner(
+        lambda: open_pipeline(settings),
+        pricing=load_pricing(),
+        rerank_on=settings.rerank_provider != "none",
+    )
     atexit.register(runner.close)
     return runner
 
 
-def mode_of(options: Mapping[str, Any]) -> AskMode:
-    """The provider entry's ``config.mode``: ``hybrid`` or ``no_rag``."""
+def _config_mode(options: Mapping[str, Any]) -> str:
+    """The provider entry's ``config.mode``: ``hybrid``, ``no_rag`` or ``hybrid_rerank``."""
     config: Any = options.get("config")
     mode: Any = cast(Mapping[str, Any], config).get("mode") if isinstance(config, Mapping) else None
-    try:
-        return AskMode(mode)
-    except ValueError as exc:
-        names = ", ".join(m.value for m in AskMode)
-        raise ValueError(f"provider config.mode must be one of {names}, got {mode!r}") from exc
+    if mode not in (*(m.value for m in AskMode), HYBRID_RERANK):
+        names = ", ".join([*(m.value for m in AskMode), HYBRID_RERANK])
+        raise ValueError(f"provider config.mode must be one of {names}, got {mode!r}")
+    return str(mode)
+
+
+def mode_of(options: Mapping[str, Any]) -> AskMode:
+    """The pipeline mode of a provider entry: ``hybrid_rerank`` is ``hybrid`` with the reranker."""
+    mode = _config_mode(options)
+    return AskMode.HYBRID if mode == HYBRID_RERANK else AskMode(mode)
 
 
 def call_api(prompt: str, options: Mapping[str, Any], context: Mapping[str, Any]) -> dict[str, Any]:
     """promptfoo's entry point. ``prompt`` is the rendered passthrough prompt, i.e. the question."""
-    return default_runner().call(prompt, mode_of(options))
+    return default_runner().call(
+        prompt, mode_of(options), rerank=_config_mode(options) == HYBRID_RERANK
+    )

@@ -74,7 +74,12 @@ from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalConfig
 from grounded.retrieval.hybrid import hybrid_search
 from grounded.retrieval.index import ActiveIndexCache, chunk_titles
-from grounded.retrieval.rerank import Reranker, RerankErrorCode, rerank_error_code
+from grounded.retrieval.rerank import (
+    Reranker,
+    RerankErrorCode,
+    pacing_allowance_s,
+    rerank_error_code,
+)
 from grounded.retrieval.types import IndexVersion, RetrievedChunk
 from grounded.schemas.api import AskResponse, Claim, Meta
 from grounded.schemas.llm import LLMAnswer
@@ -436,7 +441,11 @@ class AskPipeline:
                     # The adapter bounds its own call; this scope makes the bound ours, whatever
                     # ``Reranker`` is injected. A TimeoutError here cannot be the request
                     # deadline: that one arrives as a cancellation and is not caught below.
-                    async with asyncio.timeout(self._settings.rerank_timeout_s):
+                    # The eval pacer's wait for its turn (6.04) is the one thing the scope allows
+                    # for on top: the call itself is still bounded by the adapter's own timeout.
+                    # It is 0 for every reranker on the request path, which never waits.
+                    limit = self._settings.rerank_timeout_s + pacing_allowance_s(reranker)
+                    async with asyncio.timeout(limit):
                         ranked = await reranker.rerank(
                             question, candidates, top_n=self._cfg.k_context
                         )

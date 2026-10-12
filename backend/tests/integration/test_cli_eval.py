@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Sequence
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
 import psycopg
 import pytest
+from pydantic import SecretStr
 from typer.testing import CliRunner
 
 import grounded.cli
-from grounded.cli import EXIT_EMBEDDINGS_UNAVAILABLE, app
+from grounded.cli import EXIT_EMBEDDINGS_UNAVAILABLE, EXIT_RERANK_UNAVAILABLE, app
 from grounded.evals.retrieval_runner import golden_set_digest, read_run
 from grounded.infra.kvcache import KVCache
-from grounded.infra.provider_errors import ProviderRateLimited
+from grounded.infra.provider_errors import (
+    ProviderError,
+    ProviderRateLimited,
+    ProviderRequestRejected,
+    ProviderTimeout,
+    ProviderUnavailable,
+)
 from grounded.ingest.embed import (
     FakeEmbedder,
     GeminiEmbedder,
@@ -26,6 +34,8 @@ from grounded.ingest.embed import (
 from grounded.ingest.pipeline import index_spec, ingest, prepare_corpus
 from grounded.ingest.types import ChunkingConfig, CorpusCheckout
 from grounded.retrieval.config import RetrievalConfig
+from grounded.retrieval.rerank import CachedReranker, PacedReranker, Reranker, ScoringReranker
+from grounded.retrieval.types import RetrievedChunk
 from grounded.settings import Settings
 from tests.support import make_settings
 
@@ -279,8 +289,8 @@ def test_eval_refuses_another_embedding_model(
     ("args", "message"),
     [
         (
-            ["--config", "hybrid_rerank"],
-            "Unknown retrieval config 'hybrid_rerank'; available: dense, fts, hybrid.",
+            ["--config", "rerank"],
+            "Unknown retrieval config 'rerank'; available: dense, fts, hybrid, hybrid_rerank.",
         ),
         (["--golden", "{tmp}/golden.jsonl"], "golden_set.v<N>.jsonl"),
     ],
@@ -365,3 +375,302 @@ def test_write_baseline_refuses_to_mix_setups_but_still_writes_the_results(
     assert isinstance(result.exception, SystemExit)
     assert out.exists()  # the run itself is kept
     assert baseline.read_bytes() == before
+
+
+# --- hybrid_rerank (6.04): the reranker is a fake, the database and the metrics are real ----------
+
+LABEL = f"{BG}#using-backgroundtasks"
+RERANK_MODEL = "rerank-v4.0-pro"
+
+
+class ReverseReranker(ScoringReranker):
+    """Scores that rise with the RRF position, so the reranked order is the RRF order reversed.
+    ``fail_on`` maps a 1-based call number to the error that call raises."""
+
+    def __init__(self, fail_on: dict[int, ProviderError] | None = None) -> None:
+        super().__init__(RERANK_MODEL)
+        self.calls = 0
+        self._fail_on = fail_on or {}
+
+    async def _scores(self, query: str, chunks: Sequence[RetrievedChunk]) -> list[float]:
+        self.calls += 1
+        if self.calls in self._fail_on:
+            raise self._fail_on[self.calls]
+        return [(i + 1) / (len(chunks) + 1) for i in range(len(chunks))]
+
+
+@pytest.fixture
+def rerank_settings(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """The settings of a manual hybrid_rerank run: rerank on in `.env`, no real key needed because
+    the tests replace the builder."""
+    on = settings.model_copy(
+        update={
+            "rerank_provider": "cohere",
+            "rerank_model": RERANK_MODEL,
+            "cohere_api_key": SecretStr("test-key"),
+            "eval_rerank_min_interval_s": 0.0,
+        }
+    )
+    monkeypatch.setattr(grounded.cli, "get_settings", lambda: on)
+    return on
+
+
+def use_reranker(monkeypatch: pytest.MonkeyPatch, reranker: ScoringReranker) -> list[bool]:
+    """Make the CLI build ``cache(pacer(reranker))`` like ``runtime.build_reranker`` does, and
+    return the list that records the ``paced`` flag of every build."""
+    seen: list[bool] = []
+
+    def build(settings: Settings, stack: AsyncExitStack, *, paced: bool = False) -> Reranker:
+        seen.append(paced)
+        cache = stack.enter_context(KVCache(settings.cache_dir / "rerank.sqlite"))
+        return CachedReranker(PacedReranker(reranker, min_interval_s=0.0), cache)
+
+    monkeypatch.setattr(grounded.cli, "build_reranker", build)
+    return seen
+
+
+def two_question_golden(tmp_path: Path) -> Path:
+    golden = golden_file(tmp_path)
+    second = {
+        "id": "q003",
+        "question": "the and or",
+        "type": "how_to",
+        "answerable": True,
+        "reference_answer": "Use BackgroundTasks.",
+        "relevant_sections": [{"section": LABEL, "grade": 2}],
+    }
+    with golden.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(second) + "\n")
+    return golden
+
+
+def test_hybrid_rerank_scores_the_reranked_list_of_the_same_candidates_as_hybrid(
+    db: str,
+    tmp_path: Path,
+    baseline: Path,
+    rerank_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_index(db, tmp_path)
+    reranker = ReverseReranker()
+    paced = use_reranker(monkeypatch, reranker)
+    golden, out = golden_file(tmp_path), tmp_path / "results" / "run.json"
+
+    result = invoke(
+        "--config",
+        "hybrid",
+        "--config",
+        "hybrid_rerank",
+        "--golden",
+        str(golden),
+        "--out",
+        str(out),
+    )
+
+    assert result.exit_code == 0, result.output
+    assert paced == [True]  # the eval asks for the pacer
+    assert reranker.calls == 1  # one answerable question, one live call
+    assert "1 live calls, 0 from the rerank cache; live latency p50 " in result.stdout
+    run = read_run(out)
+    assert list(run.configs) == ["hybrid", "hybrid_rerank"]
+    plain, reranked = run.configs["hybrid"], run.configs["hybrid_rerank"]
+
+    # Same candidates, the reranker's order: the whole list, so MRR and Recall@10 are over K_FUSED.
+    assert reranked.k == plain.k == rerank_settings.k_fused
+    [before], [after] = plain.questions, reranked.questions
+    assert len(before.retrieved) > 1
+    assert after.retrieved == before.retrieved[::-1]
+    # The ranks are those of the reranked order (a label at position p of n moves to n + 1 - p).
+    n = len(before.retrieved)
+    moved = min(n + 1 - p for p, section in enumerate(before.retrieved, 1) if section == LABEL)
+    assert after.ranks == {LABEL: moved}
+    assert reranked.metrics["mrr"] == pytest.approx(1 / moved)
+
+    # What each row says it ran: hybrid without the reranker `.env` has, hybrid_rerank with it.
+    without = rerank_settings.model_copy(update={"rerank_provider": "none", "rerank_model": None})
+    assert plain.retrieval_config == RetrievalConfig.from_settings(without, "hybrid")
+    assert plain.retrieval_config.rerank_provider == "none"
+    assert reranked.retrieval_config.rerank_provider == "cohere"
+    assert reranked.retrieval_config.rerank_model == RERANK_MODEL
+    assert reranked.retrieval_config_hash != plain.retrieval_config_hash
+    assert plain.rerank is None
+    stats = reranked.rerank
+    assert stats is not None
+    assert (stats.model, stats.live_calls, stats.cache_hits) == (RERANK_MODEL, 1, 0)
+    assert stats.latency_p50_ms is not None
+    assert stats.latency_p95_ms is not None
+    assert stats.latency_p50_ms >= 0
+
+
+def test_a_rerun_is_answered_from_the_rerank_cache_without_a_live_call(
+    db: str,
+    tmp_path: Path,
+    baseline: Path,
+    rerank_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_index(db, tmp_path)
+    golden, out = golden_file(tmp_path), tmp_path / "results" / "run.json"
+    first = ReverseReranker()
+    use_reranker(monkeypatch, first)
+    args = ("--config", "hybrid_rerank", "--golden", str(golden), "--out", str(out))
+    assert invoke(*args).exit_code == 0
+    before = read_run(out).configs["hybrid_rerank"]
+
+    again = ReverseReranker()
+    use_reranker(monkeypatch, again)
+    result = invoke(*args)
+
+    assert result.exit_code == 0, result.output
+    assert again.calls == 0  # a hit asks Cohere nothing
+    assert "0 live calls, 1 from the rerank cache; no live call, so no latency" in result.stdout
+    after = read_run(out).configs["hybrid_rerank"]
+    assert after.metrics == before.metrics
+    assert after.questions == before.questions
+    assert after.rerank is not None
+    assert (after.rerank.live_calls, after.rerank.cache_hits) == (0, 1)
+    assert (after.rerank.latency_p50_ms, after.rerank.latency_p95_ms) == (None, None)
+
+
+def test_the_rerank_row_is_added_without_touching_a_single_byte_of_the_others(
+    db: str,
+    tmp_path: Path,
+    baseline: Path,
+    rerank_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_index(db, tmp_path)
+    golden, out = golden_file(tmp_path), tmp_path / "results" / "run.json"
+    use_reranker(monkeypatch, ReverseReranker())
+    plain_args = ("--golden", str(golden), "--out", str(out), "--write-baseline")
+    plain = invoke("--config", "dense", "--config", "fts", "--config", "hybrid", *plain_args)
+    assert plain.exit_code == 0, plain.output
+    # The committed file: hybrid is gated, dense and fts are not and have no `thresholds` key.
+    rows = json.loads(baseline.read_bytes())
+    assert all("thresholds" not in row for row in rows.values())
+    gated = {"metrics": rows["hybrid"].pop("metrics"), "thresholds": {"mrr": {"tolerance": 0.04}}}
+    rows["hybrid"] = gated | rows["hybrid"]
+    baseline.write_text(json.dumps(rows, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    committed = baseline.read_text(encoding="utf-8")
+
+    result = invoke("--config", "hybrid_rerank", *plain_args)
+
+    assert result.exit_code == 0, result.output
+    rewritten = baseline.read_text(encoding="utf-8")
+    # Every existing row is the same bytes; the new row is appended after them.
+    assert rewritten.startswith(committed[: committed.rindex("\n}")] + ",\n")
+    after = json.loads(rewritten)
+    assert list(after) == ["dense", "fts", "hybrid", "hybrid_rerank"]
+    assert after["hybrid"]["thresholds"] == {"mrr": {"tolerance": 0.04}}
+    assert "thresholds" not in after["hybrid_rerank"]  # a reranked row is ungated (D55)
+    assert after["hybrid_rerank"]["k"] == rerank_settings.k_fused
+    reranked = RetrievalConfig.from_settings(rerank_settings, "hybrid_rerank")
+    assert after["hybrid_rerank"]["retrieval_config_hash"] == reranked.config_hash
+
+
+@pytest.mark.parametrize(
+    ("error", "code", "hint"),
+    [
+        (
+            ProviderRateLimited("Too many requests", retry_after_s=30.0, is_quota=False),
+            "rate_limited",
+            "Cohere asked to wait 30s; the run does not wait out a limit",
+        ),
+        (
+            ProviderRateLimited("Too many requests", retry_after_s=None, is_quota=False),
+            "rate_limited",
+            "the run does not wait out a limit",
+        ),
+        (ProviderTimeout("rerank call exceeded 3s"), "timeout", "Nothing was scored or written"),
+        (ProviderUnavailable("Cohere rerank 503"), "unavailable", "Nothing was scored or written"),
+        (
+            ProviderRequestRejected("Cohere rerank 404: model not found", status_code=404),
+            "rejected",
+            "Check COHERE_API_KEY and RERANK_MODEL",
+        ),
+    ],
+)
+def test_a_reranker_error_ends_the_run_with_nothing_written_and_exit_3(
+    db: str,
+    tmp_path: Path,
+    baseline: Path,
+    rerank_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+    error: ProviderError,
+    code: str,
+    hint: str,
+) -> None:
+    build_index(db, tmp_path)
+    reranker = ReverseReranker(fail_on={2: error})  # q001 is reranked, q003 is not
+    use_reranker(monkeypatch, reranker)
+    golden, out = two_question_golden(tmp_path), tmp_path / "results" / "run.json"
+
+    result = invoke(
+        "--config", "hybrid_rerank", "--golden", str(golden), "--out", str(out), "--write-baseline"
+    )
+
+    assert result.exit_code == EXIT_RERANK_UNAVAILABLE == EXIT_EMBEDDINGS_UNAVAILABLE
+    assert isinstance(result.exception, SystemExit)
+    assert f"Eval stopped: rerank failed at q003 ({code}, {type(error).__name__})" in result.output
+    assert hint in result.output
+    assert "Nothing was scored or written" in result.output
+    assert "the and or" not in result.output  # the id is named, never the question
+    assert reranker.calls == 2  # stopped at the failure: no retry, no further question
+    assert not out.exists()  # no results file for a half run
+    assert not baseline.exists()  # and no baseline
+
+
+@pytest.mark.usefixtures("settings")
+def test_hybrid_rerank_with_the_provider_off_fails_before_any_work(tmp_path: Path) -> None:
+    # No index exists and the embedder would be the first thing to run: the message proves neither
+    # was reached. It is not a hybrid run under another name.
+    result = invoke("--config", "hybrid_rerank", "--golden", str(golden_file(tmp_path)))
+
+    assert result.exit_code == 1
+    assert "hybrid_rerank needs RERANK_PROVIDER=cohere" in result.output
+    assert "never falls back to hybrid" in result.output
+    assert "no active index" not in result.output
+    assert sum(len(texts) for stub in StubGemini.instances for texts, _ in stub.calls) == 0
+
+
+def test_hybrid_rerank_without_a_key_or_a_model_fails_before_any_work(
+    tmp_path: Path, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    golden = golden_file(tmp_path)
+    for overrides, variable in (
+        ({"rerank_provider": "cohere", "rerank_model": RERANK_MODEL}, "COHERE_API_KEY"),
+        (
+            {"rerank_provider": "cohere", "cohere_api_key": SecretStr("test-key")},
+            "RERANK_MODEL",
+        ),
+    ):
+        broken = settings.model_copy(update=overrides)
+        monkeypatch.setattr(grounded.cli, "get_settings", lambda broken=broken: broken)
+
+        result = invoke("--config", "hybrid_rerank", "--golden", str(golden))
+
+        assert result.exit_code == 1
+        assert f"Eval failed: {variable} must be set" in result.output
+        assert "no active index" not in result.output
+    assert sum(len(texts) for stub in StubGemini.instances for texts, _ in stub.calls) == 0
+
+
+def test_plain_modes_build_no_reranker_and_carry_no_rerank_fields(
+    db: str,
+    tmp_path: Path,
+    baseline: Path,
+    rerank_settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    build_index(db, tmp_path)
+    paced = use_reranker(monkeypatch, ReverseReranker())
+    out = tmp_path / "results" / "run.json"
+
+    result = invoke("--config", "hybrid", "--golden", str(golden_file(tmp_path)), "--out", str(out))
+
+    assert result.exit_code == 0, result.output
+    assert paced == []  # CI's configs (dense, fts, hybrid) never build or call a reranker
+    hybrid = read_run(out).configs["hybrid"]
+    assert hybrid.retrieval_config.rerank_provider == "none"
+    assert hybrid.retrieval_config.rerank_model is None
+    assert hybrid.rerank is None

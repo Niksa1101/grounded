@@ -5,6 +5,11 @@ embedding cache, so a re-run makes no API calls), retrieved against the active i
 with ``evals/metrics.py``. Unanswerable questions are skipped and counted, never scored 0. Means
 are reported with ``n``. No LLM calls.
 
+``hybrid_rerank`` (6.04, run by hand, never in CI) is the ``hybrid`` list reranked: the metrics are
+computed over the reranker's *whole* reranked list, the same ``K_FUSED`` candidates as ``hybrid``,
+so ``MRR`` and ``Recall@10`` compare like with like. A reranker error is not a result: the first
+``ProviderError`` ends the run (``RerankRunError``) and nothing is scored on the RRF order instead.
+
 The results file holds per-question rows (ranks, retrieved sections) so two runs can be diffed.
 A baseline row is only ever copied from a run (AGENTS.md §7), never typed.
 """
@@ -19,7 +24,7 @@ import subprocess
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import psycopg
 from pgvector.psycopg import register_vector_async  # pyright: ignore[reportMissingTypeStubs]
@@ -27,20 +32,26 @@ from pydantic import TypeAdapter, ValidationError
 
 from grounded.evals.golden import GOLDEN_DIR
 from grounded.evals.metrics import ChunkRef, label_ranks, mrr, ndcg_at_k, recall_at_k
+from grounded.infra.provider_errors import ProviderError
 from grounded.ingest.embed import Embedder, Vector
-from grounded.retrieval.config import RetrievalConfig
+from grounded.retrieval.config import RetrievalConfig, RetrievalMode
 from grounded.retrieval.dense import dense_search
 from grounded.retrieval.hybrid import hybrid_search
 from grounded.retrieval.index import active_index_version
 from grounded.retrieval.lexical import lexical_search
+from grounded.retrieval.rerank import Reranker, rerank_error_code, rerank_usage
 from grounded.schemas.eval import (
     GoldenItem,
+    RerankRunStats,
     RetrievalBaselineEntry,
     RetrievalConfigResult,
     RetrievalQuestionResult,
     RetrievalRun,
     RetrievalRunInfo,
 )
+
+if TYPE_CHECKING:
+    from grounded.settings import Settings
 
 EVAL_DIR: Final = GOLDEN_DIR.parent
 RESULTS_DIR: Final = EVAL_DIR / "results"
@@ -62,6 +73,26 @@ class RetrievalEvalError(Exception):
     """The eval can't run as asked (wrong index, bad golden-set file name, ...)."""
 
 
+class RerankRunError(RetrievalEvalError):
+    """The reranker failed on a question, so the run is not a result (Tech §8, §15.2).
+
+    The question would have had to be scored on the RRF order instead, and a ``hybrid_rerank``
+    number that is partly ``hybrid`` is worse than none. ``question_id`` is the golden id (never the
+    text) and ``error`` the typed provider error, whose ``rerank_error_code`` is ``code``. The CLI
+    ends the run on it without waiting out a ``Retry-After`` (AGENTS.md §6.15).
+    """
+
+    def __init__(self, question_id: str, error: ProviderError) -> None:
+        self.question_id = question_id
+        self.error = error
+        self.code = rerank_error_code(error)
+        text = " ".join(str(error).split())
+        super().__init__(
+            f"rerank failed at {question_id} ({self.code}, {type(error).__name__})"
+            + (f": {text}" if text else "")
+        )
+
+
 class BaselineMismatchError(Exception):
     """The baseline file has rows from a different setup than this run; nothing was written."""
 
@@ -69,6 +100,25 @@ class BaselineMismatchError(Exception):
 def metric_names() -> list[str]:
     """Metric keys in report order: recall@5, recall@10, mrr, ndcg@5, ndcg@10."""
     return [f"recall@{k}" for k in METRIC_CUTOFFS] + ["mrr"] + [f"ndcg@{k}" for k in METRIC_CUTOFFS]
+
+
+def retrieval_configs(settings: Settings, modes: Sequence[RetrievalMode]) -> list[RetrievalConfig]:
+    """The configs to score, one per mode, from the settings.
+
+    A plain mode is scored as what it is, with no rerank fields, even when
+    ``RERANK_PROVIDER=cohere`` is in ``.env`` for the ``hybrid_rerank`` run next to it: its
+    ``retrieval_config_hash`` is then the one of the committed ``hybrid`` row, not a "hybrid with a
+    reranker" it never used.
+    ``hybrid_rerank`` keeps them, and without a provider and a model it is a ``ValueError``
+    (``RetrievalConfig`` refuses it) instead of a ``hybrid`` run under another name.
+    """
+    configs: list[RetrievalConfig] = []
+    for mode in modes:
+        config = RetrievalConfig.from_settings(settings, mode)
+        if mode != "hybrid_rerank" and config.rerank_provider != "none":
+            config = config.model_copy(update={"rerank_provider": "none", "rerank_model": None})
+        configs.append(config)
+    return configs
 
 
 def score_question(item: GoldenItem, retrieved: Sequence[ChunkRef]) -> RetrievalQuestionResult:
@@ -105,10 +155,17 @@ async def evaluate(
     if not scored:
         raise RetrievalEvalError("the golden set has no answerable questions to score")
     vectors = await embedder.embed([item.question for item in scored], "RETRIEVAL_QUERY")
-    questions = [
-        score_question(item, await search(item.question, vector))
-        for item, vector in zip(scored, vectors, strict=True)
-    ]
+    questions: list[RetrievalQuestionResult] = []
+    for item, vector in zip(scored, vectors, strict=True):
+        try:
+            found = await search(item.question, vector)
+        except ProviderError as exc:
+            # The questions were embedded above, so only the reranker can raise a provider error
+            # here. Not skipped, not scored on the RRF order: the run ends (see RerankRunError).
+            if config.mode != "hybrid_rerank":
+                raise
+            raise RerankRunError(item.id, exc) from exc
+        questions.append(score_question(item, found))
     return RetrievalConfigResult(
         config=config.mode,
         retrieval_config=config,
@@ -129,6 +186,30 @@ def _means(questions: Sequence[RetrievalQuestionResult]) -> dict[str, float]:
     }
 
 
+def _rerank_stats(config: RetrievalConfig, reranker: Reranker) -> RerankRunStats | None:
+    """Live calls, cache hits and live latency of a run, read off the eval layers of ``reranker``
+    (``rerank_usage``); ``None`` for a reranker that counts nothing (a bare fake)."""
+    usage = rerank_usage(reranker)
+    if usage is None or config.rerank_model is None:
+        return None
+    return RerankRunStats(
+        model=config.rerank_model,
+        live_calls=usage.live_calls,
+        cache_hits=usage.cache_hits,
+        latency_p50_ms=_percentile(usage.latencies_ms, 50),
+        latency_p95_ms=_percentile(usage.latencies_ms, 95),
+    )
+
+
+def _percentile(values: Sequence[float], percent: int) -> float | None:
+    """Nearest-rank percentile (the rule of the generation gate, Tech §15.5), in integers so no
+    float error moves the rank; ``None`` for no values."""
+    if not values:
+        return None
+    rank = -(-percent * len(values) // 100)  # ceil(percent / 100 * n)
+    return sorted(values)[max(rank, 1) - 1]
+
+
 async def run_retrieval_eval(
     conninfo: str,
     items: Sequence[GoldenItem],
@@ -139,13 +220,22 @@ async def run_retrieval_eval(
     golden_set_sha256: str,
     now: datetime,
     repo: tuple[str | None, bool | None] = (None, None),
+    reranker: Reranker | None = None,
 ) -> RetrievalRun:
     """Run each config's mode against the active index of ``conninfo``.
 
     The embedder must be the one that built the index: vectors of another model (or dimension)
     would be compared with the index's, which is meaningless, so that is an error, not a warning.
-    ``repo`` is ``(git_sha, git_dirty)`` of the code under test (``repo_state``).
+    ``repo`` is ``(git_sha, git_dirty)`` of the code under test (``repo_state``). ``reranker`` is
+    what a ``hybrid_rerank`` config reranks with (``runtime.build_reranker``; a fake in tests); a
+    run that names that mode without one fails here, before any embedding or database work, and
+    never falls back to ``hybrid``.
     """
+    if reranker is None and any(config.mode == "hybrid_rerank" for config in configs):
+        raise RetrievalEvalError(
+            "hybrid_rerank needs a reranker: set RERANK_PROVIDER=cohere (with COHERE_API_KEY and "
+            "RERANK_MODEL); it never falls back to hybrid"
+        )
     async with await psycopg.AsyncConnection.connect(conninfo) as conn:
         await register_vector_async(conn)
         index = await active_index_version(conn)
@@ -183,6 +273,20 @@ async def run_retrieval_eval(
 
                 # MRR runs over the fused list, so k is its length, not either input list's.
                 return hybrid, config.k_fused
+            if config.mode == "hybrid_rerank" and reranker is not None:
+                ranker = reranker
+
+                async def hybrid_rerank(question: str, vector: Vector) -> Sequence[ChunkRef]:
+                    candidates = await hybrid_search(
+                        conn, question, vector, index_version_id=index.id, cfg=config
+                    )
+                    if not candidates:  # nothing to rank: no call (the request path does the same)
+                        return candidates
+                    # The whole reranked list, not K_CONTEXT: MRR and Recall@10 then run over the
+                    # same K_FUSED candidates as `hybrid`, only in the reranker's order.
+                    return await ranker.rerank(question, candidates, top_n=len(candidates))
+
+                return hybrid_rerank, config.k_fused
             raise RetrievalEvalError(f"retrieval mode {config.mode!r} is not implemented yet")
 
         results: dict[str, RetrievalConfigResult] = {}
@@ -190,9 +294,10 @@ async def run_retrieval_eval(
             if config.mode in results:  # each mode once, in the order given
                 continue
             search, k = build_search(config)
-            results[config.mode] = await evaluate(
-                items, config=config, k=k, embedder=embedder, search=search
-            )
+            result = await evaluate(items, config=config, k=k, embedder=embedder, search=search)
+            if config.mode == "hybrid_rerank" and reranker is not None:
+                result = result.model_copy(update={"rerank": _rerank_stats(config, reranker)})
+            results[config.mode] = result
 
     git_sha, git_dirty = repo
     info = RetrievalRunInfo(
@@ -296,7 +401,13 @@ def update_baseline(path: Path, run: RetrievalRun) -> dict[str, RetrievalBaselin
             git_dirty=git_dirty,
             date=run.info.date,
         )
-    write_json(path, _BASELINE_FILE.dump_python(rows, mode="json"))
+    data: dict[str, Any] = _BASELINE_FILE.dump_python(rows, mode="json")
+    for row in data.values():
+        # A row without a gate is committed without the key (as the generation writer does), so
+        # adding another config's row never rewrites the rows that were already there (6.04).
+        if not row["thresholds"]:
+            del row["thresholds"]
+    write_json(path, data)
     return rows
 
 

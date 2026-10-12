@@ -28,6 +28,7 @@ from psycopg.rows import dict_row
 
 from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.infra.budget import RerankCap
+from grounded.infra.kvcache import KVCache
 from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderError,
@@ -40,7 +41,7 @@ from grounded.infra.timing import StageTimer
 from grounded.ingest.embed import FakeEmbedder
 from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalConfig
-from grounded.retrieval.rerank import FakeReranker, Hang
+from grounded.retrieval.rerank import CachedReranker, FakeReranker, Hang, PacedReranker
 from grounded.runtime import ProviderConfigError, open_runtime
 from grounded.schemas.api import AskResponse
 from grounded.schemas.llm import LLMAnswer, LLMClaim
@@ -514,6 +515,39 @@ async def test_eval_mode_has_no_cap_but_keeps_the_stage_timeout(db: str, tmp_pat
     assert (first["source"], first["rerank_used"], first["rerank_error"]) == ("eval", True, None)
     assert (second["rerank_used"], second["rerank_error"]) == (False, "timeout")
     assert rerank_calls_today(db) is None  # nothing reserved, daily_usage untouched
+
+
+@pytest.mark.parametrize("paced", [False, True])
+async def test_the_stage_timeout_allows_for_the_eval_pacers_wait_and_for_nothing_else(
+    db: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, paced: bool
+) -> None:
+    """The eval pacer waits for its turn inside ``rerank()``, so the stage scope around it is
+    widened by that wait (6.04); the adapter keeps its own timeout on the call. No sleeping here:
+    the scope's length is read off a spy, and any other reranker gets exactly ``RERANK_TIMEOUT_S``
+    as before."""
+    delays: list[float | None] = []
+    real_timeout = asyncio.timeout
+
+    def spy(delay: float | None) -> Any:
+        delays.append(delay)
+        return real_timeout(delay)
+
+    monkeypatch.setattr(asyncio, "timeout", spy)
+    settings = rerank_settings(db, cache_dir=tmp_path, rerank_timeout_s=0.05, **EVAL_SETTINGS)
+    with KVCache(tmp_path / "rerank.sqlite") as cache:
+        reranker: Any = FakeReranker()
+        if paced:
+            reranker = CachedReranker(PacedReranker(reranker, min_interval_s=6.0), cache)
+        async with open_runtime(
+            settings,
+            embedder=FakeEmbedder(dim=EMBEDDING_DIM),
+            provider=FakeLLMProvider([good()]),
+            reranker=reranker,
+        ) as runtime:
+            await runtime.pipeline.ask(QUESTION, uuid4())
+
+    expected = 0.05 + (6.0 if paced else 0.0)
+    assert [d for d in delays if d is not None and d < 10] == [pytest.approx(expected)]
 
 
 async def test_the_confidence_weight_for_rerank_stays_zero_and_the_score_is_only_reported(
