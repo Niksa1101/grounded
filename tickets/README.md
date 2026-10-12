@@ -100,6 +100,9 @@ waited for R.07 (the chunker fix changes the index), and the baseline is regener
 Phase 3 is closed too; its code review left follow-ups R.09–R.17 ([phase 3 README](phase-3/README.md#review-follow-ups)).
 Ticket 4.01 waits for R.17.
 
+Phase 5's code review left follow-ups R.18–R.25 ([phase 5 README](phase-5/README.md#review-follow-ups)), to be done
+before the Author runs the production runbooks.
+
 ## Cross-cutting rules (short form)
 
 These come from AGENTS.md §6–§9 and apply to every ticket. They are repeated here because they are the ones most
@@ -204,6 +207,14 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [5.10](phase-5/5.10-deploy.md) | Vercel projects, env vars, first deploy, cold start | Build | A (+G checklist) | blocked: waiting for the Author to deploy and measure | [#99](https://github.com/Niksa1101/grounded/pull/99) |
 | [5.11](phase-5/5.11-housekeeping.md) | `housekeeping.yml`: retention and daily keep-warm ping | Build | G | blocked: waiting for the Author's first production dispatch (runbook step 10) | [#100](https://github.com/Niksa1101/grounded/pull/100) |
 | [5.12](phase-5/5.12-readme-v1.md) | README v1 and MVP closeout | Closeout | G draft, A final | blocked: exit criteria 1 and 2 pending the Author's deployment and manual checks | [#101](https://github.com/Niksa1101/grounded/pull/101) |
+| [R.18](phase-5/README.md#review-follow-ups) | Phase 5 review follow-ups: tickets and decisions (D54) | Build | G | done | this PR |
+| [R.19](phase-5/R.19-neon-role-password.md) | Neon runbook: set the `app` password in plain text from a psql variable | Build | G | todo | |
+| [R.20](phase-5/R.20-deadline-outcome.md) | Migration `0004`: the `deadline_exceeded` outcome | Build | G | todo | |
+| [R.21](phase-5/R.21-retrieval-timeout.md) | `RETRIEVAL_TIMEOUT_S`: the retrieval stage timeout | Build | G | todo | |
+| [R.22](phase-5/R.22-readyz-secret.md) | `/readyz` requires the proxy secret | Build | G | todo | |
+| [R.23](phase-5/R.23-cold-start-questions.md) | Cold-start measurement: distinct questions, cold cache hits, cold retrieval | Build | G | todo | |
+| [R.24](phase-5/R.24-deterministic-deadline-tests.md) | Deterministic deadline tests and env isolation in tests | Build | G | todo | |
+| [R.25](phase-5/R.25-review-polish.md) | Small hardening and documentation drift | Build | G | todo | |
 | **6** | **[Re-ranking with measured lift](phase-6/README.md)** | | | | |
 | [6.01](phase-6/6.01-decision-cohere.md) | Decision: Cohere rerank model, trial limits, cap, price | Decision | D | todo | |
 | [6.02](phase-6/6.02-rerank-adapter.md) | Cohere rerank adapter and rerank cache | Build | G | todo | |
