@@ -40,9 +40,11 @@ def test_the_runbook_has_the_commands_of_the_steps() -> None:
     commands = grounded_commands()
 
     assert {c[0] for c in commands} == {"migrate", "index", "ask", "eval"}
-    assert {c[1] for c in commands if c[0] == "eval"} == {"retrieval", "baseline", "report"}
+    assert {c[1] for c in commands if c[0] == "eval"} == {"retrieval", "diff", "baseline", "report"}
     configs = [c[i + 1] for c in commands for i, arg in enumerate(c) if arg == "--config"]
-    assert configs.count("hybrid_rerank") == 2  # the comparison run and the baseline write
+    assert (
+        configs.count("hybrid_rerank") == 3
+    )  # the comparison run, its diff and the baseline write
 
 
 @pytest.mark.parametrize("args", grounded_commands(), ids=lambda args: " ".join(args)[:60])
