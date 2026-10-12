@@ -207,7 +207,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [5.10](phase-5/5.10-deploy.md) | Vercel projects, env vars, first deploy, cold start | Build | A (+G checklist) | blocked: waiting for the Author to deploy and measure | [#99](https://github.com/Niksa1101/grounded/pull/99) |
 | [5.11](phase-5/5.11-housekeeping.md) | `housekeeping.yml`: retention and daily keep-warm ping | Build | G | blocked: waiting for the Author's first production dispatch (runbook step 10) | [#100](https://github.com/Niksa1101/grounded/pull/100) |
 | [5.12](phase-5/5.12-readme-v1.md) | README v1 and MVP closeout | Closeout | G draft, A final | blocked: exit criteria 1 and 2 pending the Author's deployment and manual checks | [#101](https://github.com/Niksa1101/grounded/pull/101) |
-| [R.18](phase-5/README.md#review-follow-ups) | Phase 5 review follow-ups: tickets and decisions (D54) | Build | G | done | this PR |
+| [R.18](phase-5/README.md#review-follow-ups) | Phase 5 review follow-ups: tickets and decisions (D54) | Build | G | done | [#102](https://github.com/Niksa1101/grounded/pull/102) |
 | [R.19](phase-5/R.19-neon-role-password.md) | Neon runbook: set the `app` password in plain text from a psql variable | Build | G | todo | |
 | [R.20](phase-5/R.20-deadline-outcome.md) | Migration `0004`: the `deadline_exceeded` outcome | Build | G | todo | |
 | [R.21](phase-5/R.21-retrieval-timeout.md) | `RETRIEVAL_TIMEOUT_S`: the retrieval stage timeout | Build | G | todo | |
