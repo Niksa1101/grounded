@@ -54,8 +54,12 @@ def test_the_runbook_applies_exactly_the_statements_of_db_md_section_5() -> None
 def test_no_password_is_written_anywhere_in_the_role_sql() -> None:
     for text in (DB_BLOCK, RUNBOOK_BLOCK):
         assert not re.search(r"(?i)\bpassword\s+'", text)
-    # The password is set interactively, so that it reaches neither a file nor the shell history.
-    assert "\\password app" in RUNBOOK
+    # The password is set from a psql variable, so that it reaches neither a file nor a history.
+    # Neon accepts a plain-text password only, so psql's ``\password`` (it sends a hash) is out.
+    assert "\\getenv app_password APP_DB_PASSWORD" in RUNBOOK
+    assert "ALTER ROLE app PASSWORD :'app_password';" in RUNBOOK
+    assert not re.search(r"(?m)^\\password\b", RUNBOOK)
+    assert not re.search(r"(?i)\bpassword\s+'", RUNBOOK)
 
 
 def expected_privileges(sql: str) -> dict[str, list[str]]:
