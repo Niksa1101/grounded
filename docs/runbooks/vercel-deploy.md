@@ -563,8 +563,151 @@ reach the README in ticket 5.12, copied from here, never typed.
 
 ## Results
 
-_Not measured yet. The Author pastes the reports of step 9 here, each with its date, and the answers to
-the checklist (V1–V17)._
+First deployment, 2026-10-12, run by the Author with the agent reading logs and reports (`vercel logs`,
+`vercel inspect`, `gh run view`; nothing written to production by the agent). The two projects:
+
+| | Backend | Frontend |
+|---|---|---|
+| Project | `grounded` | `grounded-11zh` |
+| Production domain | `https://grounded-snowy.vercel.app` | `https://grounded-11zh.vercel.app` |
+| Function | `λ fastapi (44.89MB) [cle1]` | Next.js, `cle1` |
+
+### Checklist
+
+| # | Answer (2026-10-12) |
+|---|---|
+| V1 | **No client address.** The runtime logs of both projects (`vercel logs --json`, 14 backend and 9 frontend entries) carry no IP field and no IPv4-like string; the application lines carry `question_hash`, never the question text |
+| V2 | **One address per visitor.** A question from the home network and one from a phone on mobile data: two different `ip_hash` prefixes (`34b5579f`, `891e9f37`), both `source = web`. No `proxy sent no usable client ip` warning in the backend logs |
+| V3 | **uv 0.10.11**, Python 3.12 from `backend/.python-version`, "Installing required dependencies from uv.lock" (build log of `grounded-kvub7msew`) |
+| V4 | **44.89 MB** (the function in `vercel inspect`), against the 500 MB limit |
+| V5 | **Found.** The smoke-test answer had `meta.prompt_version` `answer_v1@08cc49e5` and `meta.shadow_cost_usd` 0.0046 |
+| V6 | **No problem.** No filesystem error in the production logs |
+| V7 | **Works.** 30 consecutive `/readyz` with the secret: `200` 30 times; no `prepared statement` error in the logs, including the measurement asks |
+| V8 | **Moot.** The cold function start was about 2.6 s (step 9), far under 5 s; no `FUNCTION_INVOCATION_TIMEOUT` |
+| V9 | **Starts, and cannot reach the database.** Backend preview `/healthz` `{"status":"ok"}`; `/readyz` with the placeholder secret `503 {"status":"unavailable","database":"error","active_index_version":null}` after about 5.2 s (`DB_POOL_TIMEOUT_S`) |
+| V10 | **Cold `/readyz` 200** at the first call after 30 minutes idle; the Neon wake was about 0.7 s, under `DB_POOL_TIMEOUT_S` |
+| V11 | **Held.** Every measured request answered `200`; no platform 504 |
+| V12 | **`cle1` for both**: every `x-vercel-id` was `fra1::cle1::…` (edge in Frankfurt, function in Cleveland). The project settings show the default `iad1`; `vercel.json` overrides it per deployment |
+| V13 | **Not checked.** The Functions page with the Fluid compute switch was not found in the dashboard; it is the default for projects created after 2025-04-23 (unverified for these two) |
+| V14 | **Clean build**, no warning about a `functions` pattern |
+| V15 | **Yes.** Branch Tracking `main`; the throwaway branch `chore/preview-check` built as Preview in both projects |
+| V16 | Not done (optional) |
+| V17 | **22%.** The cold ask's retrieval took 0.44 s against `RETRIEVAL_TIMEOUT_S` = 2 s (after probes in the other order: 0.38 s, 19%). No change to the timeout |
+
+Step 7 in numbers: the backend has 7 Preview variables, all Config placeholders, and 9 Production
+variables (4 Secret); the frontend has none in Preview and 2 in Production. The frontend preview answers
+`500 proxy_misconfigured`. One frontend preview first failed with "Git information retrieval failed"
+during a Vercel incident and built on a second empty commit. `PROXY_SHARED_SECRET` and `IP_HASH_SECRET`
+were added with `--value` from a PowerShell session variable (so they were in a process's argument list
+on the Author's machine for a moment); step 3.2 now says to use the prompt on Windows too.
+
+The smoke test (step 6), one real question through the frontend: `200`, `answered`, 2 claims, 3
+citations, `gemini-3.5-flash-lite`, index `0.141.1@4949e8a3`, 6.07 s total (embed 0.25, retrieval 0.46,
+LLM 4.61), with `validation_retries` 1 (the first model output failed validation and the one retry
+passed, AGENTS.md §6.4).
+
+### Step 9: the two reports, as printed
+
+Run 1, `--first health` (the tool waited the 30 minutes itself):
+
+### Cold start and warm latency
+
+- Date (UTC): 2026-10-12 13:51; idle before the first request: 30 min (waited by the tool)
+- Order: `--first health`; frontend `https://grounded-11zh.vercel.app`, backend `https://grounded-snowy.vercel.app`
+
+| Measurement | Method | Date (UTC) | Idle | n | min | median | max |
+|---|---|---|---|---|---|---|---|
+| function start, cold | `GET {backend}/healthz` | 2026-10-12 13:51 | 30 min | 1 | 2.91 s | 2.91 s | 2.91 s |
+| database wake, cold | `GET {backend}/readyz` | 2026-10-12 13:51 | 30 min | 1 | 0.96 s | 0.96 s | 0.96 s |
+| ask end to end, after probes | `POST {frontend}/api/ask` | 2026-10-12 13:51 | 30 min | 1 | 4.05 s | 4.05 s | 4.05 s |
+| `/healthz`, warm | `GET {backend}/healthz` | 2026-10-12 13:51 | 30 min | 10 | 0.26 s | 0.28 s | 0.45 s |
+| `/readyz`, warm | `GET {backend}/readyz` | 2026-10-12 13:51 | 30 min | 10 | 0.27 s | 0.29 s | 0.31 s |
+| ask end to end, warm | `POST {frontend}/api/ask` | 2026-10-12 13:51 | 30 min | 3 | 2.28 s | 2.47 s | 5.09 s |
+
+#### Margin
+
+The 10 s margin is enough: estimated cold overhead 3.30 s; function start about 2.62 s (cold `/healthz` minus the warm median), database wake about 0.67 s (cold `/readyz` minus the warm median).
+
+#### Retrieval
+
+Retrieval of the first ask (after probes): 0.38 s against `RETRIEVAL_TIMEOUT_S` = 2 s (19% of it).
+
+Warm ask median 2.47 s (n = 3) against the NFR-1 target of p50 <= 4 s. This n says nothing about p95.
+
+Regions in `x-vercel-id` (expected `cle1`, D53): `fra1::cle1`
+
+#### Raw samples
+
+| # | Request | Phase | Result | Time | Server total | Cache hit |
+|---|---|---|---|---|---|---|
+| 1 | healthz | cold | HTTP 200 | 2.91 s |  |  |
+| 2 | readyz | cold | HTTP 200 | 0.96 s |  |  |
+| 3 | healthz | warm | HTTP 200 | 0.28 s |  |  |
+| 4 | readyz | warm | HTTP 200 | 0.29 s |  |  |
+| 5 | healthz | warm | HTTP 200 | 0.30 s |  |  |
+| 6 | readyz | warm | HTTP 200 | 0.29 s |  |  |
+| 7 | healthz | warm | HTTP 200 | 0.28 s |  |  |
+| 8 | readyz | warm | HTTP 200 | 0.31 s |  |  |
+| 9 | healthz | warm | HTTP 200 | 0.26 s |  |  |
+| 10 | readyz | warm | HTTP 200 | 0.29 s |  |  |
+| 11 | healthz | warm | HTTP 200 | 0.27 s |  |  |
+| 12 | readyz | warm | HTTP 200 | 0.27 s |  |  |
+| 13 | healthz | warm | HTTP 200 | 0.28 s |  |  |
+| 14 | readyz | warm | HTTP 200 | 0.29 s |  |  |
+| 15 | healthz | warm | HTTP 200 | 0.35 s |  |  |
+| 16 | readyz | warm | HTTP 200 | 0.29 s |  |  |
+| 17 | healthz | warm | HTTP 200 | 0.45 s |  |  |
+| 18 | readyz | warm | HTTP 200 | 0.28 s |  |  |
+| 19 | healthz | warm | HTTP 200 | 0.28 s |  |  |
+| 20 | readyz | warm | HTTP 200 | 0.28 s |  |  |
+| 21 | healthz | warm | HTTP 200 | 0.28 s |  |  |
+| 22 | readyz | warm | HTTP 200 | 0.28 s |  |  |
+| 23 | ask | after probes | HTTP 200 | 4.05 s | 2.89 s | no |
+| 24 | ask | warm | HTTP 200 | 2.47 s | 2.12 s | no |
+| 25 | ask | warm | HTTP 200 | 5.09 s | 4.69 s | no |
+| 26 | ask | warm | HTTP 200 | 2.28 s | 1.90 s | no |
+
+Run 2, `--first ask`, right after run 1 (another 30 minutes waited). Its asks were different questions
+from run 1's (the offset of R.23), and the cold ask was not a cache hit:
+
+### Cold start and warm latency
+
+- Date (UTC): 2026-10-12 14:23; idle before the first request: 30 min (waited by the tool)
+- Order: `--first ask`; frontend `https://grounded-11zh.vercel.app`, backend `https://grounded-snowy.vercel.app`
+
+| Measurement | Method | Date (UTC) | Idle | n | min | median | max |
+|---|---|---|---|---|---|---|---|
+| ask end to end, cold | `POST {frontend}/api/ask` | 2026-10-12 14:23 | 30 min | 1 | 7.04 s | 7.04 s | 7.04 s |
+| `/healthz`, warm | `GET {backend}/healthz` | 2026-10-12 14:23 | 30 min | 3 | 0.27 s | 0.28 s | 0.35 s |
+| `/readyz`, warm | `GET {backend}/readyz` | 2026-10-12 14:23 | 30 min | 3 | 0.27 s | 0.28 s | 0.44 s |
+| ask end to end, warm | `POST {frontend}/api/ask` | 2026-10-12 14:23 | 30 min | 3 | 2.56 s | 2.63 s | 2.76 s |
+
+#### Margin
+
+The 10 s margin is enough: estimated cold overhead 3.75 s; cold ask 7.04 s end to end minus the server-reported total 3.29 s.
+
+#### Retrieval
+
+Retrieval of the cold ask: 0.44 s against `RETRIEVAL_TIMEOUT_S` = 2 s (22% of it).
+
+Warm ask median 2.63 s (n = 3) against the NFR-1 target of p50 <= 4 s. This n says nothing about p95.
+
+Regions in `x-vercel-id` (expected `cle1`, D53): `fra1::cle1`
+
+#### Raw samples
+
+| # | Request | Phase | Result | Time | Server total | Cache hit |
+|---|---|---|---|---|---|---|
+| 1 | ask | cold | HTTP 200 | 7.04 s | 3.29 s | no |
+| 2 | healthz | warm | HTTP 200 | 0.35 s |  |  |
+| 3 | readyz | warm | HTTP 200 | 0.27 s |  |  |
+| 4 | healthz | warm | HTTP 200 | 0.28 s |  |  |
+| 5 | readyz | warm | HTTP 200 | 0.28 s |  |  |
+| 6 | healthz | warm | HTTP 200 | 0.27 s |  |  |
+| 7 | readyz | warm | HTTP 200 | 0.44 s |  |  |
+| 8 | ask | warm | HTTP 200 | 2.56 s | 2.15 s | no |
+| 9 | ask | warm | HTTP 200 | 2.76 s | 2.40 s | no |
+| 10 | ask | warm | HTTP 200 | 2.63 s | 2.28 s | no |
 
 ## When something fails
 

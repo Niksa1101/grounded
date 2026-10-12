@@ -2,18 +2,17 @@
 
 **Cited, schema-validated answers over the FastAPI documentation, with an evaluation harness that blocks quality regressions in CI.**
 
-> 🚧 **Status: Phases 0–4 done, Phase 5 code complete, deployment pending. The MVP is not declared complete.**
+> ✅ **Status: Phases 0–5 done. The MVP is complete (2026-10-12) and live.**
 > Built and merged: the ingestion and the golden set, hybrid retrieval with a CI retrieval gate, `/v1/ask` with structured
 > output and citations, the promptfoo generation eval with a judge on another provider, a committed baseline and a CI
 > quality gate, and (Phase 5) the input limits, the Postgres rate limiter and daily budget, the proxy secret, the ask page,
-> the Vercel configuration, the Neon and Vercel runbooks and the housekeeping workflow. **Nothing is deployed yet:** the
-> production steps are the Author's, so two of the four MVP exit criteria are open ([MVP status](#mvp-status)). Parts of
-> this page describe the target system and say so (Phases 6–8). Sections and cells marked _TBD_ are filled in only from
-> committed eval results and real measurements, never by hand.
+> the Vercel deployment, Neon production and the housekeeping workflow ([MVP status](#mvp-status)). Parts of this page
+> describe the target system and say so (Phases 6–8). Sections and cells marked _TBD_ are filled in only from committed
+> eval results and real measurements, never by hand.
 
 | | |
 |---|---|
-| Live demo | _TBD_: no deployment exists yet. The URL is added after the first deployment ([runbook](docs/runbooks/vercel-deploy.md), step 6) |
+| Live demo | <https://grounded-11zh.vercel.app> (free tiers: 20 questions a day per visitor, a shared daily budget, and the first question after a quiet period takes a few seconds longer) |
 | Metrics dashboard | _TBD (Phase 8)_ |
 | Docs | [Product spec (PRD)](docs/PRD.md) · [Technical design](docs/Tech.md) · [Database](docs/DB.md) · [Rules for contributors & agents](AGENTS.md) · [Runbooks](docs/runbooks/) |
 
@@ -43,16 +42,16 @@ Built unless marked *planned*:
 ## MVP status
 
 Phase 5 ends the MVP, and its four exit criteria ([PRD §9](docs/PRD.md#9-delivery-phases)) were checked one by one on
-2026-10-12. **The MVP is not declared complete**: two criteria need a live deployment, which exists only after the Author
-runs the production steps. The evidence for each row, the workflow-by-workflow CI table and the step-by-step manual check of
-the rate limit and the budget are in [docs/runbooks/mvp-closeout.md](docs/runbooks/mvp-closeout.md).
+2026-10-12, and after the Author's rollout the same day **all four pass: the MVP is complete.** The evidence for each row,
+the workflow-by-workflow CI table and the manual check of the rate limit and the budget are in
+[docs/runbooks/mvp-closeout.md](docs/runbooks/mvp-closeout.md).
 
 | Exit criterion | Status |
 |---|---|
-| The live URL answers a question after the backend was idle; cold start measured and documented | **Pending the Author.** Nothing is deployed, so there is no URL and no measurement. The deployment and the measurement (`grounded measure-cold-start`) are scripted in the [Vercel runbook](docs/runbooks/vercel-deploy.md) |
-| Rate limit and budget verified manually | **Pending the Author.** Both are covered by tests against a real Postgres (exact counts, atomicity under parallel requests, the eval-mode switch), but "manually, on the live site" has not happened; the procedure is written |
-| README numbers are copied from committed eval results, never typed by hand | **Pass.** The eval and agreement blocks are the output of `grounded eval report` and `grounded eval agreement`, and a test fails if either drifts; every other number in this page was traced to committed output, a decision record or a dated measurement. Live numbers are `_TBD_` |
-| All CI workflows green on `main` | **Pass for the three that have run** (`ci` and `eval` on every push, `warm-cache` once by hand on 2026-10-02): the last completed run of each is green. `ingest.yml` and `housekeeping.yml` write to production, are run by the Author, and have never run |
+| The live URL answers a question after the backend was idle; cold start measured and documented | **Pass.** After 30 minutes idle the first question took 7.04 s end to end; the numbers are in [cost and latency](#cost-and-latency) and the reports in the [Vercel runbook](docs/runbooks/vercel-deploy.md#results) |
+| Rate limit and budget verified manually | **Pass.** On the live site: the 6th question of a minute and the 21st of a UTC day get `429` with `Retry-After`; a lowered budget refuses a new question with `503` before any model call, and cached answers are still served |
+| README numbers are copied from committed eval results, never typed by hand | **Pass.** The eval and agreement blocks are the output of `grounded eval report` and `grounded eval agreement`, and a test fails if either drifts; every other number in this page was traced to committed output, a decision record or a dated measurement. The live numbers come from the dated measurements of 2026-10-12 |
+| All CI workflows green on `main` | **Pass.** All five: `ci` and `eval` on every push, `warm-cache` once by hand (2026-10-02), and `ingest.yml` and `housekeeping.yml`, which the Author ran against production on 2026-10-12 |
 
 ## Architecture
 
@@ -367,10 +366,10 @@ output or a dated measurement produced it; otherwise the cell says `_TBD_` and n
 | Quantity | Value | Source |
 |---|---|---|
 | Warm pipeline latency p50 / p95 and shadow cost per 1k questions, `no_rag` and `hybrid` | in the [table above](#evaluation) | `eval/baselines/generation.json`, 2026-10-08 |
-| Function cold start (before the handler's deadline starts) | _TBD: measured after the first deployment_ | [Vercel runbook](docs/runbooks/vercel-deploy.md) step 9, `grounded measure-cold-start --first health` |
-| Neon wake after an idle period | _TBD: measured after the first deployment_ | the same report (`/readyz` row) |
-| First question after idle, end to end | _TBD: measured after the first deployment_ | `grounded measure-cold-start --first ask` |
-| Warm end-to-end latency through Vercel | _TBD: measured after the first deployment_ | the same report (warm probes; `n` is small, so a median and no p95) |
+| Function cold start (before the handler's deadline starts) | cold `/healthz` 2.91 s, about 2.62 s above the warm median (`n` = 1, after 30 min idle, 2026-10-12) | [Vercel runbook results](docs/runbooks/vercel-deploy.md#results), `grounded measure-cold-start --first health` |
+| Neon wake after an idle period | cold `/readyz` 0.96 s, about 0.67 s above the warm median (`n` = 1, same run) | the same report (`/readyz` row) |
+| First question after idle, end to end | 7.04 s, of which 3.29 s inside the backend (`n` = 1, after 30 min idle, 2026-10-12) | `grounded measure-cold-start --first ask` |
+| Warm end-to-end latency through Vercel | median 2.47 s and 2.63 s in the two runs (`n` = 3 each; too few for a p95), against the NFR-1 p50 target of 4 s | the same reports |
 | p50/p95 per stage in production, cache hit rate, fallback rate | _TBD (Phase 8)_ | the `request_logs` views and the public dashboard |
 
 The cold-start measurement times the function start and the Neon wake separately from a real question, and says plainly
@@ -400,20 +399,20 @@ so there is no production failure here: the systematic analysis from request log
 
 ### Limitations
 
-- **Nothing is verified on the live platform yet.** No deployment exists. The client IP in Vercel's logs, the forwarded-for
-  header, the build and bundle, the Neon pooler and the cold start are numbered checks (V1 to V17) of the
-  [Vercel runbook](docs/runbooks/vercel-deploy.md), answered after the first deployment; until then those are readings of
-  the platform's documentation (Tech §12, §18).
+- **Verified on the live platform once.** The client IP in Vercel's logs, the forwarded-for header, the build and bundle,
+  the Neon pooler and the cold start were checked on the first deployment (2026-10-12; V1 to V17 of the
+  [Vercel runbook](docs/runbooks/vercel-deploy.md#results)). Each is one observation, not a monitored property.
 - **Free tiers.** Daily quotas can exhaust the demo's budget (the page then says so), and the same quotas limit the CI eval.
   Vercel Hobby is non-commercial use only. The Cohere trial key (Phase 6) is non-production.
 - **Cold start.** The first request after idle pays a serverless function start plus a Neon wake (Neon scales to zero after 5
-  minutes). It is *not measured yet* ([cost and latency](#cost-and-latency)); the ask page shows a "waking up" state.
+  minutes): 7.04 s end to end once, against about 2.5 s warm ([cost and latency](#cost-and-latency)); the ask page shows a
+  "waking up" state.
 - **No fallback yet.** Until Phase 7, a Gemini outage or an exhausted quota is a `503` for the demo.
 - **Single region.** Both Vercel projects run in `cle1`, next to Neon in AWS `us-east-2`. Hobby allows one region and no
   failover; what happens to a project pinned to `cle1` during a `cle1` outage is unverified (PRD §12).
 - **The rate limiter is per client address, in fixed windows.** Up to twice the per-minute limit can pass across a minute
   boundary (the day counter and the budget bound it), several people behind one NAT share a bucket, and the client address is
-  the first entry of `X-Forwarded-For`, which Vercel overwrites (documented, not yet observed: V2).
+  the first entry of `X-Forwarded-For`, which Vercel overwrites (documented, and observed on 2026-10-12: V2).
 - **Frozen corpus.** Answers reflect the FastAPI docs at tag `0.141.1`, not the live site. One version, English only, one
   question per answer, no streaming.
 - **Postgres full-text search is not true BM25.** The ablation rows show what lexical search actually contributes.
@@ -441,14 +440,14 @@ stands behind it (NFR-4, PRD D32, [Tech §12](docs/Tech.md)):
 - **No raw IP is stored or logged.** The client address is hashed (HMAC-SHA256 with a server-side secret) inside the
   request's auth check and only the hash is kept, for rate limiting; the hash is removed from the log after 30 days and the
   limiter's counters after 2 days. The API's own logs carry no address and no question text (only a hash of the question),
-  and the server's access log is off. Vercel's runtime logs are documented to show no client IP; that is a reading of the
-  documentation until the first deployment confirms it (check V1 of the [runbook](docs/runbooks/vercel-deploy.md)).
+  and the server's access log is off. Vercel's runtime logs show no client IP either (documented, and observed on 2026-10-12: check V1
+  of the [runbook](docs/runbooks/vercel-deploy.md#results)).
 - **Public surfaces show aggregates only**, never question text.
 - **Questions go to Google's Gemini API** (the answer and the query embedding) on its free tier, which may use inputs to
   improve models. That is why the notice says not to enter personal data.
 - **The 30 days are enforced by a scheduled workflow** (`housekeeping.yml`) that ships switched off and that GitHub stops
-  after 60 days without repository activity ([limitations](#failure-modes-and-limitations)). Until the owner enables it
-  and while it runs, the retention promise holds; otherwise it does not.
+  after 60 days without repository activity ([limitations](#failure-modes-and-limitations)). It was switched on
+  on 2026-10-12, the day of the first real questions; while it runs, the retention promise holds.
 
 ## Tech stack
 
@@ -555,8 +554,10 @@ variables set for Production only, previews with placeholders and no secret. The
 runbook [docs/runbooks/vercel-deploy.md](docs/runbooks/vercel-deploy.md), which also carries the checklist of what was left
 to verify on the first deployment (client IP in the platform logs, the forwarded-for header, the build and bundle, the Neon
 pooler) and the cold-start measurement: `grounded measure-cold-start` times the function start, the Neon wake and a real
-question after an idle period, using only the public URLs, and says plainly when the 10 s between the backend deadline and
-the proxy timeout is not enough. Numbers are recorded in the runbook after the first measurement, never typed by hand.
+question after an idle period, and says plainly when the 10 s between the backend deadline and the proxy timeout is not
+enough. The first deployment (2026-10-12): frontend <https://grounded-11zh.vercel.app>, backend
+`https://grounded-snowy.vercel.app` (its `/v1` and `/readyz` need the proxy secret). The measured numbers are in the
+runbook's [Results](docs/runbooks/vercel-deploy.md#results).
 
 ## Operations
 
@@ -574,12 +575,12 @@ CI touches Neon production or a Vercel project on its own.
 | `ci.yml` | every PR and push to `main` | green on `main`; `backend`, `frontend`, `retrieval-eval` are required checks |
 | `eval.yml` | labeled PRs (`run-eval`), every push to `main`, manual | green on `main`; `eval` is a required check. Uses free-tier quota: [CI quality gate](#ci-quality-gate) |
 | `warm-cache.yml` | manual | seeds the CI embeddings cache (one run, 2026-10-02); the re-seed procedure after an eviction |
-| `ingest.yml` | manual, from `main` only | builds and activates the index in Neon production. Never run |
-| `housekeeping.yml` | daily schedule and manual | retention and the keep-warm ping (`/readyz` needs the repository secret `PROXY_SHARED_SECRET`, the Vercel value). The schedule is off until `HOUSEKEEPING_ENABLED` is set; never run |
+| `ingest.yml` | manual, from `main` only | builds and activates the index in Neon production. Run twice on 2026-10-12 (build, then activate), green |
+| `housekeeping.yml` | daily schedule and manual | retention and the keep-warm ping (`/readyz` needs the repository secret `PROXY_SHARED_SECRET`, the Vercel value). Two manual runs green on 2026-10-12; the daily schedule is on |
 
-The repository variables that switch production-touching steps on (`EVAL_RECORD_RUNS`, `HOUSEKEEPING_ENABLED`) and the
-`BACKEND_URL` of the keep-warm ping are all unset (`gh variable list` was empty on 2026-10-12). The keep-warm ping also
-needs the repository secret `PROXY_SHARED_SECRET` (the Author creates it in step 10 of the Neon runbook).
+Repository variables on 2026-10-12: `HOUSEKEEPING_ENABLED=true` (the daily schedule) and `BACKEND_URL` (the keep-warm
+target); `EVAL_RECORD_RUNS` is unset, so CI does not write `eval_runs`. The keep-warm ping uses the repository secret
+`PROXY_SHARED_SECRET`.
 
 ## Roadmap
 
@@ -590,13 +591,13 @@ needs the repository secret `PROXY_SHARED_SECRET` (the Author creates it in step
 | 2 | Hybrid retrieval (FTS + RRF), CI retrieval gate | ✅ done |
 | 3 | `/v1/ask` with structured output, citations, confidence | ✅ done ([closeout](tickets/phase-3/3.14-closeout.md)) |
 | 4 | promptfoo generation eval + CI quality gate | ✅ done ([closeout](tickets/phase-4/4.12-closeout.md)) |
-| 5 | UI, abuse protection, deployment. **MVP** | 🟡 code complete, deployment pending ([closeout](docs/runbooks/mvp-closeout.md); [MVP status](#mvp-status)) |
+| 5 | UI, abuse protection, deployment. **MVP** | ✅ done, live ([closeout](docs/runbooks/mvp-closeout.md); [MVP status](#mvp-status)) |
 | 6 | Re-ranking with measured lift | ⬜ |
 | 7 | Provider fallback + circuit breaker | ⬜ |
 | 8 | Observability dashboard, cost, calibration | ⬜ |
 | 9 | Failure-mode analysis, polish | ⬜ |
 
-✅ done · 🟡 code complete, waiting for the Author's production steps · ⬜ not started
+✅ done · ⬜ not started
 
 Phase details and exit criteria: [docs/PRD.md §9](docs/PRD.md#9-delivery-phases).
 

@@ -14,10 +14,10 @@ Status as of **2026-10-12** (UTC). When the Author has done the work, fill the
 
 | # | Criterion | Status | Evidence |
 |---|---|---|---|
-| 1 | The live URL answers a question after the backend was idle (cold start measured and documented) | **PENDING-AUTHOR** | There is no live URL: no Vercel project exists, so nothing was deployed or measured. Ready: the deploy procedure ([Vercel runbook](vercel-deploy.md) steps 3 to 6), `grounded measure-cold-start` (step 9; tested by `backend/tests/unit/test_cold_start.py`) and the empty "Results" section the numbers go into. Tickets 5.08 to 5.10 are `blocked` on exactly this |
-| 2 | Rate limit and budget verified manually | **PENDING-AUTHOR** | Needs the live site. What exists without it: the limiter and the budget are tested against a real Postgres (`backend/tests/integration/test_ratelimit.py`, `test_budget.py`, `test_ask_protection.py`: exact hit counts, a new window, independent IP hashes, atomicity under parallel requests, the eval-mode switch). That is not the criterion, which says manually. The step-by-step procedure for the Author is [below](#verify-the-rate-limit-and-the-budget-the-authors-manual-check) |
+| 1 | The live URL answers a question after the backend was idle (cold start measured and documented) | **PASS** (2026-10-12) | `https://grounded-11zh.vercel.app` answered after 30 minutes idle: the cold question took 7.04 s end to end (server 3.29 s), the cold function start about 2.6 s and the Neon wake about 0.7 s; the 10 s margin holds with about 3.3 to 3.75 s used. Both reports, with method, date and idle period, are under "Results" of the [Vercel runbook](vercel-deploy.md#results) |
+| 2 | Rate limit and budget verified manually | **PASS** (2026-10-12) | The Author's manual check through the live frontend: the 6th request of a minute is `429` with `Retry-After`, the 21st of a UTC day is `429` with the seconds to midnight, and a lowered budget refuses a new question with `503 budget_exhausted` before any embedding or LLM call while a cached answer is still served. [Results](#results) |
 | 3 | README numbers are copied from committed eval results, never typed by hand | **PASS** | The two generated blocks of the README are compared with their commands by tests that fail on any drift: `backend/tests/unit/test_eval_report.py::test_the_readme_block_is_the_report_of_the_committed_baselines` (`grounded eval report`, reads only `eval/baselines/*.json`) and `backend/tests/unit/test_agreement_record.py` (`grounded eval agreement`). Every number in the README prose was traced by hand on 2026-10-12: [the audit](#readme-number-audit). Numbers that need the live site are `_TBD_`, not estimated |
-| 4 | All CI workflows green on `main` | **PASS for the three that have run; two have never run** | [Table below](#workflows-on-main-2026-10-12) |
+| 4 | All CI workflows green on `main` | **PASS** (2026-10-12) | All five: [table below](#workflows-on-main-2026-10-12) |
 
 Why criterion 3 is a PASS and not "pending": the criterion is about the origin of numbers, and the
 README contains none that came from anywhere else. What it cannot contain yet (cold start, live
@@ -33,11 +33,11 @@ Read with `gh run list --workflow <file> --limit 3` and, for the eval verdicts, 
 | `ci.yml` | success (run 38220208054, commit `71d4e62` = #100, the newest on `main`, 2026-10-12) | Required checks `backend`, `frontend`, `retrieval-eval`. The run before it (38218904147, `b9ffef8`) was green too |
 | `eval.yml` | success (run 38220207903, commit `71d4e62`, 2026-10-12); gate verdict `pass` | Of the 21 runs on `main` that finished green by 2026-10-12, 15 gated and passed (every one since 2026-10-09) and 6 were `inconclusive` (all on 2026-10-08: the Groq daily quota and Gemini 503 spells). No run on `main` failed; one was cancelled by a newer push. `inconclusive` is a green job and not a pass |
 | `warm-cache.yml` | success (run 37018354661, `workflow_dispatch`, 2026-10-02) | Manual workflow; it ran once |
-| `ingest.yml` | never ran | Manual, writes to Neon production: the Author runs it (Neon runbook steps 3 and 5) |
-| `housekeeping.yml` | never ran | Manual dispatch from `main` works; the daily schedule ships off until the Author sets `HOUSEKEEPING_ENABLED` (Neon runbook step 10) |
+| `ingest.yml` | success (runs 38239256549, `activate=false`, and 38240069936, `activate=true`; `workflow_dispatch` from `93ce37c`, 2026-10-12) | Run by the Author against Neon production, each approved in the `neon-production` environment: migrations `0001`–`0004`, index version 1 (125 documents, 1045 chunks, config `4949e8a3`), then activated |
+| `housekeeping.yml` | success (runs 38254620436, `dry_run=true`, and 38254839430, `dry_run=false`; 2026-10-12) | Both jobs green: retention `Done: 0 rows affected.` (a new database), keep-warm `HTTP 200` on the first try. `HOUSEKEEPING_ENABLED=true` since 2026-10-12 13:19 UTC |
 
-The first green run of `ingest.yml` and `housekeeping.yml` is part of the Author's deployment work, so
-"all workflows green" is observed for three of five and unobservable for the two that touch production.
+Re-read on 2026-10-12 after the rollout: `ci.yml` and `eval.yml` are green on `main` at `93ce37c` (#109;
+eval run 38236327786, gate verdict `pass`).
 
 ## Verify the rate limit and the budget (the Author's manual check)
 
@@ -282,11 +282,28 @@ else. No cold-start, live latency or live cost figure exists yet.
 
 ## Results
 
-_Not done yet. The Author pastes here, each with its date and the method:_
+All on 2026-10-12, by the Author, through `https://grounded-11zh.vercel.app/api/ask`, from PowerShell
+(the forms above) and a phone on mobile data; the SQL as the owner. The question of parts 1 and 2 was
+the cached smoke-test question, so neither part spent quota.
 
-- _Criterion 1: the reports of Vercel runbook step 9 (both orders) are in that runbook's "Results"; link them._
-- _Criterion 2: the outcome of parts 1 to 3 above (what was seen: status codes, `Retry-After`, the SQL results, the date, the client used)._
-- _Criterion 4: `gh run list` after the first green runs of `ingest.yml` and `housekeeping.yml`._
+- **Criterion 1:** the two reports of Vercel runbook step 9 are in [its Results](vercel-deploy.md#results)
+  (13:51 and 14:23 UTC, 30 minutes idle each).
+- **Part 1 (per minute), 14:29 UTC, home network:** requests 1 to 5 `200`, request 6 `429` with
+  `Retry-After: 54`; the next one in the same minute answered
+  `{"error":{"code":"rate_limited","message":"Too many requests. Try again in 52s.","retry_after_s":52},…}`.
+- **Part 2 (per day), 14:30 UTC, same client:** five more `200`, one every 13 seconds, then `429`. Read
+  at 14:31:16 UTC: `Retry-After: 34125` (exactly the seconds to 00:00 UTC) and
+  `"Daily question limit reached. Try again in about 10 h."`. The day counter of that bucket was 22 (20
+  admitted, 2 refused); `request_logs` of the last two hours: `answered | 200 | t` 12, `answered | 200 | f`
+  9, `rate_limited | 429 | f` 4 (two per window).
+- **Part 3 (budget), 14:39 UTC, phone:** today's `llm_calls` was 11, so `DAILY_LLM_BUDGET` was set to 11
+  and production redeployed. A new question showed the budget notice; its row is
+  `budget_exhausted | 503 | f` with `latency_embed_ms`, `latency_llm_ms` and `input_tokens` NULL, and
+  `llm_calls` stayed 11. The cached question was still answered (`answered | 200 | t`). Restored to 300
+  and redeployed; a new question from the phone was answered. A first redeploy hung in Initializing
+  during a Vercel incident ("Increased build and deployment failures", from 13:35 UTC) and then
+  completed.
+- **Criterion 4:** the workflow table above.
 
 ## Closing edits
 
@@ -316,9 +333,9 @@ Nothing below was done in 5.12; each item has its source.
    `internal_error` + `deadline_exceeded` and the eager Gemini adapter: decided by the Author on
    2026-10-12 (PRD D54); the deadline outcome shipped in R.20 (migration `0004`), the timeout in R.21
    (`RETRIEVAL_TIMEOUT_S`).
-2. **Production steps, all the Author's:** the Neon runbook (steps 1 to 10), the Vercel runbook (all),
-   the first dispatch of `housekeeping.yml`, the variables `HOUSEKEEPING_ENABLED` and `EVAL_RECORD_RUNS`
-   (both unset, so retention and the `eval_runs` write are off).
+2. **Production steps:** done on 2026-10-12 ([results](#results)), except the optional ones: Neon
+   runbook step 9 (`EVAL_RECORD_RUNS` stays unset, so the `eval_runs` write is off), Vercel checklist
+   V13 (Fluid compute not checked) and V16 (`cle1` against `iad1`).
 3. **The ask page**: no component-test setup (needs a dev dependency approval), claim confidence is
    beside the prose and not on it, light theme only (PRD §12, 5.07).
 4. **Third-party notice.** The corpus is MIT (the pinned clone's `LICENSE` reads "Copyright (c) 2018
