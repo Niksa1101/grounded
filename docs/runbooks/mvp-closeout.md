@@ -289,8 +289,9 @@ When all four criteria pass, in one PR:
 Nothing below was done in 5.12; each item has its source.
 
 1. **Retrieval stage timeout** (`RETRIEVAL_TIMEOUT_S` proposal) and the deadline row reusing
-   `internal_error` + `deadline_exceeded` and the eager Gemini adapter: the Author's decisions, PRD §12
-   "Open after 5.08".
+   `internal_error` + `deadline_exceeded` and the eager Gemini adapter: decided by the Author on
+   2026-10-12 (PRD D54); the deadline outcome shipped in R.20 (migration `0004`), the timeout follows
+   in R.21.
 2. **Production steps, all the Author's:** the Neon runbook (steps 1 to 10), the Vercel runbook (all),
    the first dispatch of `housekeeping.yml`, the variables `HOUSEKEEPING_ENABLED` and `EVAL_RECORD_RUNS`
    (both unset, so retention and the `eval_runs` write are off).

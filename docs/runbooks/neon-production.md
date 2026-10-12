@@ -5,7 +5,7 @@ Ticket 5.09. **The Author runs every step below.** An agent writes this file and
 (AGENTS.md §5, §11). Commands are copy-pasteable, one per block, and meant for Git Bash, Linux or
 macOS. Never paste a password or a connection string into a file, a commit, a PR or a chat.
 
-What you end up with: the schema (migrations `0001`–`0003`) in the Neon `production` branch, an
+What you end up with: the schema (migrations `0001`–`0004`) in the Neon `production` branch, an
 active index version, a least-privilege `app` role whose **pooled** URL is Vercel's `DATABASE_URL`,
 and proof that `app` can do what the runtime needs and nothing more.
 
@@ -114,7 +114,7 @@ gh run watch
 ```
 
 In the run: the preflight step says how many texts the cache lacks (expect `0 texts to embed`), the
-migrate step lists `0001_init`, `0002_index_integrity` and `0003_rate_limit` as applied, the ingest
+migrate step lists `0001_init`, `0002_index_integrity`, `0003_rate_limit` and `0004_deadline_outcome` as applied, the ingest
 step ends with `Stored index version N (ready).` and `Active: no`, and the job summary shows the
 index versions table. The host of the connection string is masked in the log.
 
@@ -452,7 +452,7 @@ Tick each box as you do it; the acceptance criteria of ticket 5.09 are the last 
 - [ ] `DATABASE_URL_DIRECT` secret set (direct URL, owner role); `GEMINI_API_KEY` present
 - [ ] Environment `neon-production` with a required reviewer (recommended)
 - [ ] Embeddings cache is warm (`gh cache list --key embeddings-`)
-- [ ] `ingest.yml` run with `activate=false`: three migrations applied, a `ready` version, `docs`/`chunks` plausible
+- [ ] `ingest.yml` run with `activate=false`: four migrations applied, a `ready` version, `docs`/`chunks` plausible
 - [ ] `grounded golden validate … --against-index` passes against Neon
 - [ ] `ingest.yml` run with `activate=true`: one active version
 - [ ] `app` role created with SQL, grants applied, password set from a `psql` variable (`ALTER ROLE app PASSWORD :'app_password'`) and kept in the secret manager
