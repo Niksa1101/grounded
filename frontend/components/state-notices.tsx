@@ -27,8 +27,8 @@ function RequestId({ id }: { id: string | null }) {
 }
 
 /**
- * Ticks once a second while a wait of at most an hour is left; past that the page says "try again
- * tomorrow" (lib/countdown.ts). `onDone` (it must be stable) fires once when the wait is over so
+ * Ticks once a second while a wait of at most an hour is left; past that the page says the day's
+ * limit is used up and resets at 00:00 UTC, like the budget notice (lib/countdown.ts). `onDone` (it must be stable) fires once when the wait is over so
  * the form can unlock.
  * Only the visible digits tick: they are aria-hidden, and a static sentence carries the wait, so a
  * screen reader hears it once instead of every second.
@@ -78,7 +78,9 @@ export function RateLimitedNotice({
         )}
         {display.mode === "countdown" && left === 0 && <p className="mt-1">You can ask again now.</p>}
         {display.mode === "tomorrow" && (
-          <p className="mt-1">Today&apos;s question limit is used up. Please try again tomorrow.</p>
+          <p className="mt-1">
+            Today&apos;s question limit (per UTC day) is used up. It resets at 00:00 UTC.
+          </p>
         )}
         <RequestId id={requestId} />
       </AlertDescription>

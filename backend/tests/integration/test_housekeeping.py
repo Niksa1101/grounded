@@ -206,6 +206,7 @@ def test_a_dry_run_reports_the_real_counts_and_changes_nothing(db: str) -> None:
     assert counts(run_housekeeping(db)) == EXPECTED_FIRST_RUN  # and the real run agrees
 
 
+@pytest.mark.usefixtures("cli")
 def test_a_failing_rule_rolls_every_rule_back(db: str, monkeypatch: pytest.MonkeyPatch) -> None:
     seed(db)
     broken = Rule("broken", "DELETE FROM no_such_table", {})
@@ -215,6 +216,16 @@ def test_a_failing_rule_rolls_every_rule_back(db: str, monkeypatch: pytest.Monke
         run_housekeeping(db)
 
     assert snapshot(db) == SEEDED  # the five good rules before it were not committed
+
+    # The command says what failed by type and SQLSTATE only: the driver's message (here the
+    # table name; elsewhere row data or the connection target) stays out of the CI log.
+    result = runner.invoke(app, ["housekeeping"])
+    assert result.exit_code == 1
+    assert (
+        "Housekeeping failed, nothing was changed: UndefinedTable (SQLSTATE 42P01)" in result.output
+    )
+    assert "no_such_table" not in result.output
+    assert snapshot(db) == SEEDED
 
 
 def test_telemetry_that_is_not_user_text_survives_the_text_removal(db: str) -> None:

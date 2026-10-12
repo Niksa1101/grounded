@@ -18,11 +18,12 @@ without waiting. The window boundaries are UTC regardless of the session time zo
 (Tech §12). The limiter does not fail open: the request path needs the database anyway, and a
 limiter that quietly stops limiting when the database misbehaves is a way around the budget.
 
-**No client key, no limit.** ``ip_hash`` is ``None`` only when ``IP_HASH_SECRET`` is unset, which
+**No hash key, no limit.** ``ip_hash`` is ``None`` only when ``IP_HASH_SECRET`` is unset, which
 ``Settings`` refuses in prod (``api/security.py``): a developer's machine or a test. There is no
 honest key to count under (one shared bucket would make every local ``curl`` and every test share
 a quota), so such a request is admitted. The app logs a warning at startup when this applies
-(``main.py``).
+(``main.py``). With the key set, a request without any client IP is not keyless: it is counted
+under ``hash_ip("unknown")``, one bucket shared by all such requests (PRD D54e).
 
 **Eval mode never gets a limiter** (``runtime.py``): a 30-question run from one process must not
 be answered with our own 429 (Tech §15.6).

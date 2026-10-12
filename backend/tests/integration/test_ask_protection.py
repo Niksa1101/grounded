@@ -7,6 +7,8 @@ the order of the checks, the 429 and its header, the log row, and the eval switc
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime
@@ -218,6 +220,18 @@ async def test_different_clients_have_their_own_limit(db: str) -> None:
         assert [(await ask(first)).status_code for _ in range(6)][-1] == 429
     async with app_client(limited(db), client=("198.51.100.77", 1), wall_clock=clock()) as other:
         assert (await ask(other)).status_code == 200
+
+
+async def test_requests_without_any_client_ip_share_one_bucket(db: str) -> None:
+    # D54e: no X-Client-IP and no socket peer, with IP_HASH_SECRET set, is hash_ip("unknown").
+    settings = limited(db, rate_limit_per_min=1)
+    async with app_client(settings, no_peer=True, wall_clock=clock()) as first:
+        assert (await ask(first)).status_code == 200
+    async with app_client(settings, no_peer=True, wall_clock=clock()) as second:
+        assert (await ask(second)).status_code == 429  # the same bucket as the first request
+
+    unknown = hmac.new(IP_KEY.encode(), b"unknown", hashlib.sha256).hexdigest()
+    assert [r["ip_hash"] for r in rows(db)] == [unknown, unknown]
 
 
 async def test_without_a_client_key_nothing_is_limited(db: str) -> None:

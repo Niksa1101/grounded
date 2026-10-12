@@ -27,12 +27,12 @@
   504 to `upstream_timeout`. This corrects the rationale only; the D53 values do not change.
 
 **Acceptance criteria**
-- [ ] `test_proxy_auth.py`: `test_without_a_peer_or_a_client_ip_there_is_no_hash` becomes "…share the unknown
+- [x] `test_proxy_auth.py`: `test_without_a_peer_or_a_client_ip_there_is_no_hash` becomes "…share the unknown
       bucket" (`== expected_hash("unknown")`); without the key the hash stays `None`.
-- [ ] Integration test: two keyless requests count in one bucket.
-- [ ] A `renderToStaticMarkup` test of the "tomorrow" notice (like `answer-view.test.tsx`).
-- [ ] `lib/ask-proxy.test.ts`: an oversized `content-length` gives 422 and the body is not read.
-- [ ] The failing-rule housekeeping test checks that only the type and `sqlstate` are printed.
+- [x] Integration test: two keyless requests count in one bucket.
+- [x] A `renderToStaticMarkup` test of the "tomorrow" notice (like `answer-view.test.tsx`).
+- [x] `lib/ask-proxy.test.ts`: an oversized `content-length` gives 422 and the body is not read.
+- [x] The failing-rule housekeeping test checks that only the type and `sqlstate` are printed.
 
 **Verify:** standard checks plus the frontend checks (`npm run lint && npm run typecheck && npm test && npm run build`).
 

@@ -15,6 +15,9 @@ platform's forwarded-for header). So the two headers are trusted together or not
 dropped, so nothing downstream (logs, the ``request_logs`` row, the rate limiter of 5.04) can leak
 it. Without ``IP_HASH_SECRET`` (dev and test only; prod refuses to start without it) there is
 nothing to key the HMAC with, and the hash is ``None``: no hash is better than an unkeyed one.
+With the key, a request that has no client IP at all (no usable ``X-Client-IP`` and no socket
+peer) is hashed as the sentinel ``"unknown"`` (PRD D54e): all such requests share one bucket of
+the rate limiter, which is strict, never unlimited.
 
 ``authenticate`` runs before ``AskRoute`` starts the request trace, so a rejected request writes no
 ``request_logs`` row (``unauthorized`` is not an outcome in DB.md §4: unauthenticated callers must
@@ -41,6 +44,9 @@ logger = logging.getLogger(__name__)
 
 PROXY_SECRET_HEADER = "X-Proxy-Secret"
 CLIENT_IP_HEADER = "X-Client-IP"
+# What a request with no client IP at all is hashed as (D54e). Not an address, so it can never be
+# the hash of a real visitor.
+UNKNOWN_CLIENT = "unknown"
 
 
 class ProxyAuthError(Exception):
@@ -111,6 +117,8 @@ def authenticate(request: Request, settings: Settings | None = None) -> ClientId
 
     secret = settings.ip_hash_secret
     ip_hash = None
-    if ip is not None and secret is not None and secret.get_secret_value():
-        ip_hash = hash_ip(ip, secret.get_secret_value().encode())
+    if secret is not None and secret.get_secret_value():
+        ip_hash = hash_ip(
+            ip if ip is not None else UNKNOWN_CLIENT, secret.get_secret_value().encode()
+        )
     return ClientIdentity(source="web" if proxied else "api", ip_hash=ip_hash)

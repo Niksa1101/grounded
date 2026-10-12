@@ -85,13 +85,15 @@ async def app_client(
     client: tuple[str, int] | None = None,
     direct_api: bool = True,
     wall_clock: Callable[[], datetime] | None = None,
+    no_peer: bool = False,
 ) -> AsyncGenerator[httpx.AsyncClient]:
     """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client.
 
     The embedder and provider default to fakes, so no test builds a real one. A real server turns an
     unhandled error into a 500 response; pass ``raise_app_exceptions=False`` to see that here
     instead of having the exception re-raised in the test. ``client`` is the socket peer the app
-    sees (``request.client``). ``direct_api`` lets a test call ``/v1/*`` without the proxy headers
+    sees (``request.client``); ``no_peer`` gives the app none at all (``request.client`` is
+    ``None``). ``direct_api`` lets a test call ``/v1/*`` without the proxy headers
     (``ALLOW_DIRECT_API``, 5.03); the tests of the proxy check itself pass ``False`` to use the
     settings as given.
     """
@@ -104,9 +106,16 @@ async def app_client(
         clock=clock,
         wall_clock=wall_clock,
     )
+    asgi: Any = app
+    if no_peer:
+
+        async def without_peer(scope: dict[str, Any], receive: Any, send: Any) -> None:
+            await app({**scope, "client": None}, receive, send)
+
+        asgi = without_peer
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(
-            app=app, raise_app_exceptions=raise_app_exceptions, client=client or ("127.0.0.1", 123)
+            app=asgi, raise_app_exceptions=raise_app_exceptions, client=client or ("127.0.0.1", 123)
         )
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as http:
             yield http

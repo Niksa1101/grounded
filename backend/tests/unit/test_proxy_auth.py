@@ -180,9 +180,15 @@ def test_without_an_ip_hash_secret_there_is_no_hash() -> None:
     assert authenticate(request_with(headers), blank).ip_hash is None
 
 
-def test_without_a_peer_or_a_client_ip_there_is_no_hash() -> None:
+def test_without_a_peer_or_a_client_ip_requests_share_the_unknown_bucket() -> None:
+    # D54e: strict, never unlimited. Direct (no secret) and proxied alike.
     config = settings(allow_direct_api=True)
-    assert authenticate(request_with({}, peer=None), config).ip_hash is None
+    assert authenticate(request_with({}, peer=None), config).ip_hash == expected_hash("unknown")
+    proxied = request_with({"X-Proxy-Secret": SECRET}, peer=None)
+    assert authenticate(proxied, config).ip_hash == expected_hash("unknown")
+    # Without the key (dev and test only) there is still no hash at all.
+    keyless = settings(allow_direct_api=True, ip_hash_secret=None)
+    assert authenticate(request_with({}, peer=None), keyless).ip_hash is None
 
 
 def test_hash_ip_is_a_keyed_hmac_sha256() -> None:

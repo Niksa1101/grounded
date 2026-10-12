@@ -459,7 +459,12 @@ def housekeeping(
     try:
         results = run_housekeeping(conninfo, dry_run=dry_run)
     except psycopg.Error as exc:
-        raise _fail(f"Housekeeping failed, nothing was changed: {exc}") from exc
+        # Type and SQLSTATE only, like infra/budget.py: the message may quote row data or the
+        # connection target, and this output lands in a CI log.
+        code = f" (SQLSTATE {exc.sqlstate})" if exc.sqlstate else ""
+        raise _fail(
+            f"Housekeeping failed, nothing was changed: {type(exc).__name__}{code}"
+        ) from exc
     for line in render_results(results, dry_run=dry_run):
         typer.echo(line)
 
