@@ -6,7 +6,7 @@ The eval harness that gates quality-affecting PRs (see [docs/Tech.md](../docs/Te
 |---|---|---|
 | `golden/` | versioned golden set (`golden_set.vN.jsonl`) and the labeling guide | Phase 1 |
 | `baselines/` | committed baseline metrics; changed only by an `eval: update baseline (<reason>)` PR | Phase 1 (retrieval), Phase 4 (generation) |
-| `promptfoo/` | generation eval: `promptfooconfig.yaml` and three thin shims (`provider.py`, `asserts.py`, `tests_loader.py`) over `backend/src/grounded/evals/promptfoo_*.py`, which is where the code is linted, type-checked and tested | Phase 4 (4.05, 4.06) |
+| `promptfoo/` | generation eval: `promptfooconfig.yaml` (what CI runs), `promptfooconfig.rerank.yaml` (`hybrid_rerank`, by hand only) and three thin shims (`provider.py`, `asserts.py`, `tests_loader.py`) over `backend/src/grounded/evals/promptfoo_*.py`, which is where the code is linted, type-checked and tested | Phase 4 (4.05, 4.06), Phase 6 (6.04) |
 | `judge_agreement/` | the judge-human agreement sheet (the Author's labels) and how it was drawn | Phase 4 (4.11) |
 | `results/` | run outputs, **gitignored** | — |
 
@@ -44,6 +44,18 @@ PowerShell, the CI form, the flags, what each variable is for and the result for
   `backend/tests/fixtures/promptfoo/`. A judge component that is `errored` has no score (the judge could not grade the
   case): leave it out of every mean, like a not-applicable one.
 - The golden set is never edited by this run; `tests_loader.py` only reads it.
+
+## Running `hybrid_rerank` (by hand, Phase 6)
+
+The reranked configuration is never run in CI: it spends the Cohere Trial key (1,000 calls a month, 10 Rerank
+requests a minute, 150 calls for the whole phase) and its baseline rows have no thresholds (PRD D55). The retrieval
+eval takes `--config hybrid_rerank` next to `hybrid` (Tech §15.2), and the generation eval has its own config file,
+`eval/promptfoo/promptfooconfig.rerank.yaml`, with the same tests and assertions, run with the command above and
+`-c eval/promptfoo/promptfooconfig.rerank.yaml` (Tech §15.3). Both need `RERANK_PROVIDER=cohere`, `COHERE_API_KEY`
+and `RERANK_MODEL` in `.env`; the first promptfoo config needs `RERANK_PROVIDER` to be `none`. Live Cohere calls are
+paced `EVAL_RERANK_MIN_INTERVAL_S` apart and cached in `.cache/rerank.sqlite`; a reranker error ends the retrieval
+run (exit 3, nothing written) and makes `grounded eval baseline` refuse the row. The steps, in order, with what to
+type and what to do when it fails: [docs/runbooks/rerank-eval.md](../docs/runbooks/rerank-eval.md).
 
 ## In CI (`eval.yml`)
 

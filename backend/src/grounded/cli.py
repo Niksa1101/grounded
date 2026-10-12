@@ -11,7 +11,7 @@ import json
 import sys
 import time
 from collections.abc import Coroutine
-from contextlib import AbstractAsyncContextManager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
@@ -95,6 +95,7 @@ from grounded.evals.report import build_report
 from grounded.evals.retrieval_runner import (
     RETRIEVAL_BASELINE,
     BaselineMismatchError,
+    RerankRunError,
     RetrievalEvalError,
     golden_set_digest,
     golden_set_version,
@@ -103,6 +104,7 @@ from grounded.evals.retrieval_runner import (
     read_run,
     repo_state,
     results_path,
+    retrieval_configs,
     run_retrieval_eval,
     update_baseline,
     write_run,
@@ -152,11 +154,12 @@ from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
 from grounded.main import create_app
 from grounded.observability.request_log import RequestTrace
-from grounded.retrieval.config import RetrievalConfig, RetrievalMode
+from grounded.retrieval.config import RetrievalMode
 from grounded.retrieval.index import NoActiveIndexError
-from grounded.runtime import ProviderConfigError, open_judge, open_runtime
+from grounded.retrieval.rerank import Reranker
+from grounded.runtime import ProviderConfigError, build_reranker, open_judge, open_runtime
 from grounded.schemas.api import AskRequest, AskResponse
-from grounded.schemas.eval import GoldenItem
+from grounded.schemas.eval import GoldenItem, RetrievalRun
 from grounded.schemas.judge_agreement import AgreementKey
 from grounded.settings import Settings, get_settings
 
@@ -485,6 +488,9 @@ def _fail(message: str) -> typer.Exit:
 # a result about quality. 1 stays the plain failure and 2 is click's usage error (and the gate's
 # "could not run"), so neither can be confused with it.
 EXIT_EMBEDDINGS_UNAVAILABLE = 3
+# The same code for the reranker (6.04): a `hybrid_rerank` run that the provider cut short (a 429, a
+# timeout, a 5xx, a rejected key or model) is not a quality result either, and nothing is written.
+EXIT_RERANK_UNAVAILABLE = EXIT_EMBEDDINGS_UNAVAILABLE
 
 
 def _embeddings_unavailable(message: str) -> typer.Exit:
@@ -739,7 +745,8 @@ def eval_retrieval(
         list[str] | None,
         typer.Option(
             "--config",
-            help="Retrieval mode to score (repeatable): dense, fts or hybrid.",
+            help="Retrieval mode to score (repeatable): dense, fts, hybrid or hybrid_rerank "
+            "(by hand: needs RERANK_PROVIDER=cohere, uses Cohere quota; never in CI).",
             show_default=False,
         ),
     ] = None,
@@ -764,7 +771,12 @@ def eval_retrieval(
         ),
     ] = None,
 ) -> None:
-    """Score retrieval on the golden set's answerable questions: Recall@k, MRR, nDCG@k."""
+    """Score retrieval on the golden set's answerable questions: Recall@k, MRR, nDCG@k.
+
+    hybrid_rerank reranks the hybrid candidates with Cohere, paced to the Trial limit and cached
+    (Tech.md §8, §15.2). Any reranker error ends the run: nothing is scored on the RRF order, and
+    nothing is written (exit 3).
+    """
     settings = get_settings()
     configure_logging(settings.log_level)
     modes = _retrieval_modes(config or ["dense"])
@@ -788,19 +800,30 @@ def eval_retrieval(
         # Query vectors are cached like chunk vectors (Tech.md §11), so a re-run is free, and
         # with every vector cached no API key is needed.
         embedder = CachedEmbedder(gemini, cache, write_every=settings.embedding_batch_size)
-        try:
-            run = _run_async(
-                run_retrieval_eval(
+
+        async def evaluate_all() -> RetrievalRun:
+            async with AsyncExitStack() as stack:
+                # Built before anything is embedded: a hybrid_rerank run with no provider, key or
+                # model fails here, with the variable named, and costs no quota.
+                reranker = _eval_reranker(settings, stack, modes)
+                return await run_retrieval_eval(
                     conninfo,
                     items,
-                    configs=[RetrievalConfig.from_settings(settings, mode) for mode in modes],
+                    configs=retrieval_configs(settings, modes),
                     embedder=embedder,
                     golden_set_version=version,
                     golden_set_sha256=digest,
                     now=now,
                     repo=repo_state(),
+                    reranker=reranker,
                 )
-            )
+
+        try:
+            run = _run_async(evaluate_all())
+        except ProviderConfigError as exc:
+            raise _fail(f"Eval failed: {exc}") from exc
+        except RerankRunError as exc:
+            raise _rerank_stopped(exc) from exc
         except (RetrievalEvalError, NoActiveIndexError) as exc:
             raise _fail(f"Eval failed: {exc}") from exc
         except EmbedderUnavailableError as exc:
@@ -825,10 +848,22 @@ def eval_retrieval(
         f"{embedder.misses} questions embedded, {embedder.hits} from cache"
     )
     names = metric_names()
-    typer.echo(f"{'config':<8} {'n':>3} {'k':>3}  " + "  ".join(f"{m:>9}" for m in names))
+    typer.echo(f"{'config':<13} {'n':>3} {'k':>3}  " + "  ".join(f"{m:>9}" for m in names))
     for result in run.configs.values():
         values = "  ".join(f"{result.metrics[m]:>9.3f}" for m in names)
-        typer.echo(f"{result.config:<8} {result.n:>3} {result.k:>3}  {values}")
+        typer.echo(f"{result.config:<13} {result.n:>3} {result.k:>3}  {values}")
+    for result in run.configs.values():
+        if result.rerank is not None:
+            stats = result.rerank
+            latency = (
+                f"live latency p50 {stats.latency_p50_ms:.0f} / p95 {stats.latency_p95_ms:.0f} ms"
+                if stats.latency_p50_ms is not None and stats.latency_p95_ms is not None
+                else "no live call, so no latency"
+            )
+            typer.echo(
+                f"Rerank {stats.model}: {stats.live_calls} live calls, {stats.cache_hits} from "
+                f"the rerank cache; {latency}"
+            )
     skipped = next(iter(run.configs.values())).skipped_unanswerable
     typer.echo(f"Skipped {skipped} unanswerable questions (not scored).")
 
@@ -847,7 +882,47 @@ def eval_retrieval(
         typer.echo(f"Baseline updated: {RETRIEVAL_BASELINE} ({', '.join(run.configs)})")
 
 
-_RETRIEVAL_MODES: tuple[RetrievalMode, ...] = ("dense", "fts", "hybrid")
+_RETRIEVAL_MODES: tuple[RetrievalMode, ...] = ("dense", "fts", "hybrid", "hybrid_rerank")
+
+
+def _eval_reranker(
+    settings: Settings, stack: AsyncExitStack, modes: list[RetrievalMode]
+) -> Reranker | None:
+    """The paced, cached Cohere reranker if a `hybrid_rerank` run was asked for, else ``None``.
+
+    ``RERANK_PROVIDER=none`` is an error here and not a quiet `hybrid`: a result labeled
+    `hybrid_rerank` that did not rerank would be a wrong number (Tech §15.2).
+    """
+    if "hybrid_rerank" not in modes:
+        return None
+    reranker = build_reranker(settings, stack, paced=True)
+    if reranker is None:
+        raise RetrievalEvalError(
+            "hybrid_rerank needs RERANK_PROVIDER=cohere (with COHERE_API_KEY and RERANK_MODEL) in "
+            ".env; it never falls back to hybrid"
+        )
+    return reranker
+
+
+def _rerank_stopped(exc: RerankRunError) -> typer.Exit:
+    """The run ends on a reranker error: say which question and which code, never wait or retry."""
+    hint = ""
+    if isinstance(exc.error, ProviderRateLimited):
+        wait = exc.error.retry_after_s
+        asked = f"Cohere asked to wait {wait:g}s; " if wait is not None else ""
+        hint = (
+            f" {asked}the run does not wait out a limit (raise EVAL_RERANK_MIN_INTERVAL_S and run "
+            "it again)."
+        )
+    elif exc.code == "rejected":
+        hint = " Check COHERE_API_KEY and RERANK_MODEL (docs/runbooks/rerank-eval.md)."
+    typer.echo(
+        f"Eval stopped: {exc}.{hint} Nothing was scored or written: a question ranked in the RRF "
+        "order would be a hybrid number under another name. The questions reranked so far are in "
+        "the rerank cache, so a re-run does not call Cohere for them again.",
+        err=True,
+    )
+    return typer.Exit(code=EXIT_RERANK_UNAVAILABLE)
 
 
 def _retrieval_modes(names: list[str]) -> list[RetrievalMode]:

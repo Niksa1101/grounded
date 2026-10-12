@@ -78,6 +78,12 @@ class GenerationCase(BaseModel):
     error: ErrorInfo | None = None
     metrics: dict[str, MetricResult] = Field(default_factory=dict)
     cold_start: bool = False  # first call of a worker: pays for the pool and the embedder
+    # What the pipeline's trace said about the rerank stage (6.03, Tech §8): ``rerank_used`` is true
+    # only when the reranked order built the context; ``rerank_error`` is the code of a degradation
+    # (the RRF order stood). ``None``: the file does not say (a run from before 6.03, or one that
+    # failed before the stage). A ``hybrid_rerank`` row is never written from a degraded case.
+    rerank_used: bool | None = None
+    rerank_error: str | None = None
     llm_cache_hits: int = Field(default=0, ge=0)  # > 0: a replayed reply, no provider latency
     latency_ms: float | None = None  # the pipeline's own total; graded cases only
     input_tokens: int = Field(default=0, ge=0)

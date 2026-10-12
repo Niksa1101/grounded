@@ -71,6 +71,8 @@ class _RowMetadata(_Wire):
     golden: _Golden
     cold_start: bool = False
     llm_cache_hits: int = 0
+    rerank_used: bool | None = None  # success and error rows alike (6.03); absent before it
+    rerank_error: str | None = None
     provider: str | None = None
     model: str | None = None
     prompt_version: str | None = None
@@ -232,6 +234,8 @@ def _case(label: str, row: _Row) -> GenerationCase:
         "id": md.golden.id,
         "type": md.golden.type,
         "cold_start": md.cold_start,
+        "rerank_used": md.rerank_used,
+        "rerank_error": md.rerank_error,
         "llm_cache_hits": md.llm_cache_hits,
         "input_tokens": usage.prompt,
         "output_tokens": usage.completion,

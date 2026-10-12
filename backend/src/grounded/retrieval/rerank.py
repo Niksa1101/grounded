@@ -9,7 +9,11 @@ input order), so the three implementations share the ranking and the argument ch
 - ``FakeReranker``: scripted scores or errors, for tests (pytest never reaches Cohere);
 - ``CachedReranker``: stores the scores of a call in ``.cache/rerank.sqlite`` and replays them, so
   a manual eval re-run makes no call. Dev and eval only: ``runtime.build_reranker`` does not put
-  it in front of the adapter in prod, where the answer cache already covers repeats.
+  it in front of the adapter in prod, where the answer cache already covers repeats;
+- ``PacedReranker``: eval harness only (6.04). Waits so that two LIVE calls are at least
+  ``EVAL_RERANK_MIN_INTERVAL_S`` apart (the Trial key allows 10 a minute) and records how many
+  calls were made and how long each took. It wraps the adapter *inside* the cache, so a cache hit
+  never reaches it. The request path never builds one: it must not sleep (AGENTS.md §6.12).
 
 **``top_n`` is ours, not Cohere's.** The adapter sends every candidate and no ``top_n`` (Cohere then
 returns all of them), and ``rank_chunks`` cuts the list. So the cache entry, which has no ``top_n``
@@ -36,6 +40,7 @@ import hashlib
 import json
 import logging
 import math
+import time
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Awaitable, Callable, Sequence
@@ -117,6 +122,12 @@ class ScoringReranker(ABC):
 
     def __init__(self, model: str) -> None:
         self.model = model
+
+    @property
+    def pacing_allowance_s(self) -> float:
+        """Seconds a call may spend waiting for its turn before it is made (``PacedReranker``).
+        The pipeline widens its stage timeout by this much; no other reranker waits for anything."""
+        return 0.0
 
     async def scores(self, query: str, chunks: Sequence[RetrievedChunk]) -> list[float]:
         """One relevance score in ``[0, 1]`` per chunk, in input order. No chunks, no call."""
@@ -394,6 +405,14 @@ class CachedReranker(ScoringReranker):
         self.hits = 0
         self.misses = 0
 
+    @property
+    def inner(self) -> ScoringReranker:
+        return self._inner
+
+    @property
+    def pacing_allowance_s(self) -> float:
+        return self._inner.pacing_allowance_s  # a miss reaches it, so a miss may wait that long
+
     async def _scores(self, query: str, chunks: Sequence[RetrievedChunk]) -> list[float]:
         key = rerank_cache_key(self.model, query, chunks)
         stored = (await asyncio.to_thread(self._cache.get_many, [key])).get(key)
@@ -423,3 +442,100 @@ class CachedReranker(ScoringReranker):
             )
             return None
         return scores
+
+
+# --- Eval pacing and metering ---------------------------------------------------------------------
+
+type Sleep = Callable[[float], Awaitable[None]]
+
+
+class PacedReranker(ScoringReranker):
+    """Spaces the LIVE calls of ``inner`` and meters them. Eval harness only (6.04, Tech §8).
+
+    The Trial key allows 10 Rerank requests a minute, so a call waits until ``min_interval_s`` have
+    passed since the *start* of the previous live call (a call that failed counts: it was a request
+    Cohere saw). ``min_interval_s=0`` never waits and still meters.
+
+    **Where it sits.** Between the cache and the adapter:
+    ``CachedReranker(PacedReranker(adapter))``. The cache asks its inner reranker only on a miss,
+    so a hit is neither delayed nor counted, and ``live_calls`` / ``latencies_ms`` are exactly the
+    requests that reached Cohere. A pacer in front of the cache could not tell a hit from a miss
+    before it had waited.
+
+    **The wait is the caller's to allow for.** It happens inside ``rerank()``, so a stage timeout
+    around that call would count it: the pipeline widens its ``RERANK_TIMEOUT_S`` scope by
+    ``pacing_allowance_s`` (the adapter keeps its own strict timeout on the call itself). The
+    request path never builds a pacer; it must not sleep (AGENTS.md §6.12).
+
+    The clock and the sleep are injected so tests need no real time.
+    """
+
+    def __init__(
+        self,
+        inner: ScoringReranker,
+        *,
+        min_interval_s: float,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Sleep = asyncio.sleep,
+    ) -> None:
+        if min_interval_s < 0:
+            raise ValueError("min_interval_s must be >= 0")
+        super().__init__(inner.model)
+        self._inner = inner
+        self._min_interval_s = min_interval_s
+        self._clock = clock
+        self._sleep = sleep
+        self._turn = asyncio.Lock()  # one live call at a time: the slot is taken under it
+        self._next_start: float | None = None
+        self.live_calls = 0
+        self.latencies_ms: list[float] = []  # of the calls that returned, in call order
+
+    @property
+    def pacing_allowance_s(self) -> float:
+        return self._min_interval_s
+
+    async def _scores(self, query: str, chunks: Sequence[RetrievedChunk]) -> list[float]:
+        async with self._turn:
+            if self._next_start is not None:
+                wait = self._next_start - self._clock()
+                if wait > 0:
+                    await self._sleep(wait)
+            started = self._clock()
+            self._next_start = started + self._min_interval_s
+            self.live_calls += 1
+            scores = await self._inner.scores(query, chunks)
+            self.latencies_ms.append((self._clock() - started) * 1000.0)
+            return scores
+
+
+def pacing_allowance_s(reranker: Reranker) -> float:
+    """What ``reranker`` may spend waiting for its turn (0 for one that never waits). The
+    ``Reranker`` protocol does not have it: it belongs to the eval pacer and the cache over it."""
+    allowance: object = getattr(reranker, "pacing_allowance_s", 0.0)
+    return float(allowance) if isinstance(allowance, int | float) else 0.0
+
+
+@dataclass(frozen=True)
+class RerankUsage:
+    """What a run asked of the reranker: requests that reached Cohere and answers replayed from
+    the cache. ``latencies_ms`` are the live calls that returned, in call order."""
+
+    live_calls: int
+    cache_hits: int
+    latencies_ms: tuple[float, ...]
+
+
+def rerank_usage(reranker: Reranker) -> RerankUsage | None:
+    """Read the counters of the eval layers (a cache over a pacer, either one alone). ``None`` for
+    a reranker that has neither: nothing was counted, so nothing is claimed."""
+    layer: object = reranker
+    hits = 0
+    live: int | None = None
+    if isinstance(layer, CachedReranker):
+        hits, live, layer = layer.hits, layer.misses, layer.inner
+    latencies: tuple[float, ...] = ()
+    if isinstance(layer, PacedReranker):
+        live, latencies = layer.live_calls, tuple(layer.latencies_ms)
+    if live is None:
+        return None
+    return RerankUsage(live_calls=live, cache_hits=hits, latencies_ms=latencies)

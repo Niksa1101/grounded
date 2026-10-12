@@ -92,12 +92,27 @@ class RetrievalQuestionResult(BaseModel):
     retrieved: list[str]  # section_id of each retrieved chunk, rank 1 first
 
 
+class RerankRunStats(BaseModel):
+    """What a ``hybrid_rerank`` run asked of the reranker (6.04): the requests that reached Cohere,
+    the answers replayed from the rerank cache, and the latency of the live ones (nearest-rank
+    percentiles over the calls that returned; ``None`` when there were none, e.g. a run that was
+    answered entirely from the cache). The lift analysis and the cost sentence of 6.05 read it."""
+
+    model_config = _FROZEN
+
+    model: str
+    live_calls: int = Field(ge=0)
+    cache_hits: int = Field(ge=0)
+    latency_p50_ms: float | None = Field(default=None, ge=0)
+    latency_p95_ms: float | None = Field(default=None, ge=0)
+
+
 class RetrievalConfigResult(BaseModel):
     """Every answerable question run through one retrieval mode, and the means over them."""
 
     model_config = _FROZEN
 
-    config: str  # retrieval mode: "dense" (Phase 2 adds "fts", "hybrid")
+    config: str  # retrieval mode: "dense", "fts", "hybrid" or "hybrid_rerank"
     # The settings that produced the rows, and their hash: two results are only comparable when
     # this says they ran the same retrieval.
     retrieval_config: RetrievalConfig
@@ -107,6 +122,8 @@ class RetrievalConfigResult(BaseModel):
     skipped_unanswerable: int = Field(ge=0)
     metrics: dict[str, float]  # mean over the n questions
     questions: list[RetrievalQuestionResult]
+    # Only a config that reranked has it (6.04); a results file or row from before it has none.
+    rerank: RerankRunStats | None = None
 
     @model_validator(mode="after")
     def _check_config(self) -> Self:

@@ -24,6 +24,11 @@ and a later gate row of the same results are the same numbers by construction.
   config, written together.
 - *Known git state.* ``git_sha`` is the repository's HEAD when the baseline is written, so write it
   from the checkout that ran the eval, before committing anything else.
+- *A reranked row is made of reranked cases (6.04).* A ``hybrid_rerank`` row is refused when any of
+  its cases has ``rerank_used`` false or a ``rerank_error``: that case was answered from the RRF
+  order, so the run does not measure the reranker, however well it scored (a degraded run is not a
+  result, Tech §8). The other way round, any other config with a case that used a reranker is
+  refused: it is not the plain ``hybrid`` or ``no_rag`` row its name says.
 
 **Thresholds are policy, not measurements.** A ``hybrid`` row written for the first time gets
 ``INITIAL_THRESHOLDS`` (Tech §15.5, approved by the Author in the baseline PR); every other new row
@@ -33,7 +38,7 @@ are: the file is the source of truth afterwards, as for retrieval.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -60,6 +65,9 @@ from grounded.schemas.generation_eval import (
 # The config whose row is gated: the system as users meet it. ``no_rag`` is the comparison it is
 # measured against and is only reported.
 GATED_CONFIG: Final = "hybrid"
+# The config answered from the reranker's order (6.04). Its row is reported only, like ``no_rag``:
+# no thresholds (PRD D55), and no case in which the reranker did not run (``_rerank_problems``).
+RERANK_CONFIG: Final = "hybrid_rerank"
 
 # Tech.md §15.5, "Initial thresholds": the rules a first ``hybrid`` row starts with. They are
 # written into the baseline file, which is the source of truth from then on (a later write keeps
@@ -117,12 +125,23 @@ def update_generation_baseline(path: Path, run: GenerationRun) -> BaselineUpdate
         ) from exc
 
     unscored = [line for summary in report.configs for line in _run_problems(summary)]
-    if unscored:
-        raise GenerationBaselineError(
-            "the run is not fully scored; a baseline must come from one that is. Re-run the eval "
-            "(the eval cache replays what was already paid for):\n"
-            + "\n".join(f"- {line}" for line in unscored)
-        )
+    degraded = _rerank_problems(run)
+    if unscored or degraded:
+        parts: list[str] = []
+        if unscored:
+            parts.append(
+                "the run is not fully scored; a baseline must come from one that is. Re-run the "
+                "eval (the eval cache replays what was already paid for):\n"
+                + "\n".join(f"- {line}" for line in unscored)
+            )
+        if degraded:
+            lines = "\n".join(f"- {line}" for line in degraded)
+            parts.append(
+                "the run does not measure what its config names; a degraded case is not a result. "
+                "Find the cause (the metadata of those rows has the code) and re-run: the rerank "
+                f"cache keeps the calls that were made:\n{lines}"
+            )
+        raise GenerationBaselineError("\n".join(parts))
 
     try:
         existing = read_generation_baseline(path) if path.exists() else {}
@@ -181,6 +200,38 @@ def _run_problems(summary: ConfigSummary) -> list[str]:
             "read its input (a bug in the harness; the metric is unscored)"
         )
     return problems
+
+
+def _rerank_problems(run: GenerationRun) -> list[str]:
+    """Configs whose cases do not match their name on the reranker, one line each.
+
+    Only the case ids are named (never the question), at most five of them.
+    """
+    problems: list[str] = []
+    for name, result in run.configs.items():
+        if name == RERANK_CONFIG:
+            bad = [c for c in result.cases if c.rerank_used is False or c.rerank_error is not None]
+            if bad:
+                codes = ", ".join(sorted({c.rerank_error or "reranker not used" for c in bad}))
+                problems.append(
+                    f"{name}: the reranker degraded in {len(bad)} of {len(result.cases)} case(s) "
+                    f"({codes}; {_ids(c.id for c in bad)}): they were answered from the RRF order"
+                )
+        else:
+            reranked = [c.id for c in result.cases if c.rerank_used]
+            if reranked:
+                problems.append(
+                    f"{name}: {len(reranked)} case(s) were answered with a reranker "
+                    f"({_ids(reranked)}), so this is not a plain {name} row; run it with "
+                    "RERANK_PROVIDER=none"
+                )
+    return problems
+
+
+def _ids(ids: Iterable[str]) -> str:
+    listed = list(ids)
+    shown = ", ".join(listed[:5])
+    return shown + (f" and {len(listed) - 5} more" if len(listed) > 5 else "")
 
 
 def _setup_mismatches(kept: Mapping[str, GenerationBaselineEntry], run: GenerationRun) -> list[str]:

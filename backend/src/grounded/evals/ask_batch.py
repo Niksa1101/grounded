@@ -95,6 +95,10 @@ class QuestionResult(BaseModel):
     # A question that failed has no response, so its cost is not in the batch total.
     shadow_cost_usd: float = 0.0
     rate_limit_waits: int = 0
+    # The rerank stage of the request's trace (6.03, Tech §8). There is no separate mode for it:
+    # the pipeline reranks whenever RERANK_PROVIDER=cohere, and these two say what happened.
+    rerank_used: bool = False  # the reranked order built the context
+    rerank_error: str | None = None  # why the RRF order stood instead (a degradation code)
     response: dict[str, Any] | None = None
 
 
@@ -111,6 +115,8 @@ class BatchSummary(BaseModel):
     cache_hits: int
     shadow_cost_usd: float
     rate_limit_waits: int
+    rerank_used: int = 0  # questions whose context came from the reranked order
+    rerank_degraded: int = 0  # questions that stayed on the RRF order after a rerank error
     failures: list[dict[str, str]]  # {"id", "reason"}
     aborted: str | None  # why the run stopped early, if it did
 
@@ -132,6 +138,8 @@ def summarize(
         cache_hits=sum(r.cache_hit for r in results),
         shadow_cost_usd=round(sum(r.shadow_cost_usd for r in results), 6),
         rate_limit_waits=sum(r.rate_limit_waits for r in results),
+        rerank_used=sum(r.rerank_used for r in results),
+        rerank_degraded=sum(r.rerank_error is not None for r in results),
         failures=[{"id": r.id, "reason": r.error or "unknown"} for r in results if r.error],
         aborted=aborted,
     )
@@ -155,6 +163,11 @@ def render_summary(summary: BatchSummary) -> str:
         f"Cache hits: {summary.cache_hits}; rate-limit waits: {summary.rate_limit_waits}",
         f"Shadow cost: ${summary.shadow_cost_usd:.6f} (answered questions only)",
     ]
+    if summary.rerank_used or summary.rerank_degraded:  # only a run with a reranker has the line
+        lines.append(
+            f"Rerank: used {summary.rerank_used}; degraded to the RRF order "
+            f"{summary.rerank_degraded}"
+        )
     lines += [f"Failed {f['id']}: {f['reason']}" for f in summary.failures]
     if summary.aborted:
         lines.append(f"STOPPED EARLY: {summary.aborted}")
@@ -282,6 +295,8 @@ def _failed(item: GoldenItem, trace: RequestTrace, waits: int, exc: Exception) -
         dropped_claim_count=trace.dropped_claim_count or 0,
         removed_url_count=trace.removed_url_count or 0,
         rate_limit_waits=waits,
+        rerank_used=trace.rerank_used,
+        rerank_error=trace.rerank_error,
     )
 
 
@@ -314,6 +329,8 @@ def _succeeded(
         latency_total_ms=response.meta.latency_ms.get("total"),
         shadow_cost_usd=response.meta.shadow_cost_usd,
         rate_limit_waits=waits,
+        rerank_used=trace.rerank_used,
+        rerank_error=trace.rerank_error,
         response=dumped,
     )
 

@@ -258,3 +258,28 @@ async def test_results_and_summary_never_contain_question_text(tmp_path: Path) -
     assert SECRET_QUESTION not in path.read_text(encoding="utf-8")
     assert SECRET_QUESTION not in render_summary(summary)
     assert len(written["results"][1]["error"]) < 250  # a long message is cut
+
+
+async def test_the_rerank_outcome_of_each_question_reaches_the_results_and_the_summary() -> None:
+    async def ask_one(golden: GoldenItem, trace: RequestTrace) -> AskResponse:
+        # What the pipeline leaves on the trace (6.03): q001 was reranked, q002 stayed on RRF order.
+        trace.rerank_used = golden.id == "q001"
+        trace.rerank_error = None if golden.id == "q001" else "timeout"
+        return response()
+
+    results: list[QuestionResult] = []
+    await run_batch([item(1), item(2)], ask_one, on_result=results.append)
+
+    assert [(r.rerank_used, r.rerank_error) for r in results] == [(True, None), (False, "timeout")]
+    summary = summarize(results, total=2, aborted=None)
+    assert (summary.rerank_used, summary.rerank_degraded) == (1, 1)
+    assert "Rerank: used 1; degraded to the RRF order 1" in render_summary(summary)
+
+
+async def test_a_run_without_a_reranker_has_no_rerank_line() -> None:
+    results, stopped, _ = await run([item(1)], Script(response()))
+
+    summary = summarize(results, total=1, aborted=stopped)
+
+    assert (summary.rerank_used, summary.rerank_degraded) == (0, 0)
+    assert "Rerank" not in render_summary(summary)

@@ -68,8 +68,10 @@ GENERATION_TARGETS: Final[Mapping[str, Target]] = {
 }
 RAG_VALUE_TARGET: Final = Target(0.0, strict=True)
 
-_RETRIEVAL_ORDER: Final = ("dense", "fts", "hybrid")
-_GENERATION_ORDER: Final = ("no_rag", "hybrid")
+# `hybrid_rerank` (6.04) comes right after `hybrid`, its comparison. Without such a row the output
+# is what it was before it existed.
+_RETRIEVAL_ORDER: Final = ("dense", "fts", "hybrid", "hybrid_rerank")
+_GENERATION_ORDER: Final = ("no_rag", "hybrid", "hybrid_rerank")
 _RETRIEVAL_LABELS: Final = {
     "recall@5": "Recall@5",
     "recall@10": "Recall@10",

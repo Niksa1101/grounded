@@ -494,6 +494,28 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   not move the number (tested). The guard item about the weight above 0 (below) is unchanged. (7) `trace.retrieved_section_ids`
   stays the RRF candidates in RRF order, the context shows the reranked selection; 6.04 decides how the retrieval
   eval reports the full reranked list.
+- **Phase 6 evals (6.04a, 2026-10-12), what stays open.** The code, the second promptfoo config and the runbook
+  ([runbooks/rerank-eval.md](runbooks/rerank-eval.md)) are built; **no real call was made** (no key in `.env`, tally 0
+  of 150), so the real runs, the answer to "does the Trial key accept `rerank-v4.0-pro`" and both baseline rows are
+  **pending-Author** (ticket 6.04b): the keys in `.env`, then the runbook steps 3 to 7. Decisions taken by the Agent
+  for the Author to veto: (1) the pacer sits **between the rerank cache and the adapter**, not in front of the cache: the
+  cache is the only layer that knows a call will miss, so a hit is neither delayed nor counted (Tech §8). (2) The
+  pacer's wait happens inside `rerank()`, so the pipeline's stage scope is `RERANK_TIMEOUT_S` plus the pacer's
+  allowance (0 for every request-path reranker); the adapter's own timeout still bounds the call. A consequence the
+  Author may dislike: in the promptfoo run the `rerank` stage time, and with it `latency_ms.total` of a
+  `hybrid_rerank` case, can include a wait (the retrieval eval's rerank latency cannot). (3) The rerank latency and
+  call counts are in the **gitignored results file** (as the ticket says), not in the baseline row, which must keep
+  every committed byte: 6.04b copies them into the baseline PR description, and 6.05 cites that. (4) A plain mode of
+  the retrieval eval is scored without rerank fields even with `RERANK_PROVIDER=cohere` in `.env`, so its
+  `retrieval_config_hash` stays that of the committed row. (5) A `hybrid_rerank` generation row is refused when a case
+  has `rerank_used` false or a `rerank_error`; a case that does not say (null, a file from before 6.03) is not refused
+  on that rule. (6) `--write-baseline` of the retrieval eval now writes a row without thresholds without a
+  `thresholds` key, as the committed ones are: before, adding any row would have added `"thresholds": {}` to `dense`
+  and `fts` and broken the rule that existing rows stay byte-identical. (7) `grounded ask --golden` got no new mode: it
+  reranks whenever `RERANK_PROVIDER=cohere`; its summary counts `rerank_used` and the degraded questions. (8) Two
+  existing tests pinned `hybrid_rerank` as an unknown mode and were changed with the feature (`mode_of` and the CLI's
+  list of configs). (9) The generation gate is not run on a rerank-only results file: it fails closed without the
+  gated `hybrid` config in the run; the check is `grounded eval baseline`.
 - Free-tier limits of `gemini-3.5-flash-lite` (read from the Author's AI Studio rate-limit page, project `grounded`, 2026-10-06; the docs only point to that dashboard): **500 requests per day** (the Limit line sits on the labelled 500 tick). RPM (15) and TPM (250K) are read off the chart as the midpoint of the axis, they are not printed, so treat them as approximate. For comparison `gemini-3.6-flash` showed 5 RPM, 20 RPD and ~250K TPM. The daily quota resets at midnight Pacific time. Ticket 5.01 set `DAILY_LLM_BUDGET` to 300, below 500, and every retry counts as a request.
 - The current list price of `gemini-embedding-001`: the pricing page now lists only `gemini-embedding-2` ($0.20 per 1M text tokens). `pricing.toml` uses $0.15 per 1M input tokens from Google's general-availability post (2025-07-14), a dated announcement and not a row of today's page. Re-check it if the page lists the model again.
 - `gemini-embedding-001` is still served (shutdown date 2028-05-14, Google's deprecations page, 2026-10-06), but Google's recommended replacement is `gemini-embedding-2`. Moving to it is a new index version (new vectors, new baselines) and is not planned in this project's phases.
