@@ -218,7 +218,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | **6** | **[Re-ranking with measured lift](phase-6/README.md)** | | | | |
 | [6.01](phase-6/6.01-decision-cohere.md) | Decision: Cohere rerank model, trial limits, cap, price | Decision | D (delegated to G, D55) | done | [#112](https://github.com/Niksa1101/grounded/pull/112) |
 | [6.02](phase-6/6.02-rerank-adapter.md) | Cohere rerank adapter and rerank cache | Build | G | done | [#113](https://github.com/Niksa1101/grounded/pull/113) |
-| [6.03](phase-6/6.03-rerank-path.md) | Rerank in the request path with graceful degradation | Build | G | todo | |
+| [6.03](phase-6/6.03-rerank-path.md) | Rerank in the request path with graceful degradation | Build | G | done | [#114](https://github.com/Niksa1101/grounded/pull/114) |
 | [6.04](phase-6/6.04-eval-rerank.md) | `hybrid_rerank` in both evals and baseline rows | Build + Baseline | G | todo | |
 | [6.05](phase-6/6.05-lift-analysis.md) | Lift analysis and Phase 6 closeout | Closeout | A (+G tooling) | todo | |
 | **7** | **[Multi-provider fallback + circuit breaker](phase-7/README.md)** | | | | |
