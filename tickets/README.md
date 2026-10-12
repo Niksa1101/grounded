@@ -202,7 +202,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [5.08](phase-5/5.08-backend-vercel.md) | Backend Vercel configuration | Build | G | blocked: preview deploy pending Author; retrieval timeout field pending Author decision | [#97](https://github.com/Niksa1101/grounded/pull/97) |
 | [5.09](phase-5/5.09-neon-prod.md) | Neon production: migrate, `app` role, `ingest.yml` | Build | G (A runs) | blocked: waiting for the Author to run the runbook | [#98](https://github.com/Niksa1101/grounded/pull/98) |
 | [5.10](phase-5/5.10-deploy.md) | Vercel projects, env vars, first deploy, cold start | Build | A (+G checklist) | blocked: waiting for the Author to deploy and measure | [#99](https://github.com/Niksa1101/grounded/pull/99) |
-| [5.11](phase-5/5.11-housekeeping.md) | `housekeeping.yml`: retention and daily keep-warm ping | Build | G | todo | |
+| [5.11](phase-5/5.11-housekeeping.md) | `housekeeping.yml`: retention and daily keep-warm ping | Build | G | blocked: waiting for the Author's first production dispatch (runbook step 10) | [#100](https://github.com/Niksa1101/grounded/pull/100) |
 | [5.12](phase-5/5.12-readme-v1.md) | README v1 and MVP closeout | Closeout | G draft, A final | todo | |
 | **6** | **[Re-ranking with measured lift](phase-6/README.md)** | | | | |
 | [6.01](phase-6/6.01-decision-cohere.md) | Decision: Cohere rerank model, trial limits, cap, price | Decision | D | todo | |
