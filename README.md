@@ -436,6 +436,16 @@ cache) and the runbook [docs/runbooks/neon-production.md](docs/runbooks/neon-pro
 [DB §5](docs/DB.md), the manual least-privilege checks, rollback). The runtime only ever gets the pooled `app` URL.
 Neither is run by CI or by an agent. The runbook's last, optional step is the repository variable `EVAL_RECORD_RUNS`.
 
+## Deployment (Vercel)
+
+Two Vercel projects built from `main` (backend `backend/`, frontend `frontend/`, both in region `cle1` next to Neon), production
+variables set for Production only, previews with placeholders and no secret. The Author sets them up and deploys from the
+runbook [docs/runbooks/vercel-deploy.md](docs/runbooks/vercel-deploy.md), which also carries the checklist of what was left
+to verify on the first deployment (client IP in the platform logs, the forwarded-for header, the build and bundle, the Neon
+pooler) and the cold-start measurement: `grounded measure-cold-start` times the function start, the Neon wake and a real
+question after an idle period, using only the public URLs, and says plainly when the 10 s between the backend deadline and
+the proxy timeout is not enough. Numbers are recorded in the runbook after the first measurement, never typed by hand.
+
 ## Roadmap
 
 | Phase | Scope | Status |

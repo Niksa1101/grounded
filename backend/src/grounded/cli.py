@@ -9,6 +9,7 @@ import asyncio
 import io
 import json
 import sys
+import time
 from collections.abc import Coroutine
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime
@@ -110,6 +111,15 @@ from grounded.generation.pipeline import AskMode
 from grounded.generation.providers.eval_wrappers import EvalStats
 from grounded.generation.providers.fake import StubLLMProvider
 from grounded.infra.budget import BudgetExhaustedError
+from grounded.infra.cold_start import (
+    DEFAULT_QUESTIONS,
+    MAX_ASKS,
+    MAX_PROBES,
+    MeasureError,
+    Plan,
+    run_measurement,
+)
+from grounded.infra.cold_start import render_report as render_cold_start_report
 from grounded.infra.event_loop import loop_factory
 from grounded.infra.kvcache import KVCache
 from grounded.infra.logging import configure_logging
@@ -419,6 +429,11 @@ def migrate(
     typer.echo(
         f"Done: {len(report.applied)} applied, {len(report.already_applied)} already up to date."
     )
+
+
+class MeasureOrder(StrEnum):
+    health = "health"
+    ask = "ask"
 
 
 def _fail(message: str) -> typer.Exit:
@@ -1243,3 +1258,93 @@ def eval_export_verdicts(
         )
     if report.key.pending:
         typer.echo("  pending: run again without --no-judge to complete the key.")
+
+
+@app.command("measure-cold-start")
+def measure_cold_start(
+    frontend_url: Annotated[
+        str, typer.Option(help="The public frontend origin, e.g. https://grounded.vercel.app.")
+    ],
+    idle_minutes: Annotated[
+        float,
+        typer.Option(min=0, help="How long the site was left alone before this run (stated)."),
+    ],
+    backend_url: Annotated[
+        str | None,
+        typer.Option(
+            help="The backend's production origin, for the public /healthz and /readyz probes.",
+            show_default=False,
+        ),
+    ] = None,
+    first: Annotated[
+        MeasureOrder,
+        typer.Option(
+            help="What goes first after the idle period: the probes (function start and database "
+            "wake, separately) or the ask itself (what a visitor sees)."
+        ),
+    ] = MeasureOrder.health,
+    asks: Annotated[
+        int,
+        typer.Option(
+            min=0,
+            max=MAX_ASKS,
+            help="Real questions to send through the frontend: the first is the cold (or "
+            "after-probes) one, the rest are warm. Each spends LLM quota and budget.",
+        ),
+    ] = 4,
+    warm_probes: Annotated[
+        int, typer.Option(min=0, max=MAX_PROBES, help="Warm /healthz + /readyz pairs.")
+    ] = 3,
+    wait: Annotated[
+        bool, typer.Option(help="Sleep --idle-minutes first, instead of having waited already.")
+    ] = False,
+    question: Annotated[
+        list[str] | None,
+        typer.Option(help="A question to ask (repeatable). Default: built-in FastAPI questions."),
+    ] = None,
+    timeout_s: Annotated[
+        float, typer.Option(min=1, help="Per request. Above the frontend route's 40 s maxDuration.")
+    ] = 45.0,
+    margin_s: Annotated[
+        float, typer.Option(min=0, help="Proxy timeout minus backend deadline (Tech §18): 35 - 25.")
+    ] = 10.0,
+    yes: Annotated[bool, typer.Option(help="Skip the confirmation before sending asks.")] = False,
+) -> None:
+    """Time the live deployment after an idle period and print a Markdown report (ticket 5.10).
+
+    Sends no secret: it uses the public backend probes and the public frontend route only. Run it
+    by hand (docs/runbooks/vercel-deploy.md); it is not for CI.
+    """
+    plan = Plan(
+        frontend_url=frontend_url,
+        backend_url=backend_url,
+        idle_minutes=idle_minutes,
+        first=first.value,
+        asks=asks,
+        warm_probes=warm_probes,
+        questions=tuple(question) if question else DEFAULT_QUESTIONS,
+        timeout_s=timeout_s,
+        margin_s=margin_s,
+        waited=wait,
+    )
+    try:
+        plan.validate()
+    except MeasureError as exc:
+        raise _fail(f"Cannot measure: {exc}") from exc
+    if asks > 0:
+        typer.echo(
+            f"WARNING: this sends {asks} real question(s) through {frontend_url}. Each is one "
+            "query embedding and one or two LLM calls (a share of DAILY_LLM_BUDGET and of the "
+            "Gemini "
+            "free-tier quota the CI evals use too), counts toward the per-IP limits (5 a minute, "
+            "20 a day) and lands in the production request_logs with its question text (kept 30 "
+            "days). A 429 or 503 stops the asks; nothing is retried.",
+            err=True,
+        )
+        if not yes:
+            typer.confirm("Send them?", abort=True, err=True)
+
+    run = run_measurement(plan, sleep=time.sleep, progress=lambda m: typer.echo(m, err=True))
+    typer.echo(render_cold_start_report(run))
+    if not any(s.ok for s in run.samples):
+        raise _fail("No request succeeded: use the production domain, not a deployment URL.")
