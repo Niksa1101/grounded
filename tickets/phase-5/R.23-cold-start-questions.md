@@ -29,10 +29,10 @@
   inside it), so that estimate is conservative.
 
 **Acceptance criteria** (tests in `tests/unit/test_cold_start.py`, against the existing local stub server)
-- [ ] The offset: `--first ask` with default questions starts at `len // 2`; a `--question` list starts at 0.
-- [ ] A cold cache hit is judged and marked "(cache hit)".
-- [ ] The retrieval line, including the "within 25%" recommendation.
-- [ ] The `deadline_exceeded` message for a cold ask.
+- [x] The offset: `--first ask` with default questions starts at `len // 2`; a `--question` list starts at 0.
+- [x] A cold cache hit is judged and marked "(cache hit)".
+- [x] The retrieval line, including the "within 25%" recommendation.
+- [x] The `deadline_exceeded` message for a cold ask.
 
 **Verify:** standard checks; `uv run grounded measure-cold-start --frontend-url http://127.0.0.1:3000 --backend-url
 http://127.0.0.1:8000 --idle-minutes 0 --first ask --asks 2 --yes` against the local fake stack, with

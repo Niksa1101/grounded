@@ -49,7 +49,9 @@ MAX_PROBES = 30
 WARM_P50_TARGET_S = 4.0
 
 # Different questions, so the later ones are not answer-cache hits (Tech §11): a hit skips the LLM
-# and would make the warm figure look better than the pipeline is.
+# and would make the warm figure look better than the pipeline is. A `--first ask` run starts in the
+# middle of the list (``question_offset``), so the runbook's second run does not ask what the first
+# one already cached (as long as each run asks at most half of the list).
 DEFAULT_QUESTIONS: tuple[str, ...] = (
     "How do I declare an optional query parameter with a default value?",
     "How do I add a dependency to a path operation?",
@@ -94,6 +96,8 @@ class Plan:
     waited: bool = False  # the run slept the idle period itself, rather than the operator having
     # Sent as X-Proxy-Secret on GET /readyz only (PRD D54c). Never in the repr, so never printed.
     proxy_secret: str | None = field(default=None, repr=False)
+    # The backend's RETRIEVAL_TIMEOUT_S (PRD D54a): the cold ask's retrieval time is compared to it.
+    retrieval_timeout_s: float = 2.0
 
     def validate(self) -> None:
         _check_url("--frontend-url", self.frontend_url)
@@ -114,6 +118,21 @@ class Plan:
             raise MeasureError("--first health probes the backend: pass --backend-url")
         if self.first == "ask" and self.asks < 1:
             raise MeasureError("--first ask needs --asks of at least 1")
+        if self.retrieval_timeout_s <= 0:
+            raise MeasureError("RETRIEVAL_TIMEOUT_S must be positive")
+
+
+def question_offset(plan: Plan) -> int:
+    """Where the asks start in ``plan.questions``.
+
+    The runbook runs ``--first health`` and then ``--first ask`` on the same deployment. With the
+    default questions both would send the same first questions, so every ask of the second run would
+    be an answer-cache hit of the first. A ``--first ask`` run with the default questions therefore
+    starts halfway through the list; a list the operator chose starts at its beginning.
+    """
+    if plan.first == "ask" and tuple(plan.questions) == DEFAULT_QUESTIONS:
+        return len(DEFAULT_QUESTIONS) // 2
+    return 0
 
 
 def _check_url(name: str, url: str) -> None:
@@ -137,6 +156,8 @@ class Sample:
     total_ms: int | None = None  # ask only: meta.latency_ms.total, the server's own view
     cache_hit: bool | None = None  # ask only: meta.cache_hit
     vercel_id: str | None = None  # x-vercel-id: the regions the request went through
+    retrieval_ms: int | None = None  # ask only: meta.latency_ms.retrieval (none on a cache hit)
+    request_id: str | None = None  # ask only: the backend's request_id (its request_logs row)
 
     @property
     def ok(self) -> bool:
@@ -185,23 +206,41 @@ def _dict(value: object) -> dict[str, object]:
     return cast("dict[str, object]", value) if isinstance(value, dict) else {}
 
 
-def _details(step: Step, result: HttpResult) -> tuple[str | None, int | None, bool | None]:
-    """The error label, the server-reported total and the cache flag of one response."""
+@dataclass(frozen=True)
+class Details:
+    """What one response says about itself, beyond its status and time."""
+
+    error: str | None = None
+    total_ms: int | None = None
+    cache_hit: bool | None = None
+    retrieval_ms: int | None = None
+    request_id: str | None = None
+
+
+def _details(step: Step, result: HttpResult) -> Details:
+    """The error label and, for an ask, the server-reported timings, cache flag and request id."""
     if result.status is None:
-        return result.error, None, None
+        return Details(error=result.error)
     if step is not Step.ASK:
         if result.status == 401:  # /readyz refused X-Proxy-Secret: not the backend's value
-            return "unauthorized", None, None
-        return (None if result.status == 200 else "http_error"), None, None
+            return Details(error="unauthorized")
+        return Details(error=None if result.status == 200 else "http_error")
     try:
         payload = _dict(json.loads(result.body))
     except ValueError:
         payload = {}
     code = _dict(payload.get("error")).get("code")
     meta = _dict(payload.get("meta"))
-    total, hit = _dict(meta.get("latency_ms")).get("total"), meta.get("cache_hit")
-    error = None if result.status == 200 else (code if isinstance(code, str) else "http_error")
-    return error, total if isinstance(total, int) else None, hit if isinstance(hit, bool) else None
+    latency = _dict(meta.get("latency_ms"))
+    total, retrieval, hit = latency.get("total"), latency.get("retrieval"), meta.get("cache_hit")
+    request_id = meta.get("request_id", payload.get("request_id"))
+    return Details(
+        error=None if result.status == 200 else (code if isinstance(code, str) else "http_error"),
+        total_ms=total if isinstance(total, int) else None,
+        cache_hit=hit if isinstance(hit, bool) else None,
+        retrieval_ms=retrieval if isinstance(retrieval, int) else None,
+        request_id=request_id if isinstance(request_id, str) else None,
+    )
 
 
 @dataclass(frozen=True)
@@ -239,12 +278,13 @@ def run_measurement(
     samples: list[Sample] = []
     notes: list[str] = []
     asked = 0
+    offset = question_offset(plan)
 
     def send(step: Step, phase: Phase) -> bool:
         """Send one request; False when the asks must stop (rate limit or budget reached)."""
         nonlocal asked
         if step is Step.ASK:
-            question = plan.questions[asked % len(plan.questions)]
+            question = plan.questions[(offset + asked) % len(plan.questions)]
             asked += 1
             url, method = f"{plan.frontend_url.rstrip('/')}/api/ask", "POST"
             body = json.dumps({"question": question}).encode()
@@ -257,7 +297,8 @@ def run_measurement(
         began = time.perf_counter()
         result = http_call(method, url, body=body, timeout_s=plan.timeout_s, extra_headers=headers)
         elapsed = (time.perf_counter() - began) * 1000
-        error, total, hit = _details(step, result)
+        details = _details(step, result)
+        error = details.error
         samples.append(
             Sample(
                 step,
@@ -265,9 +306,11 @@ def run_measurement(
                 result.status,
                 elapsed,
                 error,
-                total,
-                hit,
+                details.total_ms,
+                details.cache_hit,
                 result.headers.get("x-vercel-id"),
+                details.retrieval_ms,
+                details.request_id,
             )
         )
         outcome = "no response" if result.status is None else f"HTTP {result.status}"
@@ -309,10 +352,13 @@ def _seconds(ms: float) -> str:
 
 
 def _pick(
-    samples: Sequence[Sample], step: Step, phase: Phase, *, hit: bool = False
+    samples: Sequence[Sample], step: Step, phase: Phase, *, hit: bool | None = False
 ) -> list[Sample]:
+    """The samples of one step and phase; ``hit=None`` keeps answer-cache hits and misses alike."""
     return [
-        s for s in samples if s.step is step and s.phase is phase and (s.cache_hit is True) == hit
+        s
+        for s in samples
+        if s.step is step and s.phase is phase and (hit is None or (s.cache_hit is True) == hit)
     ]
 
 
@@ -327,12 +373,23 @@ def judge_margin(run: Run) -> tuple[bool | None, str]:
     In ``health`` order the estimate is (cold ``/healthz`` - warm median) + (cold ``/readyz`` - warm
     median): the function start plus the database wake, round trip subtracted. The pool opens its
     first connection in the background at start (Tech §18), so the wake may already run during the
-    cold ``/healthz``: the sum is an estimate, not a decomposition. In ``ask`` order it is the cold
+    cold ``/healthz``: the sum is an estimate, not a decomposition. It is also conservative: on a
+    real ask the Neon wake happens at the first database call, which is already inside the
+    handler's deadline, so only part of it competes for the margin. In ``ask`` order it is the cold
     ask's end-to-end time minus the server-reported total, which includes the frontend function's
-    own start (outside the 35 s timeout), so it over-states the backend part.
+    own start (outside the 35 s timeout), so it over-states the backend part. A cold ask that was an
+    answer-cache hit still counts: end to end minus the server total does not depend on what the
+    server did inside that total.
     """
     plan, samples, margin = run.plan, run.samples, run.plan.margin_s
-    cold_ask = _pick(samples, Step.ASK, Phase.COLD)
+    cold_ask = _pick(samples, Step.ASK, Phase.COLD, hit=None)
+    if cold_ask and cold_ask[0].error == "deadline_exceeded":
+        where = f" (request_id `{cold_ask[0].request_id}`)" if cold_ask[0].request_id else ""
+        return None, (
+            f"Not a margin verdict: the cold ask failed with `deadline_exceeded` after "
+            f"{_seconds(cold_ask[0].elapsed_ms)}. The backend's deadline or retrieval timeout "
+            f"fired; look up the request_id in request_logs{where} to see which stage ran out."
+        )
     if cold_ask and cold_ask[0].error in ("upstream_timeout", "upstream_unavailable"):
         return False, (
             f"**The {margin:g} s margin is NOT enough**: the cold ask failed with "
@@ -373,6 +430,40 @@ def judge_margin(run: Run) -> tuple[bool | None, str]:
     )
 
 
+# A first-ask retrieval time this close to RETRIEVAL_TIMEOUT_S leaves no room for a slow day.
+RETRIEVAL_HEADROOM = 0.25
+
+
+def retrieval_line(run: Run) -> str:
+    """The first ask's ``meta.latency_ms.retrieval`` against ``RETRIEVAL_TIMEOUT_S`` (D54a, V17).
+
+    The first ask is the cold one in ``ask`` order; in ``health`` order it follows the probes, so
+    its database is already awake and the figure is a lower bound of a cold retrieval.
+    """
+    limit_ms = run.plan.retrieval_timeout_s * 1000
+    limit = f"`RETRIEVAL_TIMEOUT_S` = {run.plan.retrieval_timeout_s:g} s"
+    first = [s for s in run.samples if s.step is Step.ASK][:1]
+    if not first:
+        return f"No ask was sent, so the retrieval time is not measured ({limit})."
+    ask = first[0]
+    which = "cold ask" if ask.phase is Phase.COLD else f"first ask ({ask.phase.value})"
+    if ask.cache_hit:
+        return f"The {which} was an answer-cache hit: no retrieval ran ({limit})."
+    if ask.retrieval_ms is None:
+        return f"The {which} reported no retrieval time ({ask.error or 'no meta'}); {limit}."
+    share = ask.retrieval_ms / limit_ms
+    line = (
+        f"Retrieval of the {which}: {_seconds(ask.retrieval_ms)} against {limit} "
+        f"({share:.0%} of it)."
+    )
+    if share >= 1 - RETRIEVAL_HEADROOM:
+        line += (
+            f" **Within {RETRIEVAL_HEADROOM:.0%} of the timeout:** raise `RETRIEVAL_TIMEOUT_S` in "
+            "the backend's Vercel variables (a setting, not code) and record it in Tech §18."
+        )
+    return line
+
+
 def render_report(run: Run) -> str:
     """The Markdown the operator pastes into the runbook's results section."""
     plan, samples = run.plan, run.samples
@@ -393,7 +484,7 @@ def render_report(run: Run) -> str:
     rows = [
         ("function start, cold", probe_method % "healthz", Step.HEALTHZ, Phase.COLD, False),
         ("database wake, cold", probe_method % "readyz", Step.READYZ, Phase.COLD, False),
-        ("ask end to end, cold", ask_method, Step.ASK, Phase.COLD, False),
+        ("ask end to end, cold", ask_method, Step.ASK, Phase.COLD, None),
         ("ask end to end, after probes", ask_method, Step.ASK, Phase.AFTER_PROBES, False),
         ("`/healthz`, warm", probe_method % "healthz", Step.HEALTHZ, Phase.WARM, False),
         ("`/readyz`, warm", probe_method % "readyz", Step.READYZ, Phase.WARM, False),
@@ -404,6 +495,8 @@ def render_report(run: Run) -> str:
         group = _pick(samples, step, phase, hit=hit)
         if not group:
             continue
+        if hit is None and any(s.cache_hit for s in group):
+            label += " (cache hit)"
         times = [s.elapsed_ms for s in group if s.ok]
         n = f"{len(times)}" if len(times) == len(group) else f"{len(times)} of {len(group)}"
         low, mid, high = (
@@ -414,6 +507,7 @@ def render_report(run: Run) -> str:
         out.append(f"| {label} | {method} | {date} | {idle} | {n} | {low} | {mid} | {high} |")
 
     out += ["", "### Margin", "", judge_margin(run)[1]]
+    out += ["", "### Retrieval", "", retrieval_line(run)]
     warm_asks = _pick(samples, Step.ASK, Phase.WARM)
     if (warm := _median(warm_asks)) is not None:
         out += [

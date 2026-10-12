@@ -402,6 +402,7 @@ as it is and open the follow-up; do not adjust the expectation.
 | V14 | Is `functions."app.py"` matched (so `maxDuration` 30 applies)? (5.08) | The build log: a `functions` pattern that matches nothing is reported there (**unverified** wording for framework presets) | A clean build | Tech §18 deploy settings |
 | V15 | Production only from `main`; other branches are Preview | Settings, Environments, Production; the Deployments list during step 7 | Branch Tracking `main`; the throwaway branch built as Preview | Tech §18 |
 | V16 | Optional: latency in `cle1` against `iad1` (PRD §12) | A second project or a temporary region change, then step 9 again | Only if you want the comparison; it is not required | PRD §12 |
+| V17 | Cold retrieval against `RETRIEVAL_TIMEOUT_S` (R.21, PRD D54a) | Step 9, `--first ask`: the report's "Retrieval" line (the cold ask's `meta.latency_ms.retrieval`) | Under 75% of the timeout (1.5 s of the default 2 s); within 25% of it the report recommends raising `RETRIEVAL_TIMEOUT_S` in the backend's variables | Tech §18 timeout chain |
 
 V2 as the owner, on the direct URL (the Neon runbook step 4 shows how to export it for one session).
 It prints no address, only the first 8 characters of each hash:
@@ -459,7 +460,11 @@ cd "$(git rev-parse --show-toplevel)/backend" && uv run grounded measure-cold-st
 ```
 
 Run 2, `--first ask`: the first request after the idle period is the question itself, which is what a
-visitor sees end to end (the frontend function's own start is in it too):
+visitor sees end to end (the frontend function's own start is in it too). With the built-in questions
+this run starts halfway through the list, so its asks are not answer-cache hits of run 1 (which
+starts at the top), as long as each run asks at most 5 (the list has 10). A cold ask that does hit
+the cache is still judged: end to end minus the server total does not depend on it, and the table
+marks the row "(cache hit)":
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/backend" && uv run grounded measure-cold-start --frontend-url "$FRONTEND_URL" --backend-url "$BACKEND_URL" --idle-minutes 30 --wait --first ask --asks 4 --warm-probes 3 | tee "$HOME/cold-start-ask.md"
@@ -479,6 +484,17 @@ end time minus the server-reported `meta.latency_ms.total`, which also contains 
 function's start (outside the 35 s timeout) and so over-states the backend part. If the verdict is
 **NOT enough**, nothing is hidden: the UI's retry state covers it (Tech §19) and the numbers go into
 the README as they are. Each request uses a new connection, so every figure includes DNS, TCP and TLS.
+In order `health` the estimate is also conservative: on a real ask the Neon wake happens at the first
+database call, which is already inside the handler's deadline, so only part of it competes for the
+margin.
+
+The report's "Retrieval" line is V17: the first ask's `meta.latency_ms.retrieval` against
+`RETRIEVAL_TIMEOUT_S` (2 s by default; the command reads the value from `Settings`, so export the
+Vercel value if you changed it there). In order `ask` that is the cold retrieval; in order `health`
+the database is already awake, so it is a lower bound. Within 25% of the timeout the report says to
+raise `RETRIEVAL_TIMEOUT_S` in the backend's Vercel variables (a setting, not code). A cold ask that
+fails with `504 deadline_exceeded` is not a margin verdict: the backend's deadline or retrieval timeout
+fired, and the report prints the `request_id` to look up in `request_logs`.
 
 To rehearse the command without touching production, run `grounded serve` and `npm run dev` locally
 with `GENERATOR_PROVIDERS=fake` and point it at `http://127.0.0.1:8000` and `http://127.0.0.1:3000`
@@ -486,7 +502,7 @@ with `GENERATOR_PROVIDERS=fake` and point it at `http://127.0.0.1:8000` and `htt
 
 ## 10. Record the results and close the ticket
 
-Paste both reports under "Results" below, with the answers to V1–V16. In the same PR: replace the
+Paste both reports under "Results" below, with the answers to V1–V17. In the same PR: replace the
 "unverified" sentences of Tech §18 and §12 with what was observed (date included), strike the
 resolved items of PRD §12, tick the criteria in `tickets/phase-5/5.10-deploy.md` and the first
 criterion of `tickets/phase-5/5.08-backend-vercel.md`, and set both index rows to `done`. The numbers
@@ -495,7 +511,7 @@ reach the README in ticket 5.12, copied from here, never typed.
 ## Results
 
 _Not measured yet. The Author pastes the reports of step 9 here, each with its date, and the answers to
-the checklist (V1–V16)._
+the checklist (V1–V17)._
 
 ## When something fails
 
@@ -509,6 +525,7 @@ the checklist (V1–V16)._
 | Frontend `500 proxy_misconfigured` | `BACKEND_URL` or `PROXY_SHARED_SECRET` is unset in the Production environment of the frontend, or the deployment predates them | Step 5.1, then a new deployment |
 | Frontend `502 upstream_unavailable` | `BACKEND_URL` points at a protected deployment URL (an HTML login page), or at nothing | Use the production domain |
 | Frontend `504 upstream_timeout` | The backend did not answer within 35 s | Step 9 tells whether it is the cold start |
+| The cold ask of step 9 is `504 deadline_exceeded` | Our own backend 504: the 25 s deadline or the 2 s retrieval timeout fired (D53, D54a) | Look up the printed `request_id` in `request_logs` (Neon runbook step 4 shows how to connect as the owner): `latency_retrieval_ms` near 2000 and `latency_llm_ms` NULL is the retrieval timeout (raise `RETRIEVAL_TIMEOUT_S`, V17); otherwise the stage timings show where the 25 s went |
 | Every question is `401 unauthorized` through the frontend | The two projects hold different `PROXY_SHARED_SECRET` values | Set the same value in both, redeploy both |
 | Everything is `429` at once | Every visitor shares one bucket: the proxy's address was used | V2: the forwarded-for header is not what `clientIp` expects |
 | A secret leaked | | Generate a new one, update the project(s), redeploy; for the Neon URL see the Neon runbook |
@@ -527,7 +544,7 @@ Tick each box as you do it; the acceptance criteria of ticket 5.10 are the last 
 - [ ] Frontend deployed from `main`; the page answers a question
 - [ ] Both functions in `cle1`, Fluid compute on, Branch Tracking `main`
 - [ ] Previews verified (step 7); throwaway branch deleted
-- [ ] V1–V16 answered and recorded
+- [ ] V1–V17 answered and recorded
 - [ ] Cold-start reports (both orders) pasted under "Results"
 - [ ] The live URL answers a question; cold start and warm latency are recorded with method and date
 - [ ] Preview deployments have no production secrets (verified)
