@@ -159,7 +159,20 @@ Copy-Item ../eval/results/rerank-compare.json ../eval/results/rerank-compare-fir
 The two rows differ only in the order of the same 40 candidates. MRR is taken over the whole reranked list;
 Recall@5/10 and nDCG@5/10 over its first 5 and 10. The results file has, per question, the ranks of each label
 in `hybrid` and in `hybrid_rerank`. One question is 0.04 of a mean (`n` = 25): do not call a smaller difference
-a lift (AGENTS §7). "No lift" is a valid result. Nothing is decided here; 6.05 writes the analysis.
+a lift (AGENTS §7). "No lift" is a valid result.
+
+`grounded eval diff` (ticket 6.05) prints that comparison: the mean metrics of both configs with `n`, the mean
+paired delta, how many questions each config wins on (by nDCG@5), the rank of every grade-2 label in both
+configs for every question, and the rerank call counts and live latency of the file. It only reads the file
+(0 calls) and refuses runs that are not comparable. COPY (in `backend/`; the file is the copy made in step 4,
+which still has the live latency):
+
+```powershell
+uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../eval/results/rerank-compare-first.json
+```
+
+Its output is what the README section "Re-ranking: what it bought" is written from (the baseline rows come in
+step 7). Nothing is decided here: the reading is the Author's.
 
 ## 6. Generation eval
 

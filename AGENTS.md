@@ -249,6 +249,10 @@ uv run grounded eval report   # the README's eval tables, from eval/baselines/*.
 ```
 
 ```bash
+uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../eval/results/rerank-compare.json   # two configs of a retrieval results file (or two files, one per config) question by question: mean metrics with n, paired deltas, wins / losses / ties by nDCG@5, the rank of each grade-2 label, rerank counts and latency if the file has them. Reads files only (no API, no DB); refuses runs that are not comparable (Tech §15.2)
+```
+
+```bash
 APP_ENV=eval GENERATOR_PROVIDERS=gemini GROQ_MODEL=<pinned> JUDGE_MODEL=<pinned> uv run grounded eval export-verdicts --results <promptfoo-output>.json --git-sha <commit>   # draws the judge-agreement sample: blind eval/judge_agreement/v1.csv + v1.md, and the key in eval/results/ (gitignored). Up to --controls (4) real judge calls; --no-judge asks none; a re-run completes a key (Tech §15.4)
 ```
 

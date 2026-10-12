@@ -26,4 +26,9 @@ requirement. The deployed demo keeps `RERANK_PROVIDER=none`.
 - [6.04 — `hybrid_rerank` in both evals and baseline rows](6.04-eval-rerank.md)
 - [6.05 — Lift analysis and Phase 6 closeout](6.05-lift-analysis.md)
 
+**Status (2026-10-12): code complete, not closed.** 6.01 to 6.04a are merged and 6.05 added `grounded eval diff`, the README
+draft and the closeout check. The exit criteria: `hybrid_rerank` rows in both baselines **not met**, lift reported honestly
+**not met yet**, degradation path tested **met** (evidence in [6.05](6.05-lift-analysis.md) and PRD §9). What is left needs the
+Author's Cohere, Gemini and Groq keys (6.04b); the list is PRD §12, "Phase 6 closeout".
+
 Rules for working a ticket: [../README.md](../README.md).

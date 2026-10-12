@@ -31,7 +31,7 @@ frozen snapshot of the official docs, and it **measures** how well it does that.
 
 Built unless marked *planned*:
 
-- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is built behind `RERANK_PROVIDER` (default `none`, and off in the deployed demo: Cohere's trial key may not be used in production). It degrades to the RRF order on any error, timeout or daily cap; its measured lift comes with the Phase 6 evals.
+- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is built behind `RERANK_PROVIDER` (default `none`, and off in the deployed demo: Cohere's trial key may not be used in production). It degrades to the RRF order on any error, timeout or daily cap. Its lift is **not measured yet**: that needs the Author's API keys ([Re-ranking: what it bought](#re-ranking-what-it-bought)).
 - **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry. Falling back to a second provider after that is *planned* (Phase 7); until then a second invalid output is a `502`.
 - **Verifiable citations:** each claim cites source labels. The server validates them and maps them to exact `docs-page#section` links. The model never writes URLs.
 - **Honest refusals:** `answered | partial | insufficient_context`. Out-of-scope questions are refused, and that behavior is measured.
@@ -113,7 +113,8 @@ Every number above is pasted from `uv run grounded eval report` (run in `backend
 **The generation table is the first baseline (ticket 4.09b):** one full run of the golden set through `no_rag` and
 `hybrid`, judged by Groq `openai/gpt-oss-120b`. Faithfulness is claim-level (it grades the claims of an answer, not its
 whole text) and is only partly validated by the judge–human agreement below (4.11b). No generation number is written
-by hand. Hybrid + rerank joins in Phase 6.
+by hand. A `hybrid_rerank` row joins both tables when the Author has run the real evals
+([Re-ranking: what it bought](#re-ranking-what-it-bought)); there is none yet.
 Judge–human agreement: [below](#judge-human-agreement). Golden set: `v1`, 25 answerable questions (retrieval n = 25, one
 question = 0.04) and 5 unanswerable ones. Shadow cost is real token counts × paid list prices (dated in
 `backend/pricing.toml`); the demo itself runs on free tiers.
@@ -241,6 +242,56 @@ reading and not a committed number):
 
 Nothing was tuned to improve these numbers: `K_*` and `RRF_K` are the defaults and the lexical query is unchanged.
 n = 25, so differences under one question (0.04) are not claims either way.
+
+### Re-ranking: what it bought
+
+> **Draft for the Author's final edit (ticket 6.05).** The agent wrote what is already true and committed: what was
+> built, how the lift will be measured, what a call costs. **No rerank number exists yet, so none is written here.**
+> The results block below is empty on purpose, and the reading under it is the Author's, after the real runs.
+
+**Lift: not yet measured.** The `hybrid_rerank` rows of the two baselines (retrieval and generation) do not exist, because
+the real runs need the Author's Cohere, Gemini and Groq keys (ticket 6.04b) and none was available when the Phase 6 code was
+finished. Until the rows are committed this page claims no quality gain from re-ranking and no latency for it. The steps are
+in [docs/runbooks/rerank-eval.md](docs/runbooks/rerank-eval.md); `uv run grounded eval diff` (in `backend/`) prints the
+comparison from the run's results file.
+
+- **What was built** ([Tech §8](docs/Tech.md), PRD D55). A Cohere reranker (`rerank-v4.0-pro`, pinned) behind
+  `RERANK_PROVIDER` (default `none`) reorders the 40 fused candidates (`K_FUSED`); the top 5 (`K_CONTEXT`) become the context.
+  `hybrid_rerank` is a config of the retrieval eval and of the promptfoo generation eval, run by hand only.
+  Whether Cohere's Trial key accepts `rerank-v4.0-pro` is still unverified (it takes the first real call; the documented
+  fallback is `rerank-v4.0-fast`).
+- **Where it is switched off.** The deployed demo keeps `RERANK_PROVIDER=none`: Cohere's Trial key may not be used in
+  production, so the live site never reranks. CI never runs `hybrid_rerank` either (it would spend the Trial's monthly
+  calls), and its future baseline rows carry no thresholds, so no gate depends on a Cohere key.
+- **How the lift will be measured.** On the same 25 answerable questions and the same 40 candidates, the only difference being
+  their order: `nDCG@5(hybrid_rerank) - nDCG@5(hybrid)`, the PRD §8 target ("> 0, reported whatever it is"), with MRR,
+  Recall@5/10 and nDCG@10 beside it, always with `n`. One question is 0.04 of a mean, so a smaller difference is not reported as a
+  lift or a loss, and "no lift" is a valid result. `grounded eval diff` adds the per-question wins and losses and the rank of
+  every labelled section before and after.
+- **Graceful degradation.** Any Cohere error, a 429, a timeout (`RERANK_TIMEOUT_S`, 3 s, one attempt, no retry) or the daily cap
+  (`RERANK_DAILY_CAP`, 30) leaves the request on the RRF order: it still succeeds, the reason goes to
+  `request_logs.rerank_error` and the log (never to the API response), and an answer built on the degraded order is not stored
+  in the answer cache. This is tested with fakes against a real Postgres
+  (`backend/tests/integration/test_rerank_path.py` and `test_rerank_cap.py`); the ask page does not show the degradation yet
+  (its debug row has "Rerank used"; PRD §12). The confidence number ignores the rerank score (`CONFIDENCE_W_RERANK` = 0.0).
+- **What it costs, from committed data only.** At list price (`backend/pricing.toml`: `rerank-v4.0-pro`, $2.50 per 1,000
+  searches, read on cohere.com/pricing on 2026-10-12) one reranked request is one search (40 candidates are one search unit),
+  so $2.50 per 1,000 requests. The committed shadow cost of a `hybrid` request is $1.6855 per 1,000 questions
+  (`eval/baselines/generation.json`, n = 30, 2026-10-08), so the rerank call alone would cost more than the embedding and the
+  generation of that request together. Whether a lift is worth that is the Author's call, written below after the measurement.
+  Trial calls are free and capped (1,000 a month, 10 a minute). The rerank latency is not measured yet (`_TBD_`, filled by the
+  comparison run: [cost and latency](#cost-and-latency)).
+
+<!-- rerank-lift: NOT FILLED YET (ticket 6.05, after the real runs of 6.04b). Paste here, in this order, and never type a number:
+     1. the `hybrid` and `hybrid_rerank` rows of the two tables above, which `uv run grounded eval report` (in backend/) prints
+        once the baseline PR is merged: the eval-report block above is where they appear, so quote them from there;
+     2. the output of `uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../eval/results/rerank-compare-first.json`
+        (in backend/): the means with n, the paired delta, wins / losses / ties by nDCG@5, the per-question table, and the rerank
+        call counts and live latency of the file.
+     Then replace the line "Lift: not yet measured" above with the reading, and delete this comment. -->
+
+**Reading (the Author's, after the runs):** _TBD (6.05)_ - the nDCG@5 and MRR lift with `n`, the notable wins and losses, the
+cost against the lift, and a recommendation.
 
 ### CI quality gate
 - **Every PR:** lint, types, unit + integration tests, retrieval eval vs baseline (the `retrieval-eval` job: a fresh
@@ -370,6 +421,8 @@ output or a dated measurement produced it; otherwise the cell says `_TBD_` and n
 | Neon wake after an idle period | cold `/readyz` 0.96 s, about 0.67 s above the warm median (`n` = 1, same run) | the same report (`/readyz` row) |
 | First question after idle, end to end | 7.04 s, of which 3.29 s inside the backend (`n` = 1, after 30 min idle, 2026-10-12) | `grounded measure-cold-start --first ask` |
 | Warm end-to-end latency through Vercel | median 2.47 s and 2.63 s in the two runs (`n` = 3 each; too few for a p95), against the NFR-1 p50 target of 4 s | the same reports |
+| Rerank price per call, at list price | $2.50 per 1,000 searches for `rerank-v4.0-pro`; one reranked request is one search (read on 2026-10-12) | `backend/pricing.toml`; [Re-ranking: what it bought](#re-ranking-what-it-bought) |
+| Rerank latency, p50 / p95 of live calls | _TBD (6.04b)_ | the results file of the `hybrid`-next-to-`hybrid_rerank` run (`rerank.latency_p50_ms`), via `grounded eval diff` |
 | p50/p95 per stage in production, cache hit rate, fallback rate | _TBD (Phase 8)_ | the `request_logs` views and the public dashboard |
 
 The cold-start measurement times the function start and the Neon wake separately from a real question, and says plainly
@@ -532,6 +585,10 @@ uv run grounded eval report   # the tables above, from the committed eval/baseli
 ```
 
 ```bash
+uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../eval/results/rerank-compare.json   # the lift, question by question, from a results file of a manual hybrid_rerank run (docs/runbooks/rerank-eval.md)
+```
+
+```bash
 export PROMPTFOO_PYTHON="$(uv run --project backend python -c 'import sys; print(sys.executable)')"
 npx promptfoo@0.123.1 eval -c eval/promptfoo/promptfooconfig.yaml -j 1 --no-cache -o eval/results/<name>.json
 ```
@@ -569,6 +626,7 @@ CI touches Neon production or a Vercel project on its own.
 | [docs/runbooks/neon-production.md](docs/runbooks/neon-production.md) | migrate and seed Neon, the least-privilege `app` role and its checks, rollback, enabling housekeeping |
 | [docs/runbooks/vercel-deploy.md](docs/runbooks/vercel-deploy.md) | the two Vercel projects, environment variables, previews without secrets, the first-deployment checklist (V1 to V17), the cold-start measurement |
 | [docs/runbooks/mvp-closeout.md](docs/runbooks/mvp-closeout.md) | the MVP exit criteria with evidence, the manual check of the rate limit and the budget, what is deferred |
+| [docs/runbooks/rerank-eval.md](docs/runbooks/rerank-eval.md) | the `hybrid_rerank` evals, by hand with the Author's Cohere, Gemini and Groq keys: the settings, the 150-call budget, the comparison run, the generation run, the baseline PR |
 
 | Workflow | Trigger | State on 2026-10-12 |
 |---|---|---|
@@ -592,12 +650,12 @@ target); `EVAL_RECORD_RUNS` is unset, so CI does not write `eval_runs`. The keep
 | 3 | `/v1/ask` with structured output, citations, confidence | ✅ done ([closeout](tickets/phase-3/3.14-closeout.md)) |
 | 4 | promptfoo generation eval + CI quality gate | ✅ done ([closeout](tickets/phase-4/4.12-closeout.md)) |
 | 5 | UI, abuse protection, deployment. **MVP** | ✅ done, live ([closeout](docs/runbooks/mvp-closeout.md); [MVP status](#mvp-status)) |
-| 6 | Re-ranking with measured lift | ⬜ |
+| 6 | Re-ranking with measured lift | 🟡 code complete; measurement pending (6.04b: the Author's API keys). Lift not measured yet: [Re-ranking: what it bought](#re-ranking-what-it-bought) |
 | 7 | Provider fallback + circuit breaker | ⬜ |
 | 8 | Observability dashboard, cost, calibration | ⬜ |
 | 9 | Failure-mode analysis, polish | ⬜ |
 
-✅ done · ⬜ not started
+✅ done · 🟡 code complete, not closed · ⬜ not started
 
 Phase details and exit criteria: [docs/PRD.md §9](docs/PRD.md#9-delivery-phases).
 

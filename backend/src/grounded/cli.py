@@ -45,6 +45,9 @@ from grounded.evals.ask_batch import (
     summarize,
     write_ask_batch,
 )
+from grounded.evals.diff import DiffError
+from grounded.evals.diff import compare as compare_runs
+from grounded.evals.diff import render as render_diff
 from grounded.evals.eval_record import (
     EvalRecordError,
     EvalRunRow,
@@ -93,6 +96,7 @@ from grounded.evals.judge_sample import (
 )
 from grounded.evals.report import build_report
 from grounded.evals.retrieval_runner import (
+    RESULTS_DIR,
     RETRIEVAL_BASELINE,
     BaselineMismatchError,
     RerankRunError,
@@ -1213,6 +1217,68 @@ def eval_report(
     except (OSError, ValueError) as exc:
         raise _fail(f"Cannot read the baselines: {exc}") from exc
     _echo_markdown(report)
+
+
+DEFAULT_DIFF_RESULTS = RESULTS_DIR / "rerank-compare.json"  # what the rerank runbook writes
+
+
+@eval_app.command("diff")
+def eval_diff(
+    config: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--config",
+            help="The two retrieval configs to compare, the base first (repeat the option). "
+            "Default: hybrid, then hybrid_rerank.",
+            show_default=False,
+        ),
+    ] = None,
+    results: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--results",
+            help="Retrieval results file(s) (`eval retrieval --out`): one file that holds both "
+            "configs, or two files (the first config is read from the first, the second from the "
+            f"second). Default: {DEFAULT_DIFF_RESULTS.name} in eval/results.",
+            show_default=False,
+        ),
+    ] = None,
+    golden: Annotated[
+        Path | None,
+        typer.Option(
+            help="The golden-set file the runs scored (it gives the grade of each label, which a "
+            "results file does not keep). Default: the version the first run recorded.",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Compare two configs of a retrieval eval question by question: mean metrics with n, the paired
+    delta, wins and losses by nDCG@5, and the rank of every grade-2 label in both (Markdown).
+
+    Reads files only: no database, no API, no cost. Refuses (exit 1) runs that are not comparable
+    (another golden-set file or index, other retrieval settings, other questions, a file that does
+    not add up, a reranked list that is not the hybrid candidates reordered) and lists every reason.
+    """
+    names = config or ["hybrid", "hybrid_rerank"]
+    paths = results or [DEFAULT_DIFF_RESULTS]
+    runs: list[RetrievalRun] = []
+    for path in paths:
+        try:
+            runs.append(read_run(path))
+        except (OSError, ValueError) as exc:
+            raise _fail(f"Cannot read the results file {path}: {exc}") from exc
+    golden_path = golden or GOLDEN_DIR / f"golden_set.{runs[0].info.golden_set_version}.jsonl"
+    try:
+        items = load_golden_set(golden_path)
+        digest = golden_set_digest(golden_path)
+    except (GoldenSetError, OSError) as exc:
+        raise _fail(f"Cannot read the golden set {golden_path}: {exc}") from exc
+    try:
+        diff = compare_runs(runs, names, golden=items, golden_sha256=digest)
+    except DiffError as exc:
+        reasons = "\n".join(f"- {problem}" for problem in exc.problems)
+        raise _fail(f"Not compared, the runs cannot be compared:\n{reasons}") from exc
+    _echo_markdown(render_diff(diff))
 
 
 @eval_app.command("agreement")

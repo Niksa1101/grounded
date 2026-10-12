@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-11zh.vercel.app`, and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). Next: Phase 6 |
+| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-11zh.vercel.app`, and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). **Phase 6: code complete; measurement pending (ticket 6.04b, the Author's Cohere, Gemini and Groq keys).** It is not closed: of its three exit criteria the degradation path is tested, and `hybrid_rerank` rows and the lift report do not exist yet ([§9](#phase-6--re-ranking-with-measured-lift), [§12](#12-assumptions-and-open-items)) |
 | Owner / Author | probniprobic4@gmail.com |
 | Last updated | 2026-10-12 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
@@ -331,6 +331,17 @@ trip the gate, and the block depends on the `run-eval` label being added (open i
 
 **Exit:** `hybrid_rerank` rows in both baselines. Lift reported honestly (including "no lift" if so). Degradation path tested.
 
+**Status (the closeout check of 6.05, 2026-10-12): code complete, not closed.** Tickets 6.01 to 6.04a and the diff tool of 6.05 are
+merged or in review; 6.04b (the real runs and the baseline PR) and the lift analysis wait for the Author's keys. Phase 6 is not done.
+
+| # | Exit criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | `hybrid_rerank` rows in both baselines | **Not met** | `eval/baselines/retrieval.json` has `dense`, `fts`, `hybrid`; `generation.json` has `no_rag`, `hybrid`. The real runs need `COHERE_API_KEY`, `GEMINI_API_KEY` and `GROQ_API_KEY`, and none was in the root `.env` (checked 2026-10-12 without printing a value). The steps are in [runbooks/rerank-eval.md](runbooks/rerank-eval.md) |
+| 2 | Lift reported honestly (including "no lift") | **Not met yet** | Nothing is measured, so nothing is reported. The README section "Re-ranking: what it bought" is a draft that says "Lift: not yet measured" and holds no metric; `tests/unit/test_rerank_readme.py` fails if it still says so once a `hybrid_rerank` row is committed. The tool for the analysis, `grounded eval diff`, is done (Tech §15.2) |
+| 3 | Degradation path tested | **Met** | `tests/integration/test_rerank_path.py` (25 tests, a real Postgres, `FakeReranker`) and `test_rerank_cap.py` (7): each of the five error codes (`rate_limited`, `timeout`, `unavailable`, `rejected`, `bad_output`) leaves a request that succeeds, with the prompt of a request that never reranked; `cap_reached` and a cap of 0 make no call; a hung reranker degrades at the stage timeout; a cancelled rerank is **not** swallowed as a degradation (`CancelledError` propagates); a failing cap reserve is fail-closed; the log carries the code and the exception type, never the question or the provider's text; an answer-cache hit skips rerank and a degraded answer is not cached; rerank off changes nothing; eval mode has no cap but keeps the stage timeout. The adapter's error mapping is tested over a mock transport (`tests/unit/test_cohere_reranker.py`, 53), the pacing and metering in `test_rerank_pacing.py` (17), the retrieval eval's stop on a reranker error in `test_retrieval_rerank_eval.py` (17), the generation side in `test_promptfoo_rerank.py` (14), and the baseline writer's refusal of a degraded row in `test_rerank_baseline_rows.py` (22). 215 tests in these nine files pass (2026-10-12; the two not named above are `test_rerank.py`, 49, and `test_rerank_wiring.py`, 11) |
+
+What the Author must still do, in order, is the list under "Phase 6 closeout" in §12.
+
 ### Phase 7 — Multi-provider fallback + circuit breaker
 | Task | Owner |
 |---|---|
@@ -516,6 +527,41 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   existing tests pinned `hybrid_rerank` as an unknown mode and were changed with the feature (`mode_of` and the CLI's
   list of configs). (9) The generation gate is not run on a rerank-only results file: it fails closed without the
   gated `hybrid` config in the run; the check is `grounded eval baseline`.
+- **Phase 6 closeout (6.05, 2026-10-12): code complete, not closed. Pending-Author list.** The exit criteria are checked in
+  §9 (degradation tested; rows and lift report missing). No real call was made in Phase 6 (tally 0 of 150), no number
+  of the lift exists, and none is written anywhere. What the Author does, in order (the commands are in
+  [runbooks/rerank-eval.md](runbooks/rerank-eval.md), which says which are copy and which are typed):
+  (1) put `COHERE_API_KEY`, `GEMINI_API_KEY` and `GROQ_API_KEY` in the root `.env` (never in a chat, a PR or another file),
+  with `RERANK_PROVIDER=cohere`, `RERANK_MODEL=rerank-v4.0-pro`, `GEMINI_MODEL`, `GROQ_MODEL` and `JUDGE_MODEL` (step 1);
+  (2) the first real call, which settles whether the **Trial key accepts `rerank-v4.0-pro`**: if not, `rerank-v4.0-fast`
+  and a line in the PR (D55) (step 3); (3) the retrieval comparison run (`hybrid` next to `hybrid_rerank`, up to 24 live
+  calls, about 2.5 minutes), keep the file with the live latency, then `grounded eval diff` (steps 4 and 5);
+  (4) the generation run, smoke first, then the one authorized full run (step 6); (5) the baseline PR
+  `eval: update baseline (add hybrid_rerank rows)` on the conditions the Author set: only added rows, every existing row and
+  threshold byte-identical (`git diff`), numbers from `--write-baseline` and `grounded eval baseline` only, never an
+  `inconclusive` or degraded run, no thresholds on the new rows, the `run-eval` label, the Author's approval of the rows
+  (step 7); the README eval block is re-pasted in the same PR (a test fails until it is), and
+  `tests/unit/test_rerank_readme.py` then also fails until the draft line "Lift: not yet measured" is replaced;
+  (6) fill the empty `rerank-lift` block of the README section "Re-ranking: what it bought" from `grounded eval report` and
+  `grounded eval diff`, write the reading (nDCG@5 and MRR lift with `n`, notable wins and losses, the cost against the lift,
+  a recommendation; "no lift" is valid), fix the rerank latency cells of "Cost and latency", then mark Phase 6 done in the
+  README roadmap, the PRD status line, `tickets/README.md` (6.04, 6.05) and here; (7) set `RERANK_PROVIDER=none` in `.env`
+  again after the runs (the first promptfoo config needs it off).
+  Still open and not part of the runs: whether to confirm or veto D55 (model, cap 30, timeout 3 s), which the Agent decided
+  while the Author was away; the later decision to give `CONFIDENCE_W_RERANK` a weight above 0 (Author-owned
+  `confidence.py` and the guard of R.17, after the lift is known and after the rerank score's comparability is read, see the
+  6.01 item 6); the visible "rerank degraded" notice (a `meta` field, an API contract change, moot while the demo has rerank
+  off); serving rerank to real users (a paid Cohere key set only in the hosted environment, or a local cross-encoder:
+  documented in Tech §8, not built); replacing the documented-shape fixture `tests/fixtures/cohere/rerank_success.json` with a
+  recording if the first real call differs; and what Cohere's pages do not say (the 429 body and `Retry-After`, whether the
+  1,000 calls are a calendar month and one pool).
+  Decisions taken by the Agent in 6.05, for the Author to veto: (a) `grounded eval diff` takes the grade of each label from
+  the golden-set file (a results file does not keep it) and refuses a file whose sha256 is not the one the run recorded;
+  (b) the refusal rules are listed in Tech §15.2; (c) a tie is a difference of at most 1e-9 in nDCG@5, wins and losses are
+  counted by nDCG@5 only, and the per-question table puts losses first; (d) the tool accepts any two configs of a results
+  file, and applies the extra checks only to `hybrid` against `hybrid_rerank`; (e) the README roadmap got a 🟡 state, "code
+  complete, not closed", instead of ✅ or ⬜; (f) `test_rerank_readme.py` makes the baseline PR of 6.04b fail until the README
+  draft line is replaced, so a stale "not measured" cannot survive a merge of the rows.
 - Free-tier limits of `gemini-3.5-flash-lite` (read from the Author's AI Studio rate-limit page, project `grounded`, 2026-10-06; the docs only point to that dashboard): **500 requests per day** (the Limit line sits on the labelled 500 tick). RPM (15) and TPM (250K) are read off the chart as the midpoint of the axis, they are not printed, so treat them as approximate. For comparison `gemini-3.6-flash` showed 5 RPM, 20 RPD and ~250K TPM. The daily quota resets at midnight Pacific time. Ticket 5.01 set `DAILY_LLM_BUDGET` to 300, below 500, and every retry counts as a request.
 - The current list price of `gemini-embedding-001`: the pricing page now lists only `gemini-embedding-2` ($0.20 per 1M text tokens). `pricing.toml` uses $0.15 per 1M input tokens from Google's general-availability post (2025-07-14), a dated announcement and not a row of today's page. Re-check it if the page lists the model again.
 - `gemini-embedding-001` is still served (shutdown date 2028-05-14, Google's deprecations page, 2026-10-06), but Google's recommended replacement is `gemini-embedding-2`. Moving to it is a new index version (new vectors, new baselines) and is not planned in this project's phases.
