@@ -427,6 +427,48 @@ def test_the_command_prints_the_report_and_warns_about_quota(site: FakeSite) -> 
     assert all(h.get("x-proxy-secret") == SECRET for h in readyz)
 
 
+def cold_ask(site: FakeSite, *extra: str) -> Any:
+    site.ask_replies = [(200, retrieval_answer(250))]
+    return invoke(
+        "--frontend-url",
+        site.url,
+        "--idle-minutes",
+        "30",
+        "--first",
+        "ask",
+        "--asks",
+        "1",
+        "--warm-probes",
+        "0",
+        "--yes",
+        *extra,
+    )
+
+
+def test_the_command_takes_the_deployed_retrieval_timeout_from_an_option(site: FakeSite) -> None:
+    result = cold_ask(site, "--retrieval-timeout-s", "5")
+
+    assert result.exit_code == 0, result.output
+    assert "against `RETRIEVAL_TIMEOUT_S` = 5 s (5% of it)" in result.stdout
+    assert "comes from `--retrieval-timeout-s`" in result.stdout
+
+
+def test_without_the_option_the_command_uses_settings_and_says_so(site: FakeSite) -> None:
+    result = cold_ask(site)
+
+    assert result.exit_code == 0, result.output
+    assert "against `RETRIEVAL_TIMEOUT_S` = 2 s" in result.stdout  # the Settings default
+    assert "this machine's `Settings` value" in result.stdout
+
+
+def test_a_retrieval_timeout_that_is_not_positive_is_refused(site: FakeSite) -> None:
+    result = cold_ask(site, "--retrieval-timeout-s", "0")
+
+    assert result.exit_code == 1
+    assert "RETRIEVAL_TIMEOUT_S must be positive" in result.output
+    assert site.requests == []
+
+
 def test_the_command_refuses_a_backend_url_without_the_secret(
     site: FakeSite, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -585,6 +627,35 @@ def test_in_health_order_the_retrieval_line_names_the_after_probes_ask(site: Fak
     report = render_report(run_measurement(plan(site, asks=1, retrieval_timeout_s=5.0)))
     assert "Retrieval of the first ask (after probes): 0.25 s against" in report
     assert "= 5 s" in report
+
+
+def test_the_retrieval_line_says_where_the_timeout_came_from(site: FakeSite) -> None:
+    # The deployed RETRIEVAL_TIMEOUT_S can differ from the one this machine reads (R.29): the
+    # report must not present a local default as the deployed value.
+    site.ask_replies = [(200, retrieval_answer(300)), (200, retrieval_answer(300))]
+    kwargs = {"first": "ask", "asks": 1, "warm_probes": 0}
+    local = render_report(run_measurement(plan(site, **kwargs)))
+    given = render_report(
+        run_measurement(
+            plan(site, **kwargs, retrieval_timeout_from="option", retrieval_timeout_s=3)
+        )
+    )
+
+    assert "this machine's `Settings` value" in local
+    assert "`--retrieval-timeout-s`" in local  # and says how to pass the deployed one
+    assert "comes from `--retrieval-timeout-s`" in given
+    assert "this machine's" not in given
+
+
+def test_every_branch_of_the_retrieval_line_names_its_source(site: FakeSite) -> None:
+    no_ask = render_report(run_measurement(plan(site, asks=0, warm_probes=0)))
+    site.ask_replies = [(200, answer(cache_hit=True, total_ms=30))]
+    hit = render_report(run_measurement(plan(site, first="ask", asks=1, warm_probes=0)))
+
+    assert "No ask was sent" in no_ask
+    assert "answer-cache hit: no retrieval ran" in hit
+    for report in (no_ask, hit):
+        assert "this machine's `Settings` value" in report
 
 
 def test_a_cold_deadline_exceeded_points_at_request_logs_not_at_the_margin(

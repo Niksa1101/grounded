@@ -22,7 +22,8 @@ the rate limiter, which is strict, never unlimited.
 ``authenticate`` runs before ``AskRoute`` starts the request trace, so a rejected request writes no
 ``request_logs`` row (``unauthorized`` is not an outcome in DB.md §4: unauthenticated callers must
 not be able to fill the table). ``/readyz`` checks the secret alone (``check_proxy_secret``, PRD
-D54c): it queries the database, so an anonymous caller must not be able to keep Neon awake.
+D54c): it queries the database, so it must not add a free path that wakes Neon. (``/v1/ask`` touches
+the database by design, so that risk is accepted, PRD D56b.)
 ``/healthz`` touches nothing and stays public.
 """
 
