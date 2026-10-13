@@ -201,7 +201,7 @@ CREATE TABLE answer_cache (
     hit_count             integer     NOT NULL DEFAULT 0,
     created_at            timestamptz NOT NULL DEFAULT now(),
     last_hit_at           timestamptz,
-    expires_at            timestamptz NOT NULL        -- <= created_at + 30 days
+    expires_at            timestamptz NOT NULL        -- <= created_at + 29 days (0001's comment says 30; see §9)
 );
 CREATE INDEX answer_cache_expires_idx ON answer_cache (expires_at);
 
@@ -221,9 +221,9 @@ CREATE TABLE request_logs (
     id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     created_at             timestamptz NOT NULL DEFAULT now(),
     source                 text NOT NULL CHECK (source IN ('web', 'api', 'eval')),
-    question               text,                      -- NULLed after 30 days
+    question               text,                      -- NULLed after 29 days (§9)
     question_hash          text NOT NULL,             -- sha256(normalized question); kept for dedup stats
-    ip_hash                text,                      -- HMAC-SHA256(ip, IP_HASH_SECRET); NULLed after 30 days
+    ip_hash                text,                      -- HMAC-SHA256(ip, IP_HASH_SECRET); NULLed after 29 days (§9)
     http_status            smallint NOT NULL,
     outcome                text NOT NULL CHECK (outcome IN (
                                'answered', 'partial', 'insufficient_context',
@@ -511,7 +511,7 @@ every age). The statements below are the ones in the module, with the periods bo
 (`tests/unit/test_housekeeping_docs.py` keeps the two identical):
 
 ```sql
--- Privacy: strip user text and pseudonymous IDs after 30 days.
+-- Privacy: strip user text and pseudonymous IDs after 29 days (the promise is 30, NFR-4).
 UPDATE request_logs SET question = NULL, ip_hash = NULL
 WHERE created_at < now() - make_interval(days => %(text_days)s)
   AND (question IS NOT NULL OR ip_hash IS NOT NULL);
@@ -520,8 +520,10 @@ WHERE created_at < now() - make_interval(days => %(text_days)s)
 DELETE FROM request_logs
 WHERE created_at < now() - make_interval(days => %(telemetry_days)s);
 
--- Expired cache.
-DELETE FROM answer_cache WHERE expires_at < now();
+-- Expired cache, and cache rows whose question is older than the text boundary.
+DELETE FROM answer_cache
+WHERE expires_at < now()
+   OR created_at < now() - make_interval(days => %(text_days)s);
 
 -- Old usage counters.
 DELETE FROM daily_usage
@@ -534,13 +536,20 @@ WHERE window_start < now() - make_interval(days => %(window_days)s);
 
 | Parameter | Value | Source |
 |---|---|---|
-| `text_days` | 30 | PRD NFR-4, D32 |
+| `text_days` | 29 | PRD NFR-4, D32, D56a |
 | `telemetry_days` | 180 | this section |
 | `usage_days` | 90 | this section |
 | `window_days` | 2 | 5.01 (the day window is the longest) |
 
 The periods are module constants, not `Settings` fields: they are the privacy contract, and a setting
-could only lengthen them (`ANSWER_CACHE_TTL_DAYS` is capped at the same 30 days).
+could only lengthen them (`ANSWER_CACHE_TTL_DAYS` is capped at the same 29 days).
+
+**29 days keep a promise of 30.** NFR-4 and the UI say user text is kept *at most 30 days*. The job runs once a day
+and deletes what is older than its boundary, so with a boundary of 30 a row written just after one run was cleaned by
+the run 30 days later and lived up to 31 (the review of 2026-10-12). With 29 the promise holds with a daily job; a
+run that GitHub delays or an unswitched workflow still lengthens the period (the README says so). The cache rule
+also deletes by `created_at`: `_PUT` refreshes it when it replaces an expired row, so a live row's `created_at` is
+the time its question was stored, and rows written under the earlier 30-day TTL are cleaned too.
 
 - **One transaction.** The five statements run in one transaction (one `now()` for all of them, all or nothing).
   The command prints one line per rule with the affected rows, in the order above (`request_logs_text_removed`,

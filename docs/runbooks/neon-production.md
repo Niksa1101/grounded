@@ -382,7 +382,7 @@ Skip it if you are not ready; nothing else depends on it.
 ## 10. Housekeeping: retention and keep-warm (ticket 5.11)
 
 [`housekeeping.yml`](../../.github/workflows/housekeeping.yml) enforces the privacy retention in
-production (question text and IP hashes removed after 30 days, logs deleted after 180, expired cache
+production (question text and IP hashes removed after 29 days, logs deleted after 180, expired cache
 rows, old usage and rate-limit windows; DB.md §9) and pings the backend's `/readyz`. It is a write to
 production with the owner URL, so it **ships with its daily schedule off**: until you set
 `HOUSEKEEPING_ENABLED`, the scheduled run skips both jobs, and only a manual run from `main` does

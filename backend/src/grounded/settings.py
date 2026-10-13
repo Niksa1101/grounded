@@ -179,7 +179,8 @@ class Settings(BaseSettings):
     # Global cap on LLM calls per UTC day (5.05). Unset = no cap in dev and test; required in prod.
     # Demo: 300, below the 500 RPD of gemini-3.5-flash-lite (PRD D31).
     daily_llm_budget: int | None = Field(default=None, gt=0)
-    answer_cache_ttl_days: int = Field(default=30, gt=0, le=30)  # must not exceed retention
+    # At most the 29 days after which the daily job deletes user text (infra/housekeeping.py).
+    answer_cache_ttl_days: int = Field(default=29, gt=0, le=29)
     proxy_shared_secret: SecretStr | None = None
     ip_hash_secret: SecretStr | None = None
     allow_direct_api: bool = False

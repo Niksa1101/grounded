@@ -1,8 +1,15 @@
 """Retention and housekeeping: the SQL of DB.md §9, run by ``grounded housekeeping`` (ticket 5.11).
 
 Privacy is enforced here, in tested code, not in workflow YAML (PRD NFR-4, AGENTS.md §6.13):
-question text and the IP hash are removed after 30 days, telemetry rows after 180, expired answers
-from the cache, old usage counters and rate-limit windows that can no longer matter.
+question text and the IP hash are removed after 29 days, telemetry rows after 180, expired answers
+(and answers whose question is older than the text boundary) from the cache, old usage counters and
+rate-limit windows that can no longer matter.
+
+**29 days keep a promise of 30.** NFR-4 says user text is kept at most 30 days
+(``USER_TEXT_MAX_AGE_DAYS``). The job runs once a day and deletes what is *older than* its
+boundary, so a row written just after one run would be cleaned by the run 30 days later and lived up
+to 31. Deleting at 29 days (``USER_TEXT_RETENTION_DAYS``) leaves a day of slack for that gap. A cron
+that GitHub delays or switches off still lengthens the period; the README says so (D56a).
 
 **Owner role.** The runtime's ``app`` role has no DELETE on ``request_logs``, ``daily_usage`` or
 ``rate_limit_counters`` and no UPDATE on ``request_logs`` (DB.md §5), by design: a bug or a leaked
@@ -15,10 +22,10 @@ statements and rolls back: the counts are the real ones, with no second copy of 
 could drift from the deleting ones.
 
 **The periods are contract, not tunables.** They come from PRD NFR-4 and DB.md §9 (and the answer
-cache's TTL is capped at the 30 days, ``Settings.answer_cache_ttl_days``), so they are constants
-here and not ``Settings`` fields: a setting that could lengthen the privacy retention is a hole.
-They are bound as parameters. ``tests/unit/test_housekeeping_docs.py`` keeps the statements and
-DB.md §9 identical.
+cache's TTL is capped at the same 29 days, ``Settings.answer_cache_ttl_days``), so they are
+constants here and not ``Settings`` fields: a setting that could lengthen the privacy retention is
+a hole. They are bound as parameters. ``tests/unit/test_housekeeping_docs.py`` keeps the statements
+and DB.md §9 identical.
 
 **Counts.** A row older than 180 days that still has its question is first counted by rule 1 (its
 text is removed) and then by rule 2 (the row is deleted). A second run counts 0 everywhere.
@@ -32,7 +39,8 @@ from typing import Final
 import psycopg
 
 # PRD NFR-4 / DB.md §9. Not configuration: see the module docstring.
-USER_TEXT_RETENTION_DAYS: Final = 30
+USER_TEXT_MAX_AGE_DAYS: Final = 30  # the promise made to users (UI, README)
+USER_TEXT_RETENTION_DAYS: Final = USER_TEXT_MAX_AGE_DAYS - 1  # the boundary the daily job applies
 TELEMETRY_RETENTION_DAYS: Final = 180
 USAGE_RETENTION_DAYS: Final = 90
 RATE_LIMIT_RETENTION_DAYS: Final = 2
@@ -69,9 +77,11 @@ WHERE created_at < now() - make_interval(days => %(telemetry_days)s)
     Rule(
         name="answer_cache_expired_deleted",
         sql="""
-DELETE FROM answer_cache WHERE expires_at < now()
+DELETE FROM answer_cache
+WHERE expires_at < now()
+   OR created_at < now() - make_interval(days => %(text_days)s)
 """,
-        params={},
+        params={"text_days": USER_TEXT_RETENTION_DAYS},
     ),
     Rule(
         name="daily_usage_deleted",

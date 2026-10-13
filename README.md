@@ -489,18 +489,20 @@ so do not enter personal data. Questions are kept for at most 30 days to measure
 stands behind it (NFR-4, PRD D32, [Tech §12](docs/Tech.md)):
 
 - **Question text** is stored in the request log and, normalized, in the answer cache, and is removed after at most 30 days
-  (DB §9). Rows without text are kept 180 days for the statistics.
+  (the daily job deletes it at 29 days, to keep the promise; DB §9). Rows without text are kept 180 days for the statistics.
 - **No raw IP is stored or logged.** The client address is hashed (HMAC-SHA256 with a server-side secret) inside the
-  request's auth check and only the hash is kept, for rate limiting; the hash is removed from the log after 30 days and the
-  limiter's counters after 2 days. The API's own logs carry no address and no question text (only a hash of the question),
+  request's auth check and only the hash is kept, for rate limiting; the hash is removed from the log together with the question text, and the
+  limiter's counters are deleted after 2 days. The API's own logs carry no address and no question text (only a hash of the question),
   and the server's access log is off. Vercel's runtime logs show no client IP either (documented, and observed on 2026-10-12: check V1
   of the [runbook](docs/runbooks/vercel-deploy.md#results)).
 - **Public surfaces show aggregates only**, never question text.
 - **Questions go to Google's Gemini API** (the answer and the query embedding) on its free tier, which may use inputs to
   improve models. That is why the notice says not to enter personal data.
-- **The 30 days are enforced by a scheduled workflow** (`housekeeping.yml`) that ships switched off and that GitHub stops
-  after 60 days without repository activity ([limitations](#failure-modes-and-limitations)). It was switched on
-  on 2026-10-12, the day of the first real questions; while it runs, the retention promise holds.
+- **The 30 days are enforced by a scheduled workflow** (`housekeeping.yml`) that deletes question text and IP hashes
+  once they are older than 29 days (a day inside the promise, because the job runs once a day). It ships switched off
+  and GitHub stops it after 60 days without repository activity ([limitations](#failure-modes-and-limitations)). It was
+  switched on on 2026-10-12, the day of the first real questions; while it runs on time, the retention promise holds. A
+  run that GitHub delays, or a workflow that is off, can make the text live longer than 30 days.
 
 ## Tech stack
 
