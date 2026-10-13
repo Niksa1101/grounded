@@ -23,12 +23,12 @@ errors. Two sessions must not share the database at the same time, and must not 
 - **No change to what the tests see:** the fixture still yields a fresh, migrated database.
 
 **Acceptance criteria**
-- [ ] An integration test opens a second admin connection and checks that `pg_try_advisory_lock(hashtext(dbname))`
+- [x] An integration test opens a second admin connection and checks that `pg_try_advisory_lock(hashtext(dbname))`
       returns false while the session runs (the lock is held), and that the key is the one the fixture uses.
-- [ ] The wait loop is covered without sleeping on a wall clock: its clock and sleep are injected (a small helper in
+- [x] The wait loop is covered without sleeping on a wall clock: its clock and sleep are injected (a small helper in
       `tests/support` or the conftest), and a unit test drives it (lock free at once; free after N tries; never free
       until the deadline, which fails).
-- [ ] Two parallel `uv run pytest tests/integration/test_schema.py` in two terminals: the second waits and both pass.
+- [x] Two parallel `uv run pytest tests/integration/test_schema.py` in two terminals: the second waits and both pass.
 
 **Verify:** standard checks; the two-terminal run above.
 
