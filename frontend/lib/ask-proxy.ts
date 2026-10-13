@@ -118,7 +118,13 @@ export async function forwardAsk(
         "The backend took too long to answer. It may be waking up: try again.",
       );
     }
-    console.error("ask proxy: backend unreachable", (error as Error).name);
+    if (request.signal.aborted) {
+      // The visitor left (closed the tab, navigated away): not a backend fault, so not an error
+      // in the logs. The answer is the same as before; nobody is left to read it.
+      console.info("ask proxy: client went away");
+    } else {
+      console.error("ask proxy: backend unreachable", (error as Error).name);
+    }
     return failure(502, "upstream_unavailable", "The backend could not be reached.");
   }
 

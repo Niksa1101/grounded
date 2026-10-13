@@ -32,10 +32,10 @@ the Author accepts it, and the docs now say so, with an optional Vercel Firewall
   deployed value may differ from the local one.
 
 **Acceptance criteria**
-- [ ] `lib/ask-proxy.test.ts`: with an aborted request signal `console.error` is not called and `console.info` is.
-- [ ] `tests/unit/test_cold_start.py`, `test_cli.py`: the option overrides the default; the report line names its source.
-- [ ] The runbook step exists and cites the Vercel documentation with a date, or says the plan has no such rule.
-- [ ] PRD §12 lists the two open items; the code comments no longer claim that Neon cannot be kept awake.
+- [x] `lib/ask-proxy.test.ts`: with an aborted request signal `console.error` is not called and `console.info` is.
+- [x] `tests/unit/test_cold_start.py`, `test_cli.py`: the option overrides the default; the report line names its source.
+- [x] The runbook step exists and cites the Vercel documentation with a date, or says the plan has no such rule.
+- [x] PRD §12 lists the two open items; the code comments no longer claim that Neon cannot be kept awake.
 
 **Verify:** standard checks plus the frontend checks (`npm run lint && npm run typecheck && npm test && npm run build`).
 
