@@ -101,7 +101,8 @@ Phase 3 is closed too; its code review left follow-ups R.09–R.17 ([phase 3 REA
 Ticket 4.01 waits for R.17.
 
 Phase 5's code review left follow-ups R.18–R.25 ([phase 5 README](phase-5/README.md#review-follow-ups)), to be done
-before the Author runs the production runbooks.
+before the Author runs the production runbooks. A second review after the rollout left R.26–R.30
+([phase 5 README](phase-5/README.md#second-review-follow-ups-2026-10-12)); they do not block Phase 6 or 7.
 
 ## Cross-cutting rules (short form)
 
@@ -215,6 +216,11 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.23](phase-5/R.23-cold-start-questions.md) | Cold-start measurement: distinct questions, cold cache hits, cold retrieval | Build | G | done | [#107](https://github.com/Niksa1101/grounded/pull/107) |
 | [R.24](phase-5/R.24-deterministic-deadline-tests.md) | Deterministic deadline tests and env isolation in tests | Build | G | done | [#108](https://github.com/Niksa1101/grounded/pull/108) |
 | [R.25](phase-5/R.25-review-polish.md) | Small hardening and documentation drift | Build | G | done | [#109](https://github.com/Niksa1101/grounded/pull/109) |
+| [R.26](phase-5/README.md#second-review-follow-ups-2026-10-12) | Second review follow-ups: tickets and decision (D56) | Build | G | todo | |
+| [R.27](phase-5/R.27-retention-boundary.md) | Retention boundary: delete user text at 29 days | Build | G | todo | |
+| [R.28](phase-5/R.28-surrogate-bad-request.md) | A lone surrogate is a 422, not a 500 | Build | G | todo | |
+| [R.29](phase-5/R.29-neon-wake-and-polish.md) | Neon wake rationale, optional firewall step and small items | Build | G | todo | |
+| [R.30](phase-5/R.30-test-db-lock.md) | A test database that survives parallel runs | Build | G | todo | |
 | **6** | **[Re-ranking with measured lift](phase-6/README.md)** | | | | |
 | [6.01](phase-6/6.01-decision-cohere.md) | Decision: Cohere rerank model, trial limits, cap, price | Decision | D (delegated to G, D55) | done | [#112](https://github.com/Niksa1101/grounded/pull/112) |
 | [6.02](phase-6/6.02-rerank-adapter.md) | Cohere rerank adapter and rerank cache | Build | G | done | [#113](https://github.com/Niksa1101/grounded/pull/113) |

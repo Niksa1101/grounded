@@ -60,4 +60,30 @@ the first keep-warm run; run the Neon runbook (it now applies `0004` and sets th
 Vercel runbook including V17, then the MVP closeout checks; set `HOUSEKEEPING_ENABLED=true` within 30 days of the
 first real question.
 
+## Second review follow-ups (2026-10-12)
+
+A second review of Phase 5 (after R.18–R.25 and the production rollout) found no blocker. It found a retention gap
+(the daily job removes question text only once it is older than 30 days, so the text lives up to about 31 days while the
+UI and the README promise "at most 30"), a public 500 (a lone surrogate in `question` reaches `question_hash` and
+raises), a residual Neon-wake risk that D54c does not close, a test database that two parallel pytest runs drop under
+each other, and small items. Decisions of 2026-10-12 (PRD D56):
+
+- a. Question text and `ip_hash` are deleted when older than **29 days**; the cache rule also deletes by `created_at`;
+  `ANSWER_CACHE_TTL_DAYS` is at most 29 (default 29). "At most 30 days" then holds with a daily job (R.27).
+- b. `/api/ask` wakes Neon on every request, on purpose (the rate limiter and the request log). D54c removed only the
+  extra `/readyz` path. The residual risk is accepted; a Vercel Firewall rate-limit rule is an optional Author step
+  (R.29).
+- c. One PR per ticket on `phase-5/<topic>`; the Agent squash-merges after green CI. R.27 waits for the Author's
+  confirmation that `ANSWER_CACHE_TTL_DAYS` is not set in Vercel (a merge deploys the backend, and `le=29` would refuse
+  a value of 30). Secrets, GitHub settings and production stay the Author's.
+
+- R.26 — Second review follow-ups: tickets and decision (D56) (this section)
+- [R.27 — Retention boundary: delete user text at 29 days](R.27-retention-boundary.md)
+- [R.28 — A lone surrogate is a 422, not a 500](R.28-surrogate-bad-request.md)
+- [R.29 — Neon wake rationale, optional firewall step and small items](R.29-neon-wake-and-polish.md)
+- [R.30 — A test database that survives parallel runs](R.30-test-db-lock.md)
+
+After the series, the Author's steps: confirm that `ANSWER_CACHE_TTL_DAYS` is not set in the Vercel backend project
+(before R.27 merges); optionally add the Firewall rate-limit rule from the Vercel runbook.
+
 Rules for working a ticket: [../README.md](../README.md).
