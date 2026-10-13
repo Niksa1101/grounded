@@ -31,7 +31,7 @@ frozen snapshot of the official docs, and it **measures** how well it does that.
 
 Built unless marked *planned*:
 
-- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is built behind `RERANK_PROVIDER` (default `none`, and off in the deployed demo: Cohere's trial key may not be used in production). It degrades to the RRF order on any error, timeout or daily cap. Its lift is **not measured yet**: that needs the Author's API keys ([Re-ranking: what it bought](#re-ranking-what-it-bought)).
+- **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is built behind `RERANK_PROVIDER` (default `none`, and off in the deployed demo: Cohere's trial key may not be used in production). It degrades to the RRF order on any error, timeout or daily cap. Measured on the golden set it lifts nDCG@5 from 0.665 to 0.807 (n = 25) at about 2.5 times the cost per question ([Re-ranking: what it bought](#re-ranking-what-it-bought)).
 - **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry. Falling back to a second provider after that is *planned* (Phase 7); until then a second invalid output is a `502`.
 - **Verifiable citations:** each claim cites source labels. The server validates them and maps them to exact `docs-page#section` links. The model never writes URLs.
 - **Honest refusals:** `answered | partial | insufficient_context`. Out-of-scope questions are refused, and that behavior is measured.
@@ -80,30 +80,31 @@ relevance labels. Retrieval metrics are deterministic. Generation metrics use an
 than the generator, and the judge's agreement with human labels is published.
 
 <!-- eval-report:start -->
-**Retrieval ablation** (`eval/baselines/retrieval.json`; retrieval only, no LLM): golden set v1 (sha256 8f084817), index 0.141.1@4949e8a3, embedding gemini-embedding-001 (768 dims), git 18fd399, 2026-10-01.
+**Retrieval ablation** (`eval/baselines/retrieval.json`; retrieval only, no LLM): golden set v1 (sha256 8f084817), index 0.141.1@4949e8a3, embedding gemini-embedding-001 (768 dims), git 18fd399 | 456c709, 2026-10-01 | 2026-10-13.
 
 | Config | n | k | Recall@5 | Recall@10 | MRR | nDCG@5 | nDCG@10 |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | dense | 25 | 20 | 0.760 | 0.920 | 0.714 | 0.698 | 0.752 |
 | fts | 25 | 20 | 0.580 | 0.700 | 0.435 | 0.466 | 0.513 |
 | hybrid | 25 | 40 | 0.740 | 0.780 | 0.657 | 0.665 | 0.685 |
+| hybrid_rerank | 25 | 40 | 0.900 | 0.980 | 0.833 | 0.807 | 0.834 |
 | *PRD §8 target (hybrid)* |  |  | ≥ 0.80 | — | ≥ 0.60 | ≥ 0.65 | — |
 | *hybrid vs target* |  |  | not met | — | met | met | — |
 
-**Generation baseline** (`eval/baselines/generation.json`): golden set v1 (sha256 8f084817), index 0.141.1@4949e8a3, generator gemini / gemini-3.5-flash-lite (prompts: no_rag answer_no_rag_v1@5f725a9d, hybrid answer_v1@08cc49e5), judge groq / openai/gpt-oss-120b (judge_correctness_v1@1bde5fe4, judge_faithfulness_v1@84103412), promptfoo 0.123.1, git 2a7d381, 2026-10-08.
+**Generation baseline** (`eval/baselines/generation.json`): golden set v1 (sha256 8f084817), index 0.141.1@4949e8a3, generator gemini / gemini-3.5-flash-lite (prompts: no_rag answer_no_rag_v1@5f725a9d, hybrid answer_v1@08cc49e5, hybrid_rerank answer_v1@08cc49e5), judge groq / openai/gpt-oss-120b (judge_correctness_v1@1bde5fe4, judge_faithfulness_v1@84103412), promptfoo 0.123.1, git 2a7d381 | 9c0bade, 2026-10-08 | 2026-10-13.
 
-| Metric | no_rag | hybrid | Target (PRD §8) | hybrid vs target |
-|---|---:|---:|---:|---:|
-| Questions asked | 30 | 30 |  |  |
-| Faithfulness | — | 1.000 (n=23) | ≥ 0.90 | met |
-| Answer correctness | 0.633 (n=30) | 0.900 (n=30) | ≥ 0.75 | met |
-| Refusal accuracy | 0.867 (n=30) | 0.933 (n=30) | ≥ 0.90 | met |
-| Schema first-try validity | 1.000 (n=30) | 1.000 (n=30) | ≥ 0.97 | met |
-| Citation validity | — | 1.000 (n=30) | — | — |
-| Citation precision | — | 0.633 (n=23) | — | — |
-| RAG value: correctness(hybrid) - correctness(no_rag) | — | +0.267 (n=30 vs 30) | > 0 | met |
-| Latency p50 / p95, ms (warm) | 1769 / 2117 (n=26) | 1901 / 2584 (n=26) |  |  |
-| Shadow cost per 1k questions, USD | $1.0064 (n=30) | $1.6855 (n=30) |  |  |
+| Metric | no_rag | hybrid | hybrid_rerank | Target (PRD §8) | hybrid vs target |
+|---|---:|---:|---:|---:|---:|
+| Questions asked | 30 | 30 | 30 |  |  |
+| Faithfulness | — | 1.000 (n=23) | 1.000 (n=25) | ≥ 0.90 | met |
+| Answer correctness | 0.633 (n=30) | 0.900 (n=30) | 1.000 (n=30) | ≥ 0.75 | met |
+| Refusal accuracy | 0.867 (n=30) | 0.933 (n=30) | 1.000 (n=30) | ≥ 0.90 | met |
+| Schema first-try validity | 1.000 (n=30) | 1.000 (n=30) | 0.967 (n=30) | ≥ 0.97 | met |
+| Citation validity | — | 1.000 (n=30) | 1.000 (n=30) | — | — |
+| Citation precision | — | 0.633 (n=23) | 0.727 (n=25) | — | — |
+| RAG value: correctness(hybrid) - correctness(no_rag) | — | +0.267 (n=30 vs 30) | — | > 0 | met |
+| Latency p50 / p95, ms (warm) | 1769 / 2117 (n=26) | 1901 / 2584 (n=26) | 2101 / 5038 (n=26) |  |  |
+| Shadow cost per 1k questions, USD | $1.0064 (n=30) | $1.6855 (n=30) | $4.2144 (n=30) |  |  |
 
 `—`: not applicable or not scored. `n` is the number of questions a metric was scored on (not-applicable and unscored questions are left out). Met / not met compares the unrounded value with the target of PRD §8. `k` is the length of the list a retrieval mode returns (`K_DENSE`, `K_FTS` or `K_FUSED`); MRR runs over it.
 <!-- eval-report:end -->
@@ -113,8 +114,8 @@ Every number above is pasted from `uv run grounded eval report` (run in `backend
 **The generation table is the first baseline (ticket 4.09b):** one full run of the golden set through `no_rag` and
 `hybrid`, judged by Groq `openai/gpt-oss-120b`. Faithfulness is claim-level (it grades the claims of an answer, not its
 whole text) and is only partly validated by the judge–human agreement below (4.11b). No generation number is written
-by hand. A `hybrid_rerank` row joins both tables when the Author has run the real evals
-([Re-ranking: what it bought](#re-ranking-what-it-bought)); there is none yet.
+by hand. The `hybrid_rerank` rows come from the manual runs of 2026-10-13 (ungated: no thresholds, never run in CI);
+what they mean is in [Re-ranking: what it bought](#re-ranking-what-it-bought).
 Judge–human agreement: [below](#judge-human-agreement). Golden set: `v1`, 25 answerable questions (retrieval n = 25, one
 question = 0.04) and 5 unanswerable ones. Shadow cost is real token counts × paid list prices (dated in
 `backend/pricing.toml`); the demo itself runs on free tiers.
@@ -245,53 +246,147 @@ n = 25, so differences under one question (0.04) are not claims either way.
 
 ### Re-ranking: what it bought
 
-> **Draft for the Author's final edit (ticket 6.05).** The agent wrote what is already true and committed: what was
-> built, how the lift will be measured, what a call costs. **No rerank number exists yet, so none is written here.**
-> The results block below is empty on purpose, and the reading under it is the Author's, after the real runs.
+> **The reading below was written by the agent at the Author's request (2026-10-14) and reviewed by the Author in the
+> baseline PR.** Every number in it is copied from the eval report above or from `grounded eval diff`, never typed.
 
-**Lift: not yet measured.** The `hybrid_rerank` rows of the two baselines (retrieval and generation) do not exist, because
-the real runs need the Author's Cohere, Gemini and Groq keys (ticket 6.04b) and none was available when the Phase 6 code was
-finished. Until the rows are committed this page claims no quality gain from re-ranking and no latency for it. The steps are
-in [docs/runbooks/rerank-eval.md](docs/runbooks/rerank-eval.md); `uv run grounded eval diff` (in `backend/`) prints the
-comparison from the run's results file.
+**Lift: measured, and it is large on retrieval.** On the 25 answerable golden questions and the same 40 fused candidates,
+re-ranking with `rerank-v4.0-pro` raises nDCG@5 from 0.665 to 0.807 (+0.142, n = 25), MRR from 0.657 to 0.833 (+0.176),
+Recall@5 from 0.740 to 0.900 and Recall@10 from 0.780 to 0.980. Every one of these deltas is more than three questions'
+worth (one question is 0.04 of a mean). It wins on 13 questions, loses on 3 and ties on 9 (by nDCG@5). On answers the
+gain is smaller and rests on one run per config, so it is reported as consistent with the retrieval lift, not as proven.
+The cost is high: at list price the rerank call alone costs more than the rest of a request.
 
 - **What was built** ([Tech §8](docs/Tech.md), PRD D55). A Cohere reranker (`rerank-v4.0-pro`, pinned) behind
   `RERANK_PROVIDER` (default `none`) reorders the 40 fused candidates (`K_FUSED`); the top 5 (`K_CONTEXT`) become the context.
-  `hybrid_rerank` is a config of the retrieval eval and of the promptfoo generation eval, run by hand only.
-  Whether Cohere's Trial key accepts `rerank-v4.0-pro` is still unverified (it takes the first real call; the documented
-  fallback is `rerank-v4.0-fast`).
+  `hybrid_rerank` is a config of the retrieval eval and of the promptfoo generation eval, run by hand only. Cohere's Trial
+  key accepts `rerank-v4.0-pro` (the first real call, 2026-10-13), so the fallback `rerank-v4.0-fast` was not needed.
 - **Where it is switched off.** The deployed demo keeps `RERANK_PROVIDER=none`: Cohere's Trial key may not be used in
   production, so the live site never reranks. CI never runs `hybrid_rerank` either (it would spend the Trial's monthly
-  calls), and its future baseline rows carry no thresholds, so no gate depends on a Cohere key.
-- **How the lift will be measured.** On the same 25 answerable questions and the same 40 candidates, the only difference being
+  calls), and its baseline rows carry no thresholds, so no gate depends on a Cohere key.
+- **How the lift was measured.** On the same 25 answerable questions and the same 40 candidates, the only difference being
   their order: `nDCG@5(hybrid_rerank) - nDCG@5(hybrid)`, the PRD §8 target ("> 0, reported whatever it is"), with MRR,
   Recall@5/10 and nDCG@10 beside it, always with `n`. One question is 0.04 of a mean, so a smaller difference is not reported as a
-  lift or a loss, and "no lift" is a valid result. `grounded eval diff` adds the per-question wins and losses and the rank of
-  every labelled section before and after.
+  lift or a loss. `grounded eval diff` adds the per-question wins and losses and the rank of every labelled section before and
+  after. The `hybrid` row of that run reproduced the committed `hybrid` baseline exactly, so the two rows are comparable.
 - **Graceful degradation.** Any Cohere error, a 429, a timeout (`RERANK_TIMEOUT_S`, 3 s, one attempt, no retry) or the daily cap
   (`RERANK_DAILY_CAP`, 30) leaves the request on the RRF order: it still succeeds, the reason goes to
   `request_logs.rerank_error` and the log (never to the API response), and an answer built on the degraded order is not stored
   in the answer cache. This is tested with fakes against a real Postgres
   (`backend/tests/integration/test_rerank_path.py` and `test_rerank_cap.py`); the ask page does not show the degradation yet
   (its debug row has "Rerank used"; PRD §12). The confidence number ignores the rerank score (`CONFIDENCE_W_RERANK` = 0.0).
+  No case of either real run degraded.
 - **What it costs, from committed data only.** At list price (`backend/pricing.toml`: `rerank-v4.0-pro`, $2.50 per 1,000
   searches, read on cohere.com/pricing on 2026-10-12) one reranked request is one search (40 candidates are one search unit),
-  so $2.50 per 1,000 requests. The committed shadow cost of a `hybrid` request is $1.6855 per 1,000 questions
-  (`eval/baselines/generation.json`, n = 30, 2026-10-08), so the rerank call alone would cost more than the embedding and the
-  generation of that request together. Whether a lift is worth that is the Author's call, written below after the measurement.
-  Trial calls are free and capped (1,000 a month, 10 a minute). The rerank latency is not measured yet (`_TBD_`, filled by the
-  comparison run: [cost and latency](#cost-and-latency)).
+  so $2.50 per 1,000 requests. The shadow cost per 1,000 questions goes from $1.6855 (`hybrid`) to $4.2144 (`hybrid_rerank`),
+  both n = 30. The live rerank calls of the comparison run took p50 578 / p95 906 ms (n = 24 live calls, 2026-10-13); that is
+  the call alone, without the eval's pacing. Trial calls are free and capped (1,000 a month, 10 a minute).
 
-<!-- rerank-lift: NOT FILLED YET (ticket 6.05, after the real runs of 6.04b). Paste here, in this order, and never type a number:
-     1. the `hybrid` and `hybrid_rerank` rows of the two tables above, which `uv run grounded eval report` (in backend/) prints
-        once step 7 of the runbook has written the rows (same branch): the eval-report block above is where they appear, so quote them from there;
-     2. the output of `uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../eval/results/rerank-compare-first.json`
-        (in backend/): the means with n, the paired delta, wins / losses / ties by nDCG@5, the per-question table, and the rerank
-        call counts and live latency (with the number of live calls they cover) of the file.
-     Then replace the line "Lift: not yet measured" above with the reading, and delete this comment. -->
+**The numbers.** The `hybrid` and `hybrid_rerank` rows of the two tables above, quoted from the eval report:
 
-**Reading (the Author's, after the runs):** _TBD (6.05)_ - the nDCG@5 and MRR lift with `n`, the notable wins and losses, the
-cost against the lift, and a recommendation.
+| Retrieval (n = 25, k = 40) | Recall@5 | Recall@10 | MRR | nDCG@5 | nDCG@10 |
+|---|---:|---:|---:|---:|---:|
+| hybrid | 0.740 | 0.780 | 0.657 | 0.665 | 0.685 |
+| hybrid_rerank | 0.900 | 0.980 | 0.833 | 0.807 | 0.834 |
+
+| Generation (30 questions) | hybrid | hybrid_rerank |
+|---|---:|---:|
+| Faithfulness | 1.000 (n=23) | 1.000 (n=25) |
+| Answer correctness | 0.900 (n=30) | 1.000 (n=30) |
+| Refusal accuracy | 0.933 (n=30) | 1.000 (n=30) |
+| Schema first-try validity | 1.000 (n=30) | 0.967 (n=30) |
+| Citation validity | 1.000 (n=30) | 1.000 (n=30) |
+| Citation precision | 0.633 (n=23) | 0.727 (n=25) |
+| Latency p50 / p95, ms (warm) | 1901 / 2584 (n=26) | 2101 / 5038 (n=26) |
+| Shadow cost per 1k questions, USD | $1.6855 (n=30) | $4.2144 (n=30) |
+
+<details>
+<summary>The output of <code>uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../eval/results/rerank-compare-first.json</code> (in <code>backend/</code>; its headings turned into bold lines)</summary>
+
+**`hybrid_rerank` against `hybrid`**
+
+Paired over the same 25 answerable questions (5 unanswerable ones are not scored), from one results file: golden set v1 (sha256 8f084817), index 0.141.1@4949e8a3, embedding gemini-embedding-001 (768 dims), k = 40, git 9c0bade. Every delta is `hybrid_rerank` minus `hybrid`, computed from the unrounded numbers of the results file.
+
+**Mean metrics**
+
+| Metric | n | hybrid | hybrid_rerank | Delta |
+|---|---:|---:|---:|---:|
+| Recall@5 | 25 | 0.740 | 0.900 | +0.160 |
+| Recall@10 | 25 | 0.780 | 0.980 | +0.200 |
+| MRR | 25 | 0.657 | 0.833 | +0.176 |
+| nDCG@5 | 25 | 0.665 | 0.807 | +0.142 |
+| nDCG@10 | 25 | 0.685 | 0.834 | +0.149 |
+
+**Per-question outcome by nDCG@5**
+
+`hybrid_rerank` is better on 13 questions, `hybrid` is better on 3, and they tie on 9 (n = 25). A tie is a difference of at most 1e-9 in nDCG@5 (float noise); any other difference is a win or a loss, however small.
+
+**One question's worth.** With n = 25, one question moves a mean metric by at most 1/25 = 0.040 (a per-question metric lies in [0, 1]). A difference of means below that is not reported as a lift or a loss (AGENTS.md §7). This is a paired comparison on 25 questions, not a significance test. The nDCG@5 delta, +0.142, is at least one question's worth.
+
+**Rerank calls**
+
+`hybrid_rerank` reranked with rerank-v4.0-pro: 24 live calls, 1 answered from the rerank cache; live latency p50 578 / p95 906 ms.
+
+**Per question**
+
+Sorted by the nDCG@5 delta (losses first), then by question id. A rank is the 1-based position of the first chunk that matches the label; `null` means the label was not retrieved. Labels are listed in the golden set's order.
+
+| Question | Type | Δ Recall@5 | Δ Recall@10 | Δ MRR | Δ nDCG@5 | Δ nDCG@10 | Grade-2 label ranks, hybrid -> hybrid_rerank |
+|---|---|---:|---:|---:|---:|---:|---|
+| q003 | factual | 0.000 | 0.000 | -0.500 | -0.369 | -0.369 | `tutorial/index.md#install-fastapi`: 1 -> 2 |
+| q030 | code | 0.000 | 0.000 | 0.000 | -0.107 | -0.107 | `tutorial/request-files.md#multiple-file-uploads`: 1 -> 1 |
+| q019 | how_to | 0.000 | 0.000 | 0.000 | -0.012 | -0.012 | `tutorial/request-forms.md#define-form-parameters`: 3 -> 3 |
+| q007 | factual | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `advanced/custom-response.md#streamingresponse`: 1 -> 1 |
+| q011 | factual | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `tutorial/cookie-params.md#declare-cookie-parameters`: 1 -> 1 |
+| q013 | factual | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `tutorial/dependencies/dependencies-with-yield.md#scope-for-sub-dependencies`: 1 -> 1 |
+| q020 | how_to | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `tutorial/handling-errors.md#override-the-httpexception-error-handler`: 1 -> 1 |
+| q022 | how_to | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `advanced/security/http-basic-auth.md#check-the-username`: 1 -> 1 |
+| q023 | how_to | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `deployment/concepts.md#previous-steps-before-starting`: 1 -> 1 |
+| q029 | code | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `tutorial/query-params-str-validations.md#query-parameter-list-multiple-values-with-defaults`: 1 -> 1 |
+| q034 | code | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `tutorial/handling-errors.md#install-custom-exception-handlers`: 1 -> 1 |
+| q042 | multi_section | 0.000 | 0.000 | 0.000 | 0.000 | 0.000 | `advanced/response-cookies.md#use-a-response-parameter`: 1 -> 1; `advanced/response-headers.md#use-a-response-parameter`: 2 -> 2 |
+| q018 | how_to | 0.000 | +0.500 | 0.000 | +0.024 | +0.192 | `advanced/behind-a-proxy.md#redirects-with-https`: 1 -> 1; `advanced/behind-a-proxy.md#enable-proxy-forwarded-headers`: 31 -> 9 |
+| q036 | multi_section | 0.000 | 0.000 | +0.500 | +0.088 | +0.088 | `tutorial/body-updates.md#using-pydantics-exclude-unset-parameter`: 2 -> 1; `tutorial/body-updates.md#using-pydantics-update-parameter`: 4 -> 5 |
+| q008 | factual | 0.000 | +1.000 | +0.127 | +0.102 | +0.396 | `tutorial/response-model.md#fastapi-data-filtering`: 25 -> 6 |
+| q031 | code | 0.000 | 0.000 | 0.000 | +0.174 | +0.076 | `advanced/stream-data.md#stream-bytes`: 1 -> 1 |
+| q028 | code | 0.000 | 0.000 | +0.500 | +0.203 | +0.203 | `tutorial/body-nested-models.md#deeply-nested-models`: 2 -> 1 |
+| q039 | multi_section | 0.000 | +0.500 | +0.500 | +0.213 | +0.362 | `tutorial/security/simple-oauth2.md#use-the-form-data`: 22 -> 10; `tutorial/security/simple-oauth2.md#return-the-token`: 2 -> 1 |
+| q043 | multi_section | 0.000 | 0.000 | +0.500 | +0.322 | +0.260 | `tutorial/handling-errors.md#add-custom-headers`: 19 -> 16; `tutorial/security/simple-oauth2.md#update-the-dependencies`: 2 -> 1 |
+| q017 | how_to | +1.000 | 0.000 | +0.233 | +0.358 | +0.119 | `tutorial/first-steps.md#configure-the-app-entrypoint-in-pyproject-toml`: 10 -> 3 |
+| q002 | factual | 0.000 | 0.000 | +0.500 | +0.424 | +0.325 | `advanced/using-request-directly.md#details-about-the-request-object`: 2 -> 1 |
+| q001 | factual | 0.000 | 0.000 | +0.750 | +0.470 | +0.470 | `advanced/custom-response.md#json-responses`: 4 -> 1 |
+| q015 | factual | +1.000 | +1.000 | +0.450 | +0.509 | +0.509 | `tutorial/security/simple-oauth2.md#use-the-form-data`: 20 -> 2 |
+| q016 | how_to | +1.000 | +1.000 | +0.429 | +0.566 | +0.628 | `advanced/advanced-dependencies.md#a-callable-instance`: 15 -> 2; `advanced/advanced-dependencies.md#use-the-instance-as-a-dependency`: 14 -> 5 |
+| q026 | how_to | +1.000 | +1.000 | +0.409 | +0.591 | +0.591 | `tutorial/background-tasks.md#using-backgroundtasks`: 15 -> 4; `tutorial/background-tasks.md#add-the-background-task`: 11 -> 2 |
+
+</details>
+
+**Reading.**
+
+- **Retrieval: a real lift, from rescuing sections the fusion buried.** The biggest wins are questions whose grade-2 section
+  sat deep in the fused list and moved into the top 5: q015 (rank 20 to 2), q016 (15 to 2), q026 (11 and 15 to 2 and 4),
+  q017 (10 to 3), and q008 (25 to 6, into the top 10). That is what a cross-encoder does well and the RRF of two first-stage
+  rankings cannot: it reads the question and the chunk together. Nine questions tie because the label was already first.
+- **The losses are small, and the largest may be a label gap.** q030 (-0.107) and q019 (-0.012) lose less than one question's
+  worth. q003 loses 0.369: its label `tutorial/index.md#install-fastapi` drops from rank 1 to 2, because the reranker puts the
+  section `#without-fastapi-cloud-cli` first. The question asks how to install FastAPI "without the FastAPI Cloud CLI", and
+  that section holds the exact command; the generated answer gives that command and the judge grades it correct. The golden
+  labels of q003 probably miss that section. They are not changed here (`v1` is referenced by the baselines); it is a
+  candidate for `v2`.
+- **Answers: better, on a smaller and noisier signal.** Correctness goes from 0.900 to 1.000 and refusal accuracy from 0.933 to
+  1.000 (n = 30 each, three and two questions' worth), faithfulness stays 1.000 while two more answerable questions are
+  answered instead of refused (n = 23 to 25), and citation precision rises from 0.633 to 0.727. These come from one run of each
+  config, five days apart, with the same generator, prompt and judge; an LLM run is not deterministic, so they agree with the
+  retrieval lift but do not prove it on their own. Schema first-try validity drops from 1.000 to 0.967: one case needed its
+  one retry. That is one question's worth, the prompt and the schema are the same, and it is not attributed to re-ranking.
+- **Latency: the call costs about half a second.** The live calls took p50 578 / p95 906 ms. The generation table's latency
+  (p95 2584 to 5038 ms) is not a measure of the rerank: in that run all but 4 reranks came from the rerank cache, so the
+  difference is mostly Gemini's own variance on another day.
+- **Cost and recommendation.** Re-ranking makes a request about 2.5 times as expensive at list price ($1.6855 to $4.2144 per
+  1,000 questions), almost all of it the Cohere search. The quality gain is large enough to be worth that where the answer is
+  the product, and the measurement supports turning it on. It stays off in the deployed demo for now: the Trial key may not be
+  used in production (D55), and a production key means real cost, so switching the demo on is a separate decision for the
+  Author, not part of Phase 6. Two follow-ups are noted in PRD §12: the q003 label for golden set `v2`, and whether the rerank
+  score should get a weight in the confidence heuristic once calibration is measured (Phase 8).
 
 ### CI quality gate
 - **Every PR:** lint, types, unit + integration tests, retrieval eval vs baseline (the `retrieval-eval` job: a fresh
@@ -422,7 +517,7 @@ output or a dated measurement produced it; otherwise the cell says `_TBD_` and n
 | First question after idle, end to end | 7.04 s, of which 3.29 s inside the backend (`n` = 1, after 30 min idle, 2026-10-12) | `grounded measure-cold-start --first ask` |
 | Warm end-to-end latency through Vercel | median 2.47 s and 2.63 s in the two runs (`n` = 3 each; too few for a p95), against the NFR-1 p50 target of 4 s | the same reports |
 | Rerank price per call, at list price | $2.50 per 1,000 searches for `rerank-v4.0-pro`; one reranked request is one search (read on 2026-10-12) | `backend/pricing.toml`; [Re-ranking: what it bought](#re-ranking-what-it-bought) |
-| Rerank latency, p50 / p95 of live calls | _TBD (6.04b)_ | the results file of the `hybrid`-next-to-`hybrid_rerank` run (`rerank.latency_p50_ms`), via `grounded eval diff` |
+| Rerank latency, p50 / p95 of live calls | 578 / 906 ms (n = 24 live calls, 2026-10-13; the call alone) | the results file of the `hybrid`-next-to-`hybrid_rerank` run (`rerank.latency_p50_ms`), via `grounded eval diff` |
 | p50/p95 per stage in production, cache hit rate, fallback rate | _TBD (Phase 8)_ | the `request_logs` views and the public dashboard |
 
 The cold-start measurement times the function start and the Neon wake separately from a real question, and says plainly
@@ -652,7 +747,7 @@ target); `EVAL_RECORD_RUNS` is unset, so CI does not write `eval_runs`. The keep
 | 3 | `/v1/ask` with structured output, citations, confidence | ✅ done ([closeout](tickets/phase-3/3.14-closeout.md)) |
 | 4 | promptfoo generation eval + CI quality gate | ✅ done ([closeout](tickets/phase-4/4.12-closeout.md)) |
 | 5 | UI, abuse protection, deployment. **MVP** | ✅ done, live ([closeout](docs/runbooks/mvp-closeout.md); [MVP status](#mvp-status)) |
-| 6 | Re-ranking with measured lift | 🟡 code complete; measurement pending (6.04b: the Author's API keys). Lift not measured yet: [Re-ranking: what it bought](#re-ranking-what-it-bought) |
+| 6 | Re-ranking with measured lift | ✅ done: nDCG@5 0.665 to 0.807 (n = 25), off in the demo ([Re-ranking: what it bought](#re-ranking-what-it-bought)) |
 | 7 | Provider fallback + circuit breaker | ⬜ |
 | 8 | Observability dashboard, cost, calibration | ⬜ |
 | 9 | Failure-mode analysis, polish | ⬜ |

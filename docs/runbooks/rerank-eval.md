@@ -363,7 +363,13 @@ Filled by whoever runs the steps. Numbers are copied from the tool output, never
 | Date | Step | Live Cohere calls | Total so far | Note |
 |---|---|---|---|---|
 | 2026-10-12 | 6.01 to 6.03 | 0 | 0 | no key in `.env`; everything tested with fakes |
-| _TBD_ | | | | |
+| 2026-10-13 | 3: one real call | 1 | 1 | `rerank_used: true`: the Trial key accepts `rerank-v4.0-pro` |
+| 2026-10-13 | 4: retrieval comparison | 24 | 25 | 1 from the cache (step 3); latency p50 578 / p95 906 ms |
+| 2026-10-13 | 6.2: smoke run | 1 | 26 | `q045`; the generation failed on Gemini `503 high demand` and 40 s timeouts, twice more with 0 Cohere calls, then passed in the evening |
+| 2026-10-13 | 6.3: full run | 4 | 30 | cache count 26 to 30; 0 errors, no degraded case |
+| 2026-10-14 | 7: baseline writes | 0 | 30 | `--write-baseline` answered from the cache |
 
-_TBD_ (6.04b): the trial key's acceptance of `rerank-v4.0-pro`; the retrieval comparison (`n` = 25); live latency
-p50 and p95; the generation run; the two baseline rows and their PR.
+Results (6.04b): the Trial key accepts `rerank-v4.0-pro`; the retrieval comparison (`n` = 25) and the generation run are
+in the README section "Re-ranking: what it bought"; the two baseline rows were added by the baseline PR. A Gemini `503`
+or `generation call exceeded 40s` on every case of a smoke run is Google's capacity, not this setup: wait (hours, not
+minutes) and run the smoke again; it costs no Cohere call once its questions are cached.
