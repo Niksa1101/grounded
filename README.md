@@ -284,10 +284,10 @@ comparison from the run's results file.
 
 <!-- rerank-lift: NOT FILLED YET (ticket 6.05, after the real runs of 6.04b). Paste here, in this order, and never type a number:
      1. the `hybrid` and `hybrid_rerank` rows of the two tables above, which `uv run grounded eval report` (in backend/) prints
-        once the baseline PR is merged: the eval-report block above is where they appear, so quote them from there;
+        once step 7 of the runbook has written the rows (same branch): the eval-report block above is where they appear, so quote them from there;
      2. the output of `uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../eval/results/rerank-compare-first.json`
         (in backend/): the means with n, the paired delta, wins / losses / ties by nDCG@5, the per-question table, and the rerank
-        call counts and live latency of the file.
+        call counts and live latency (with the number of live calls they cover) of the file.
      Then replace the line "Lift: not yet measured" above with the reading, and delete this comment. -->
 
 **Reading (the Author's, after the runs):** _TBD (6.05)_ - the nDCG@5 and MRR lift with `n`, the notable wins and losses, the

@@ -31,4 +31,15 @@ draft and the closeout check. The exit criteria: `hybrid_rerank` rows in both ba
 **not met yet**, degradation path tested **met** (evidence in [6.05](6.05-lift-analysis.md) and PRD §9). What is left needs the
 Author's Cohere, Gemini and Groq keys (6.04b); the list is PRD §12, "Phase 6 closeout".
 
+## Review follow-ups (2026-10-13)
+
+A code review of 6.01–6.05 (#112–#116) found no blocker, but found gaps that hit 6.04b: the runbook asked the
+Author to read an HTTP status the log did not carry, and did not say that the baseline PR stays red until the README
+section is filled. Also: pacing at exactly the Trial limit, no call tally for the generation run, no note on what
+the live latency covers, and a stale docstring. Decisions of the Author (2026-10-13): `EVAL_RERANK_MIN_INTERVAL_S`
+defaults to 7.0; only `status_code` of a `rejected` call is logged; one ticket, one PR. The finding on parallel
+pytest runs was already fixed by R.30 (#121).
+
+- [R.31 — Phase 6 review follow-ups](R.31-review-followups.md)
+
 Rules for working a ticket: [../README.md](../README.md).

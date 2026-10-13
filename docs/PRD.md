@@ -537,14 +537,14 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   with `RERANK_PROVIDER=cohere`, `RERANK_MODEL=rerank-v4.0-pro`, `GEMINI_MODEL`, `GROQ_MODEL` and `JUDGE_MODEL` (step 1);
   (2) the first real call, which settles whether the **Trial key accepts `rerank-v4.0-pro`**: if not, `rerank-v4.0-fast`
   and a line in the PR (D55) (step 3); (3) the retrieval comparison run (`hybrid` next to `hybrid_rerank`, up to 24 live
-  calls, about 2.5 minutes), keep the file with the live latency, then `grounded eval diff` (steps 4 and 5);
+  calls, about 3 minutes), keep the file with the live latency, then `grounded eval diff` (steps 4 and 5);
   (4) the generation run, smoke first, then the one authorized full run (step 6); (5) the baseline PR
   `eval: update baseline (add hybrid_rerank rows)` on the conditions the Author set: only added rows, every existing row and
   threshold byte-identical (`git diff`), numbers from `--write-baseline` and `grounded eval baseline` only, never an
   `inconclusive` or degraded run, no thresholds on the new rows, the `run-eval` label, the Author's approval of the rows
   (step 7); the README eval block is re-pasted in the same PR (a test fails until it is), and
-  `tests/unit/test_rerank_readme.py` then also fails until the draft line "Lift: not yet measured" is replaced;
-  (6) fill the empty `rerank-lift` block of the README section "Re-ranking: what it bought" from `grounded eval report` and
+  `tests/unit/test_rerank_readme.py` then also fails until the draft line "Lift: not yet measured" is replaced,
+  so the PR stays red until (6) is done in it (R.31); (6) in the same PR, fill the empty `rerank-lift` block of the README section "Re-ranking: what it bought" from `grounded eval report` and
   `grounded eval diff`, write the reading (nDCG@5 and MRR lift with `n`, notable wins and losses, the cost against the lift,
   a recommendation; "no lift" is valid), fix the rerank latency cells of "Cost and latency", then mark Phase 6 done in the
   README roadmap, the PRD status line, `tickets/README.md` (6.04, 6.05) and here; (7) set `RERANK_PROVIDER=none` in `.env`

@@ -10,12 +10,17 @@ from __future__ import annotations
 
 import re
 import shlex
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from grounded.cli import app
+from grounded.infra.kvcache import KVCache
+from grounded.retrieval.rerank import RERANK_CACHE_FILE
+from grounded.settings import Settings
 
 ROOT = Path(__file__).resolve().parents[3]
 RUNBOOK = (ROOT / "docs" / "runbooks" / "rerank-eval.md").read_text(encoding="utf-8")
@@ -73,7 +78,7 @@ def test_the_budget_and_the_model_are_the_decided_ones() -> None:
     assert "150 real calls" in RUNBOOK
     assert "RERANK_MODEL=rerank-v4.0-pro" in RUNBOOK
     assert "rerank-v4.0-fast" in RUNBOOK
-    assert "6 seconds" in RUNBOOK  # the default of EVAL_RERANK_MIN_INTERVAL_S
+    assert "7 seconds" in RUNBOOK  # the default of EVAL_RERANK_MIN_INTERVAL_S
 
 
 def test_the_promptfoo_command_is_the_pinned_one_with_the_second_config() -> None:
@@ -89,3 +94,42 @@ def test_the_promptfoo_command_is_the_pinned_one_with_the_second_config() -> Non
         assert command.startswith("npx promptfoo@0.123.1 eval -c eval/promptfoo/")
         assert "promptfooconfig.rerank.yaml" in command
         assert "-j 1 --no-cache -o eval/results/" in command
+
+
+# The tally of the generation run (step 6.1): a read-only count of the rerank cache.
+CACHE_COUNT = re.compile(
+    r"sqlite3\.connect\('file:(?P<path>[^?']+)\?mode=ro', uri=True\)\.execute\('(?P<sql>[^']+)'\)"
+)
+
+
+def cache_count_command() -> re.Match[str]:
+    [match] = [m for block in command_blocks(RUNBOOK) if (m := CACHE_COUNT.search(block))]
+    return match
+
+
+def test_the_cache_count_reads_the_rerank_cache_the_runtime_writes() -> None:
+    path = Path(cache_count_command()["path"])
+
+    assert path.name == RERANK_CACHE_FILE
+    assert path.parent == Path(".cache")  # run from the root, where CACHE_DIR is anchored
+    # The default CACHE_DIR; .env.example says a relative one is taken from the repo root.
+    assert Settings.model_fields["cache_dir"].default == Path(".cache")
+
+
+def test_the_cache_count_counts_the_stored_calls(tmp_path: Path) -> None:
+    file = tmp_path / RERANK_CACHE_FILE
+    with KVCache(file) as cache:
+        cache.put_many({"call-1": b"[]", "call-2": b"[]"})
+
+    with closing(sqlite3.connect(f"file:{file.as_posix()}?mode=ro", uri=True)) as conn:
+        [count] = conn.execute(cache_count_command()["sql"]).fetchone()
+
+    assert count == 2
+
+
+def test_the_cache_count_never_creates_the_file(tmp_path: Path) -> None:
+    file = tmp_path / RERANK_CACHE_FILE
+
+    with pytest.raises(sqlite3.OperationalError):
+        sqlite3.connect(f"file:{file.as_posix()}?mode=ro", uri=True)
+    assert not file.exists()

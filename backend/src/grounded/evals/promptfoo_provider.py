@@ -184,10 +184,11 @@ def success_metadata(
     before the invalid labels were removed; an attempt that was retried shows in
     ``validation_retries``. ``context`` is what the model could cite, with the chunk text (the judge
     reads it, 4.06), keyed back to the answer by ``chunk_id``; ``retrieved_section_ids`` is the
-    whole retrieval in rank order. Both are empty in ``no_rag``. A case with ``llm_cache_hits > 0``
-    has a replayed reply, so its latency says nothing about the provider and is left out of the
-    latency statistics; ``cold_start`` marks the first call of a worker, which pays for the
-    connection pool and the embedder.
+    whole retrieval in RRF order, before any rerank (the reranked order is the one of ``context``).
+    Both are empty in ``no_rag``. A case with ``llm_cache_hits > 0`` has a replayed reply, so its
+    latency says nothing about the provider and is left out of the latency statistics;
+    ``cold_start`` marks the first call of a worker, which pays for the connection pool and the
+    embedder.
     """
     chunk_by_citation = {c.n: c.chunk_id for c in response.citations}
     meta = response.meta
