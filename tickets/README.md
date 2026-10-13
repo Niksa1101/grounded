@@ -216,7 +216,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [R.23](phase-5/R.23-cold-start-questions.md) | Cold-start measurement: distinct questions, cold cache hits, cold retrieval | Build | G | done | [#107](https://github.com/Niksa1101/grounded/pull/107) |
 | [R.24](phase-5/R.24-deterministic-deadline-tests.md) | Deterministic deadline tests and env isolation in tests | Build | G | done | [#108](https://github.com/Niksa1101/grounded/pull/108) |
 | [R.25](phase-5/R.25-review-polish.md) | Small hardening and documentation drift | Build | G | done | [#109](https://github.com/Niksa1101/grounded/pull/109) |
-| [R.26](phase-5/README.md#second-review-follow-ups-2026-10-12) | Second review follow-ups: tickets and decision (D56) | Build | G | todo | |
+| [R.26](phase-5/README.md#second-review-follow-ups-2026-10-12) | Second review follow-ups: tickets and decision (D56) | Build | G | done | [#117](https://github.com/Niksa1101/grounded/pull/117) |
 | [R.27](phase-5/R.27-retention-boundary.md) | Retention boundary: delete user text at 29 days | Build | G | todo | |
 | [R.28](phase-5/R.28-surrogate-bad-request.md) | A lone surrogate is a 422, not a 500 | Build | G | todo | |
 | [R.29](phase-5/R.29-neon-wake-and-polish.md) | Neon wake rationale, optional firewall step and small items | Build | G | todo | |
