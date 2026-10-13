@@ -172,7 +172,7 @@ or with `ALLOW_DIRECT_API=true`. (The Gemini adapter, built at startup, also nee
 | `RETRIEVAL_TIMEOUT_S` | `2.0` | the retrieval stage of `/v1/ask` (§6, PRD D54a): pool checkout, hybrid search and context build; a timeout is a 504 `deadline_exceeded`; not in eval mode (§15.6) |
 | `RATE_LIMIT_PER_MIN`, `RATE_LIMIT_PER_DAY` | `5`, `20` (the day default was `30` until 5.04) | per IP hash, Postgres fixed windows (§12). Demo values (Vercel env): `5`, `20` |
 | `DAILY_LLM_BUDGET` | unset in dev/test; **required when `APP_ENV=prod`** (5.05) | global cap on LLM calls per UTC day, below the provider's free RPD. Demo value: `300` of `gemini-3.5-flash-lite`'s 500 (PRD §12, D31). Off in eval mode |
-| `ANSWER_CACHE_TTL_DAYS` | `30` | ≤ retention |
+| `ANSWER_CACHE_TTL_DAYS` | `29` | at most 29: the daily job deletes user text at 29 days, one inside the 30-day promise (DB §9, D56a) |
 | `PROXY_SHARED_SECRET` | random 32+ bytes | FE→BE auth |
 | `IP_HASH_SECRET` | random 32+ bytes | HMAC for IPs |
 | `ALLOW_DIRECT_API` | `false` (true only in dev) | bypass proxy secret locally |
@@ -548,7 +548,7 @@ Requirements:
 
 | Cache | Store | Key | Used in | TTL |
 |---|---|---|---|---|
-| Answer cache | Postgres `answer_cache` | sha256(normalized question \| prompt_version \| index_version_id \| retrieval_config_hash \| generator_model \| confidence_config_hash \| generation_config_hash) | prod/dev (off in eval and in `no_rag`) | `ANSWER_CACHE_TTL_DAYS` (≤ 30 days) |
+| Answer cache | Postgres `answer_cache` | sha256(normalized question \| prompt_version \| index_version_id \| retrieval_config_hash \| generator_model \| confidence_config_hash \| generation_config_hash) | prod/dev (off in eval and in `no_rag`) | `ANSWER_CACHE_TTL_DAYS` (≤ 29 days) |
 | Query embedding | in-memory LRU (prod), SQLite (dev/CI/eval), in front of the request-path embedder (§6: one attempt, no sleep) | (model, dim, RETRIEVAL_QUERY, sha256(question)) | all | process lifetime / persistent |
 | Chunk embedding | SQLite `.cache/embeddings.sqlite` | (model, dim, RETRIEVAL_DOCUMENT, content_hash) | ingest | persistent |
 | Rerank | SQLite `.cache/rerank.sqlite` | sha256 of the JSON array [document format version, model, query, ordered candidate content_hashes], no `top_n` (§8) | dev/test/eval, manual runs only (no CI job, D55); never created in prod | persistent |
@@ -564,7 +564,7 @@ Answer cache details (`infra/answer_cache.py`, 3.13):
 - A row that no longer fits `AskResponse` (written before a schema change that left the key alone) is treated as a miss **and deleted** (`AnswerCache.discard`), so the fresh answer of that request replaces it; the write path only overwrites expired rows (DB.md §7.2).
 - The lookup comes right after the active index is known and before the embedding, so a hit costs no embedding, retrieval or LLM call, and the budget reservation (5.05) must come after it: a hit never consumes budget. The lookup is skipped when `APP_ENV=eval` and in `no_rag` mode, which neither read nor write the cache.
 - Only a built, valid response is stored (`answered`, `partial`, `insufficient_context`); every failure raises first, so errors are never cached. A database error on the cache is a logged miss or a skipped write, never a failed request.
-- `expires_at = created_at + ANSWER_CACHE_TTL_DAYS`, and `Settings` and the store both cap it at 30 days (question retention).
+- `expires_at = created_at + ANSWER_CACHE_TTL_DAYS`, and `Settings` and the store both cap it at 29 days, the text boundary of the daily job (DB §9, D56a); the job also deletes a row whose `created_at` is older than that, whatever its `expires_at`.
 The eval LLM cache is keyed by the *full prompt*. Any prompt or context change misses the cache, so regressions are still detected, while identical cases are free and deterministic on re-runs.
 
 Eval LLM cache details (`generation/providers/eval_wrappers.py`, 4.03):

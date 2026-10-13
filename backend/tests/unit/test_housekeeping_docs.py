@@ -54,7 +54,7 @@ def test_the_parameter_table_of_db_md_matches_the_constants() -> None:
 
     assert rows == values
     assert values == {
-        "text_days": "30",
+        "text_days": "29",
         "telemetry_days": "180",
         "usage_days": "90",
         "window_days": "2",
@@ -124,5 +124,6 @@ def test_the_command_uses_the_owner_url_and_passes_dry_run_on(
 
 def test_the_periods_are_the_prd_contract() -> None:
     # NFR-4 / DB.md §9. Not Settings fields: a setting could only lengthen the privacy retention.
-    assert housekeeping.USER_TEXT_RETENTION_DAYS == 30
+    assert housekeeping.USER_TEXT_MAX_AGE_DAYS == 30  # the promise
+    assert housekeeping.USER_TEXT_RETENTION_DAYS == 29  # the boundary of the daily job (D56a)
     assert housekeeping.TELEMETRY_RETENTION_DAYS == 180

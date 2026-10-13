@@ -29,14 +29,14 @@ holds with a daily job. The answer cache gets the same bound.
   the Agent asks the Author in the chat to confirm it is absent and merges only after a "yes".
 
 **Acceptance criteria**
-- [ ] `tests/integration/test_housekeeping.py` (red first): fixtures at the boundary, 29 days minus one hour stays and
+- [x] `tests/integration/test_housekeeping.py` (red first): fixtures at the boundary, 29 days minus one hour stays and
       29 days plus one hour loses its text; a cache row that is 29 days plus one hour old, with `expires_at` in the
       future, is deleted; a younger one stays.
-- [ ] `tests/unit/test_settings.py`: `answer_cache_ttl_days=30` is rejected.
-- [ ] A unit test pins `Settings` maximum == `MAX_TTL_DAYS` == `USER_TEXT_RETENTION_DAYS`, and
+- [x] `tests/unit/test_settings.py`: `answer_cache_ttl_days=30` is rejected.
+- [x] A unit test pins `Settings` maximum == `MAX_TTL_DAYS` == `USER_TEXT_RETENTION_DAYS`, and
       `USER_TEXT_MAX_AGE_DAYS == 30`.
-- [ ] `tests/unit/test_housekeeping_docs.py` keeps DB §9 identical to the module (statement and the `text_days` row).
-- [ ] The UI text "at most 30 days" is unchanged, and still true.
+- [x] `tests/unit/test_housekeeping_docs.py` keeps DB §9 identical to the module (statement and the `text_days` row).
+- [x] The UI text "at most 30 days" is unchanged, and still true.
 
 **Verify:** standard checks; `uv run grounded housekeeping --dry-run` on the local dev database prints the counts.
 

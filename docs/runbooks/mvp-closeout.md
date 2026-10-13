@@ -65,7 +65,7 @@ FRONTEND_URL="https://<the frontend production domain>"
 Q='{"question":"How do I declare a query parameter?"}'
 ```
 
-That question is cached for 30 days after the smoke test, so every request below that uses it is a
+That question is cached for 29 days after the smoke test, so every request below that uses it is a
 cache hit. If it is not cached yet (the first `cache_hit` below is `false`), that one request costs one
 or two LLM calls, which is fine. For the SQL you need the owner URL, exported for one session as in
 the [Neon runbook](neon-production.md) step 4 (`psql "$DATABASE_URL_DIRECT"`). Never paste it anywhere.
@@ -267,7 +267,7 @@ trace to committed output, a dated measurement, a decision record or a pinned co
 | Judge agreement figures, 20 items, 53 claims, kappa, the three disagreements | the committed `eval/judge_agreement/v1.agreement.md` (a test keeps the README block identical to the command's output) |
 | `main` runs: 21 green, 15 pass, 6 inconclusive, dates | `gh run list` and the gate line of each log, read 2026-10-12 (table above) |
 | Rate limit 5 a minute, 20 a day, budget 300 of 500, region `cle1`, timeout chain | PRD D31 and D53, Tech §12 and §18; values of the runbooks |
-| 30 days, 180 days | NFR-4, DB §9, `grounded housekeeping` |
+| 30 days promised, 29 days deleted, 180 days | NFR-4, DB §9 (D56a), `grounded housekeeping` |
 | Weights 0.40, 0.25, 0.20, 0.15, 0.0, `w_self` at most 0.6, uncited cap 0.2 | `Settings` defaults (`CONFIDENCE_*`), Tech §9.8 |
 | Pins: `0.141.1`, commit `95f8322`, promptfoo `0.123.1` | `FASTAPI_REF`, the pinned clone's `git log`, D49 |
 | Failure-mode table: 25 of 30 and 21 of 30 cases lost, run 37817266433; 24 to 74 judge calls, six runs; about 145K of 200K tokens, 68 per-minute 429s; six prompt edits | PRD §12 (the Transient 5xx item, the free-tier headroom item, the 4.09b judge budget item, the gate-visibility item), each with its date and run id |

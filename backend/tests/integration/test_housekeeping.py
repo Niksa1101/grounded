@@ -26,6 +26,8 @@ pytestmark = pytest.mark.integration
 
 runner = CliRunner()
 DAY = 24
+# The text boundary is 29 days (R.27, D56a): the promise is "at most 30", and the job runs daily.
+TEXT_DAYS = 29
 
 TABLES = "request_logs, answer_cache, daily_usage, rate_limit_counters, index_versions"
 
@@ -48,11 +50,11 @@ def counts(results: list[RuleResult]) -> dict[str, int]:
 # (label, age in hours, question, ip_hash). The label travels in question_hash.
 REQUEST_LOGS: list[tuple[str, int, str | None, str | None]] = [
     ("fresh", 1, "q", "ip"),
-    ("29d_text", 30 * DAY - 1, "q", "ip"),  # one hour inside the 30 days: untouched
-    ("31d_text", 30 * DAY + 1, "q", "ip"),  # one hour outside: text removed, row kept
-    ("31d_question_only", 30 * DAY + 1, "q", None),
-    ("31d_ip_only", 30 * DAY + 1, None, "ip"),
-    ("31d_clean", 30 * DAY + 1, None, None),  # nothing to remove: not counted
+    ("inside_text", TEXT_DAYS * DAY - 1, "q", "ip"),  # one hour inside the 29 days: untouched
+    ("outside_text", TEXT_DAYS * DAY + 1, "q", "ip"),  # one hour outside: text removed, row kept
+    ("outside_question_only", TEXT_DAYS * DAY + 1, "q", None),
+    ("outside_ip_only", TEXT_DAYS * DAY + 1, None, "ip"),
+    ("outside_clean", TEXT_DAYS * DAY + 1, None, None),  # nothing to remove: not counted
     ("179d_text", 180 * DAY - 1, "q", "ip"),  # inside the 180 days: text removed, row kept
     ("179d_clean", 180 * DAY - 1, None, None),
     ("181d_clean", 180 * DAY + 1, None, None),  # outside: deleted
@@ -61,18 +63,27 @@ REQUEST_LOGS: list[tuple[str, int, str | None, str | None]] = [
 # After the first run: the rows that remain, with whether question / ip_hash are still set.
 LOGS_AFTER = {
     "fresh": (True, True),
-    "29d_text": (True, True),
-    "31d_text": (False, False),
-    "31d_question_only": (False, False),
-    "31d_ip_only": (False, False),
-    "31d_clean": (False, False),
+    "inside_text": (True, True),
+    "outside_text": (False, False),
+    "outside_question_only": (False, False),
+    "outside_ip_only": (False, False),
+    "outside_clean": (False, False),
     "179d_text": (False, False),
     "179d_clean": (False, False),
 }
 
-# (cache_key, hours until expiry; negative = expired)
-CACHE = [("live_1h", 1.0), ("live_1min", 0.02), ("expired_1min", -0.02), ("expired_1h", -1.0)]
-CACHE_AFTER = {"live_1h", "live_1min"}
+# (cache_key, hours until expiry (negative = expired), age of the row in hours). The age is the
+# second deleting condition: a row whose question is older than the text boundary goes even though
+# its expires_at is still in the future (a row written when the TTL was 30 days).
+CACHE = [
+    ("live_1h", 1.0, 0),
+    ("live_1min", 0.02, 0),
+    ("expired_1min", -0.02, 0),
+    ("expired_1h", -1.0, 0),
+    ("live_inside_text_days", 24.0, TEXT_DAYS * DAY - 1),  # one hour inside the 29 days: kept
+    ("live_outside_text_days", 24.0, TEXT_DAYS * DAY + 1),  # one hour outside: deleted
+]
+CACHE_AFTER = {"live_1h", "live_1min", "live_inside_text_days"}
 
 # (label, days before today in UTC). The rule is `day < today - 90`, so day -90 itself is kept.
 USAGE = [("today", 0), ("d89", 89), ("d90", 90), ("d91", 91), ("d400", 400)]
@@ -89,10 +100,11 @@ WINDOWS = [
 WINDOWS_AFTER = {("a", "minute"), ("a", "day")}
 
 EXPECTED_FIRST_RUN = {
-    # 31d_text, 31d_question_only, 31d_ip_only, 179d_text, 181d_text; clean rows are not counted.
+    # outside_text, outside_question_only, outside_ip_only, 179d_text, 181d_text; clean rows are
+    # not counted.
     "request_logs_text_removed": 5,
     "request_logs_deleted": 2,  # 181d_clean, 181d_text
-    "answer_cache_expired_deleted": 2,
+    "answer_cache_expired_deleted": 3,  # expired_1min, expired_1h, live_outside_text_days
     "daily_usage_deleted": 2,  # d91, d400
     "rate_limit_counters_deleted": 3,  # b/day 49h, c/minute 49h, d/day 30 days
 }
@@ -112,13 +124,14 @@ def seed(db: str) -> None:
                 "(now() - make_interval(hours => %s), 'web', %s, %s, %s, 200, 'answered', 10)",
                 (hours, question, label, ip_hash),
             )
-        for key, hours in CACHE:
+        for key, hours, age in CACHE:
             conn.execute(
                 "INSERT INTO answer_cache (cache_key, normalized_question, response, "
                 "prompt_version, index_version_id, retrieval_config_hash, generator_model, "
-                "expires_at) SELECT %s, 'q', '{}', 'p', id, 'r', 'g', "
-                "now() + make_interval(secs => %s) FROM index_versions",
-                (key, hours * 3600),
+                "created_at, expires_at) SELECT %s, 'q', '{}', 'p', id, 'r', 'g', "
+                "now() - make_interval(hours => %s), now() + make_interval(secs => %s) "
+                "FROM index_versions",
+                (key, age, hours * 3600),
             )
         for _, days in USAGE:
             conn.execute(
@@ -151,7 +164,7 @@ def snapshot(db: str) -> dict[str, Any]:
 
 SEEDED = {
     "logs": {label: (q is not None, ip is not None) for label, _, q, ip in REQUEST_LOGS},
-    "cache": {key for key, _ in CACHE},
+    "cache": {key for key, _, _ in CACHE},
     "usage": {days for _, days in USAGE},
     "windows": {(ip, kind) for ip, kind, _ in WINDOWS},
 }
@@ -175,7 +188,7 @@ def test_each_rule_touches_exactly_the_right_rows(db: str) -> None:
     results = run_housekeeping(db)
 
     assert counts(results) == EXPECTED_FIRST_RUN
-    assert snapshot(db) == AFTER  # text and hashes gone at 30 days, rows at 180, the rest intact
+    assert snapshot(db) == AFTER  # text and hashes gone at 29 days, rows at 180, the rest intact
 
 
 def test_the_results_follow_the_order_of_the_rules(db: str) -> None:
@@ -235,7 +248,7 @@ def test_telemetry_that_is_not_user_text_survives_the_text_removal(db: str) -> N
     with psycopg.connect(db) as conn:
         row = conn.execute(
             "SELECT http_status, outcome, source, latency_total_ms FROM request_logs "
-            "WHERE question_hash = '31d_text'"
+            "WHERE question_hash = 'outside_text'"
         ).fetchone()
 
     assert row == (200, "answered", "web", 10)  # only question and ip_hash are removed
@@ -264,10 +277,10 @@ def test_the_command_prints_one_stable_line_per_rule_and_a_total(db: str) -> Non
     assert lines(result.output)[1:] == [
         "  request_logs_text_removed     5",
         "  request_logs_deleted          2",
-        "  answer_cache_expired_deleted  2",
+        "  answer_cache_expired_deleted  3",
         "  daily_usage_deleted           2",
         "  rate_limit_counters_deleted   3",
-        "Done: 14 rows affected.",
+        "Done: 15 rows affected.",
     ]
     assert snapshot(db) == AFTER
 
@@ -291,7 +304,7 @@ def test_the_command_dry_run_prints_counts_and_changes_nothing(db: str) -> None:
     assert result.exit_code == 0, result.output
     assert lines(result.output)[0].endswith("(dry run)")
     assert "  request_logs_text_removed     5" in result.output
-    assert lines(result.output)[-1] == "Dry run: 14 rows would be affected; nothing was changed."
+    assert lines(result.output)[-1] == "Dry run: 15 rows would be affected; nothing was changed."
     assert snapshot(db) == SEEDED
 
 

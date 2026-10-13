@@ -495,7 +495,7 @@ Read before running:
 
 - **The asks spend quota.** Each is one query embedding and one or two LLM calls (a share of the 300
   budget and of the Gemini quota that the CI evals use too), counts toward your IP's limits (5 a
-  minute, 20 a day) and is stored in the production `request_logs` with its question for 30 days. The
+  minute, 20 a day) and is stored in the production `request_logs` with its question for up to 29 days. The
   default is 4 asks per run (1 cold, 3 warm), the maximum 10, and the command asks you to confirm
   unless `--yes`. A `429` or `503` stops the asks; nothing is retried.
 - **The idle period decides what "cold" means.** Neon scales to zero after 5 minutes without queries

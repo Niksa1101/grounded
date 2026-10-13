@@ -49,8 +49,9 @@ from grounded.schemas.api import AskResponse, Meta
 
 logger = logging.getLogger(__name__)
 
-# Retention: the stored question is user text, kept at most 30 days (AGENTS.md §6.13, DB §4).
-MAX_TTL_DAYS = 30
+# Retention: the stored question is user text, kept at most 30 days (AGENTS.md §6.13, DB §4). The
+# daily job deletes it at 29 (infra/housekeeping.py, D56a), so the TTL never goes past that either.
+MAX_TTL_DAYS = 29
 
 # A lookup that is a hit also records it (DB §7.2), in one statement: the row cannot expire between
 # a SELECT and the UPDATE, and it is one round trip to Neon instead of two.

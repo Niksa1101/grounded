@@ -6,6 +6,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from grounded.infra.answer_cache import MAX_TTL_DAYS
+from grounded.infra.housekeeping import USER_TEXT_MAX_AGE_DAYS, USER_TEXT_RETENTION_DAYS
 from grounded.settings import SELF_CARRY_CEILING, Settings
 from tests.support import EVAL_SETTINGS, make_settings
 
@@ -123,7 +125,22 @@ def test_secrets_are_not_in_repr() -> None:
 
 def test_answer_cache_ttl_cannot_exceed_retention() -> None:
     with pytest.raises(ValidationError):
-        make_settings(answer_cache_ttl_days=31)
+        make_settings(answer_cache_ttl_days=30)
+
+
+def test_the_cache_ttl_ceiling_is_the_text_boundary_of_the_daily_job() -> None:
+    # Three places state one number (R.27, D56a): the daily job deletes user text at 29 days, so the
+    # cache cannot keep a question longer (the store and Settings), and 30 stays the public promise.
+    assert USER_TEXT_MAX_AGE_DAYS == 30
+    assert USER_TEXT_RETENTION_DAYS == USER_TEXT_MAX_AGE_DAYS - 1
+    assert MAX_TTL_DAYS == USER_TEXT_RETENTION_DAYS
+    assert make_settings().answer_cache_ttl_days == USER_TEXT_RETENTION_DAYS
+    assert (
+        make_settings(answer_cache_ttl_days=USER_TEXT_RETENTION_DAYS).answer_cache_ttl_days
+        == USER_TEXT_RETENTION_DAYS
+    )
+    with pytest.raises(ValidationError):
+        make_settings(answer_cache_ttl_days=USER_TEXT_RETENTION_DAYS + 1)
 
 
 def test_chunking_defaults_match_tech_md() -> None:
