@@ -100,6 +100,9 @@ class Plan:
     proxy_secret: str | None = field(default=None, repr=False)
     # The backend's RETRIEVAL_TIMEOUT_S (PRD D54a): the cold ask's retrieval time is compared to it.
     retrieval_timeout_s: float = 2.0
+    # Where that number came from: ``--retrieval-timeout-s`` (the deployed value, given by the
+    # operator) or this machine's ``Settings``, which can differ from what Vercel runs (R.29).
+    retrieval_timeout_from: Literal["settings", "option"] = "settings"
 
     def validate(self) -> None:
         _check_url("--frontend-url", self.frontend_url)
@@ -440,8 +443,20 @@ def retrieval_line(run: Run) -> str:
     """The first ask's ``meta.latency_ms.retrieval`` against ``RETRIEVAL_TIMEOUT_S`` (D54a, V17).
 
     The first ask is the cold one in ``ask`` order; in ``health`` order it follows the probes, so
-    its database is already awake and the figure is a lower bound of a cold retrieval.
+    its database is already awake and the figure is a lower bound of a cold retrieval. Every line
+    ends with where the timeout came from: a local default is not the deployed value (R.29).
     """
+    if run.plan.retrieval_timeout_from == "option":
+        source = "The timeout comes from `--retrieval-timeout-s`."
+    else:
+        source = (
+            "The timeout is this machine's `Settings` value, which may differ from the deployed "
+            "one: pass the Vercel value with `--retrieval-timeout-s`."
+        )
+    return f"{_retrieval_finding(run)} {source}"
+
+
+def _retrieval_finding(run: Run) -> str:
     limit_ms = run.plan.retrieval_timeout_s * 1000
     limit = f"`RETRIEVAL_TIMEOUT_S` = {run.plan.retrieval_timeout_s:g} s"
     first = [s for s in run.samples if s.step is Step.ASK][:1]

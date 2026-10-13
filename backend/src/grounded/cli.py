@@ -1488,6 +1488,14 @@ def measure_cold_start(
     margin_s: Annotated[
         float, typer.Option(min=0, help="Proxy timeout minus backend deadline (Tech §18): 35 - 25.")
     ] = 10.0,
+    retrieval_timeout_s: Annotated[
+        float | None,
+        typer.Option(
+            help="The deployed RETRIEVAL_TIMEOUT_S (the Vercel value), to compare the cold "
+            "retrieval with. Default: this machine's Settings value, which may differ.",
+            show_default=False,
+        ),
+    ] = None,
     yes: Annotated[bool, typer.Option(help="Skip the confirmation before sending asks.")] = False,
 ) -> None:
     """Time the live deployment after an idle period and print a Markdown report (ticket 5.10).
@@ -1510,7 +1518,10 @@ def measure_cold_start(
         margin_s=margin_s,
         waited=wait,
         proxy_secret=configured.get_secret_value() if configured is not None else None,
-        retrieval_timeout_s=settings.retrieval_timeout_s,
+        retrieval_timeout_s=(
+            settings.retrieval_timeout_s if retrieval_timeout_s is None else retrieval_timeout_s
+        ),
+        retrieval_timeout_from="settings" if retrieval_timeout_s is None else "option",
     )
     try:
         plan.validate()

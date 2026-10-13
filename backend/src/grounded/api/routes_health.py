@@ -1,8 +1,11 @@
 """Liveness and readiness probes (Tech.md §13).
 
 ``/healthz`` is public. ``/readyz`` needs the proxy secret, like ``/v1`` (PRD D54c): it queries the
-database, and a public probe would let anyone keep Neon awake (a ping every 4 minutes is about 180
-CU-hours a month, against Neon Free's 100). Without the secret it answers 401 and touches nothing.
+database, so a public probe would be a free extra path that wakes Neon (a ping every 4 minutes is
+about 180 CU-hours a month, against Neon Free's 100). Without the secret it answers 401 and
+touches nothing. That closes this path only: ``/v1/ask`` touches the database by design (the rate
+limiter and the request log are writes), so keeping Neon awake with questions stays possible and
+is an accepted risk (PRD D56b, §12).
 """
 
 from __future__ import annotations
