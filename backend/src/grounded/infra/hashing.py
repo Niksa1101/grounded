@@ -31,8 +31,14 @@ def normalize_question(text: str) -> str:
 
 
 def question_hash(text: str) -> str:
-    """sha256 (hex) of the normalized question."""
-    return hashlib.sha256(normalize_question(text).encode("utf-8")).hexdigest()
+    """sha256 (hex) of the normalized question.
+
+    Total over every Python ``str``: ``surrogatepass`` encodes a lone surrogate (``\\ud800`` in a
+    JSON body) instead of raising. The validation handler hashes text that *failed* validation,
+    and an ill-formed string is exactly what fails it. For well-formed text the bytes are the same
+    as plain UTF-8, so no hash and no cache key changes.
+    """
+    return hashlib.sha256(normalize_question(text).encode("utf-8", "surrogatepass")).hexdigest()
 
 
 def hash_ip(ip: str, key: bytes) -> str:

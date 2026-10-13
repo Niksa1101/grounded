@@ -24,10 +24,10 @@ as UTF-8, so `.encode("utf-8")` raises `UnicodeEncodeError` inside the handler.
 - **No other change.** The schema, the error body and the HTTP contract stay as they are.
 
 **Acceptance criteria**
-- [ ] The integration test above, red before the fix and green after.
-- [ ] `tests/unit/test_hashing.py`: a lone surrogate does not raise and hashes deterministically; the existing "sha256 of
+- [x] The integration test above, red before the fix and green after.
+- [x] `tests/unit/test_hashing.py`: a lone surrogate does not raise and hashes deterministically; the existing "sha256 of
       the normalized question" test still passes, which proves hashes of valid questions do not move.
-- [ ] The in-process reproduction of the review (a script in the scratchpad) answers 422.
+- [x] The reproduction through the real app (the integration test above: ASGI app, real database) answers 422.
 
 **Verify:** standard checks.
 
