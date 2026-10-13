@@ -231,7 +231,7 @@ async def test_no_provider_is_no_reranker_even_when_pacing_is_asked_for(tmp_path
 
 
 def test_the_pacing_interval_is_a_setting_with_the_trial_limits_default() -> None:
-    assert make_settings().eval_rerank_min_interval_s == 6.0
+    assert make_settings().eval_rerank_min_interval_s == 7.0
     assert make_settings(eval_rerank_min_interval_s=0).eval_rerank_min_interval_s == 0
     with pytest.raises(ValueError, match="eval_rerank_min_interval_s"):
         make_settings(eval_rerank_min_interval_s=-1)

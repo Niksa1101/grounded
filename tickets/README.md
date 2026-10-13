@@ -227,6 +227,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [6.03](phase-6/6.03-rerank-path.md) | Rerank in the request path with graceful degradation | Build | G | done | [#114](https://github.com/Niksa1101/grounded/pull/114) |
 | [6.04](phase-6/6.04-eval-rerank.md) | `hybrid_rerank` in both evals and baseline rows | Build + Baseline | G | blocked: 6.04b waits for the Cohere, Gemini and Groq keys in `.env` (none there on 2026-10-12; steps in [the runbook](../docs/runbooks/rerank-eval.md)) | [#115](https://github.com/Niksa1101/grounded/pull/115) (6.04a, done: everything that needs no real call); 6.04b (the real runs, the baseline PR) pending-Author |
 | [6.05](phase-6/6.05-lift-analysis.md) | Lift analysis and Phase 6 closeout | Closeout | A (+G tooling) | blocked: the diff tool, the README draft and the closeout check are done; the lift analysis and exit criteria 1 and 2 wait for 6.04b | [#116](https://github.com/Niksa1101/grounded/pull/116) |
+| [R.31](phase-6/R.31-review-followups.md) | Phase 6 review follow-ups: rerank degrade status, pacing margin, runbook gaps | Build | G | in review | |
 | **7** | **[Multi-provider fallback + circuit breaker](phase-7/README.md)** | | | | |
 | [7.01](phase-7/7.01-decision-breaker.md) | Decision: breaker state on serverless, quota reset, breaker timings | Decision | D | todo | |
 | [7.02](phase-7/7.02-router-spec.md) | Provider router — spec | Spec | A+G | todo | |

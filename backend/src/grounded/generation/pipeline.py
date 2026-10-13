@@ -66,7 +66,11 @@ from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
 from grounded.infra.answer_cache import AnswerCache, CacheKey, from_stored
 from grounded.infra.budget import DailyBudget, RerankCap, RerankCapReachedError
-from grounded.infra.provider_errors import ProviderBadOutput, ProviderError
+from grounded.infra.provider_errors import (
+    ProviderBadOutput,
+    ProviderError,
+    ProviderRequestRejected,
+)
 from grounded.infra.timing import Clock, StageTimer
 from grounded.ingest.embed import Embedder, Vector
 from grounded.observability.cost import Pricing
@@ -113,10 +117,14 @@ class Generation:
 @dataclass(frozen=True, slots=True)
 class _Degraded:
     """Why the RRF order stands: the ``rerank_error`` code, and the exception type behind it for
-    the log line (never a message: a provider's text has no business in our logs)."""
+    the log line (never a message: a provider's text has no business in our logs).
+
+    ``status_code`` is the HTTP status of a ``rejected`` call (a 401 is the key, a 403 or 404 the
+    model), a bare number the runbook reads; ``None`` for every other code."""
 
     code: RerankErrorCode
     cause: str
+    status_code: int | None = None
 
 
 class IndexMismatchError(RuntimeError):
@@ -332,8 +340,8 @@ class AskPipeline:
             ),
         )
         # An answer built from the RRF order because the rerank degraded is not what this key (it
-        # holds the rerank config) stands for, and a hit would serve it for up to 30 days after
-        # the reranker is back. It is simply not stored.
+        # holds the rerank config) stands for, and a hit would serve it for the answer cache's TTL
+        # (``ANSWER_CACHE_TTL_DAYS``) after the reranker is back. It is simply not stored.
         if self._cache is not None and cache_key is not None and trace.rerank_error is None:
             await self._cache.put(cache_key, response)
         return response
@@ -420,9 +428,10 @@ class AskPipeline:
 
         Never raises for a reason of the rerank itself (Tech §8): the cap, a failed reserve, a
         typed provider error and the stage timeout each become ``trace.rerank_error`` and a
-        WARNING with the code and the exception type (no question, no provider text). Only
-        ``CancelledError`` (the request deadline, a client that left) and a bug propagate; so does
-        the ``ValueError`` of a bad ``top_n``, which ``K_CONTEXT`` never is.
+        WARNING with the code, the exception type and, for ``rejected``, the HTTP status (no
+        question, no provider text). Only ``CancelledError`` (the request deadline, a client that
+        left) and a bug propagate; so does the ``ValueError`` of a bad ``top_n``, which
+        ``K_CONTEXT`` never is.
 
         The ``rerank`` stage times the call alone: a request that reached the cap or failed the
         reserve has ``latency_rerank_ms`` NULL, so the column describes what the reranker
@@ -450,7 +459,8 @@ class AskPipeline:
                             question, candidates, top_n=self._cfg.k_context
                         )
             except ProviderError as exc:
-                degraded = _Degraded(rerank_error_code(exc), type(exc).__name__)
+                status = exc.status_code if isinstance(exc, ProviderRequestRejected) else None
+                degraded = _Degraded(rerank_error_code(exc), type(exc).__name__, status)
             except TimeoutError as exc:
                 degraded = _Degraded("timeout", type(exc).__name__)
             else:
@@ -463,6 +473,7 @@ class AskPipeline:
                 "request_id": str(request_id),
                 "rerank_error": degraded.code,
                 "error": degraded.cause,
+                "status_code": degraded.status_code,
             },
         )
         return None

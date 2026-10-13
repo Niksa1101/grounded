@@ -22,8 +22,8 @@ program output into a file. The step says what and where. No command here has a 
 - **A rerank call is cached** by (model, question, the 40 candidates in order) in `.cache/rerank.sqlite`. A
   re-run of the same question on the same index costs no call. This file is the only thing that makes the second
   run free: do not delete `.cache/`.
-- **Live calls are paced** at least `EVAL_RERANK_MIN_INTERVAL_S` (6 seconds) apart, so 25 questions take about
-  2.5 minutes. A cache hit is not delayed. If Cohere still answers `429`, the run stops at once; it never
+- **Live calls are paced** at least `EVAL_RERANK_MIN_INTERVAL_S` (7 seconds) apart, so 24 live calls take about
+  3 minutes. A cache hit is not delayed. If Cohere still answers `429`, the run stops at once; it never
   waits out a `Retry-After`.
 - **A reranker error is not a result.** The retrieval eval ends on the first one (exit 3, nothing written). The
   generation eval records it per case, and `grounded eval baseline` then refuses the row. Neither ever fills a
@@ -121,16 +121,17 @@ uv run grounded ask "How do I install FastAPI with its standard optional depende
 In the JSON, `"rerank_used": true` under `meta` means Cohere accepted the key and the model. Write the call in
 [the tally](#the-call-tally).
 
-- `"rerank_used": false`: the reason is in the WARNING line above the JSON (`rerank_error`). The codes are in
-  [When something fails](#when-something-fails). A `rejected` with `404` or `403` means the Trial key does not
-  accept `rerank-v4.0-pro`: change the line in `.env` to `RERANK_MODEL=rerank-v4.0-fast`, run this step again,
-  and say so in the PR (PRD D55). A new model is a new cache key and a new `retrieval_config_hash`; nothing is
-  lost but the one call.
+- `"rerank_used": false`: the reason is in the WARNING line above the JSON: read `rerank_error` and
+  `status_code`. The codes are in [When something fails](#when-something-fails). A `rejected` with
+  `status_code` 401 is the key: fix it in `.env`. A `rejected` with `status_code` 403 or 404 means the Trial key
+  does not accept `rerank-v4.0-pro`: change the line in `.env` to `RERANK_MODEL=rerank-v4.0-fast`, run this step
+  again, and say so in the PR (PRD D55). A new model is a new cache key and a new `retrieval_config_hash`;
+  nothing is lost but the one call.
 - A question that is not in the embedding cache needs `GEMINI_API_KEY`.
 
 ## 4. Retrieval eval: `hybrid` next to `hybrid_rerank`
 
-Up to 24 live Cohere calls (25 answerable questions, one already cached by step 3), about 2.5 minutes. It does
+Up to 24 live Cohere calls (25 answerable questions, one already cached by step 3), about 3 minutes. It does
 **not** write a baseline: `--write-baseline` here would rewrite the committed `hybrid` row.
 
 COPY (in `backend/`):
@@ -147,12 +148,16 @@ reranked are in the cache and cost nothing.
 
 **Keep this file.** It is the only one with the per-question comparison and the live latency
 (`rerank.latency_p50_ms`, `latency_p95_ms`), which the lift analysis (6.05) needs, and a re-run overwrites it
-with a cache-only run that has `live_calls` 0 and no latency. COPY, right away (the folder is gitignored, so
-back it up elsewhere too):
+with a cache-only run that has `live_calls` 0 and no latency. COPY, right after the run that **finished** (a
+stopped run writes no file; the folder is gitignored, so back it up elsewhere too):
 
 ```powershell
 Copy-Item ../eval/results/rerank-compare.json ../eval/results/rerank-compare-first.json
 ```
+
+The latency covers only the live calls of the run that wrote the file. If a run stopped and you ran it again, the
+questions of the stopped run came from the cache: p50 and p95 then cover the `N live calls` of the last run only,
+and go into the README with that `n`, not 24.
 
 ## 5. Read the result
 
@@ -195,6 +200,18 @@ $env:PROMPTFOO_DISABLE_TELEMETRY = "1"; $env:PROMPTFOO_DISABLE_UPDATE = "1"
 
 In Git Bash the same is `export PROMPTFOO_PYTHON="$(uv run --project backend python -c 'import sys; print(sys.executable)')"`
 and `PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_UPDATE=1` in front of the `npx` line (Tech §15.3).
+
+promptfoo prints no Cohere call count, so the tally comes from the rerank cache: a call that succeeded is stored
+in it, once. This counts the stored calls; it only reads the file and never creates one. COPY (in the repository
+root), **before and after 6.2, and before and after 6.3**:
+
+```powershell
+uv run --project backend python -c "import sqlite3; print(sqlite3.connect('file:.cache/rerank.sqlite?mode=ro', uri=True).execute('select count(*) from kv').fetchone()[0])"
+```
+
+(`unable to open database file` means there is no cache yet, so the count is 0.) The difference is the number
+of live calls that succeeded. Each degraded case (found by the `Select-String` below) was one more call that
+reached Cohere and is not in the cache.
 
 ### 6.2 Smoke run: three questions
 
@@ -303,6 +320,13 @@ git diff eval/baselines
 ```
 
 The diff of each baseline file must show **only added lines** (the new row), no changed or removed ones.
+
+**The README section "Re-ranking: what it bought" is filled in this same PR.** Once a `hybrid_rerank` row is
+committed, `tests/unit/test_rerank_readme.py` fails while the line "Lift: not yet measured" is still there, so the
+PR stays red until the section is done: fill the empty `rerank-lift` block (its comment says what goes in it and
+in what order), replace the line "Lift: not yet measured", and fill the rerank latency cells of "Cost and latency"
+(from the file of step 4, with its `n`). The reading of the results is the Author's (6.05).
+
 Finally the standard checks (`uv run ruff check . && uv run ruff format --check . && uv run pyright`, then
 `uv run pytest`), the PR with the `run-eval` label, and your approval of the rows.
 
@@ -313,7 +337,7 @@ Finally the standard checks (`uv run ruff check . && uv run ruff format --check 
 | `hybrid_rerank needs RERANK_PROVIDER=cohere` | `.env` has `none` or no line | Step 1 |
 | `COHERE_API_KEY must be set` or `RERANK_MODEL must be set` | The variable is blank or missing | Step 1; the eval fails before it embeds anything |
 | `provider mode hybrid would be answered with the reranker` | You ran the first promptfoo config (`promptfooconfig.yaml`) with `RERANK_PROVIDER=cohere` | Set it to `none` for that config, or use `promptfooconfig.rerank.yaml` |
-| Retrieval eval: `rerank failed at q… (rate_limited …)`, exit 3 | Cohere answered 429: the Trial minute or month limit | Wait two minutes and run the same command again (the done questions are cached). If it repeats, add `EVAL_RERANK_MIN_INTERVAL_S=8` to `.env`; check the call count on the Cohere dashboard against the 1,000 a month |
+| Retrieval eval: `rerank failed at q… (rate_limited …)`, exit 3 | Cohere answered 429: the Trial minute or month limit | Wait two minutes and run the same command again (the done questions are cached). If it repeats, add `EVAL_RERANK_MIN_INTERVAL_S=9` to `.env`; check the call count on the Cohere dashboard against the 1,000 a month |
 | `… (timeout …)` | The call took more than `RERANK_TIMEOUT_S` (3 s) | Run again once. If it keeps happening, tell the Author: raising the timeout, or `rerank-v4.0-fast`, is a D55 decision, not a retry |
 | `… (unavailable …)` | Cohere answered 5xx or the network failed | Wait and run again |
 | `… (rejected …)` | 401: the key. 403 or 404: the Trial key does not accept the model | Fix the key, or switch to `RERANK_MODEL=rerank-v4.0-fast` and say so in the PR |
@@ -327,8 +351,10 @@ Finally the standard checks (`uv run ruff check . && uv run ruff format --check 
 ## The call tally
 
 The Phase 6 budget is **150 real Cohere calls** for all tickets. Each run prints its count (`N live calls`);
-add it below the same day. Expected total for a clean pass: 1 (step 3) + 24 (step 4) + 1 (smoke, `q045`) + 4
-(full run, the other unanswerable questions) = **30**, which leaves room for about five repeats.
+add it below the same day. The generation run prints no count: take it from the rerank cache count before and
+after (step 6.1), plus one for each degraded case. Expected total for a clean pass: 1 (step 3) + 24 (step 4) +
+1 (smoke, `q045`) + 4 (full run, the other unanswerable questions) = **30**, which leaves room for about five
+repeats.
 
 ## Results
 

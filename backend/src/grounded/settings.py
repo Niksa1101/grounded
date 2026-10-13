@@ -133,9 +133,10 @@ class Settings(BaseSettings):
     rerank_timeout_s: float = Field(default=3.0, gt=0)
     # Eval harness only (6.04, Tech §8, §15.6): the least seconds between two LIVE rerank calls (a
     # cache hit is neither delayed nor counted), so a manual run stays under the Trial key's 10
-    # Rerank requests a minute. 0 turns pacing off (tests). The request path never sleeps, so
+    # Rerank requests a minute: 7 s is under 10 a minute, with a margin for network jitter (6 s
+    # between starts has none). 0 turns pacing off (tests). The request path never sleeps, so
     # nothing outside the eval runtimes builds the pacer.
-    eval_rerank_min_interval_s: float = Field(default=6.0, ge=0)
+    eval_rerank_min_interval_s: float = Field(default=7.0, ge=0)
 
     # --- Chunking (grouped into ChunkingConfig, stored per index version) ----------------------
     chunk_max_tokens: int = Field(default=450, gt=0)

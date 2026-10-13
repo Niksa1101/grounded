@@ -415,11 +415,38 @@ async def test_a_degradation_is_logged_with_the_code_and_the_type_only(
         "unavailable",
         "ProviderUnavailable",
     )
+    assert warning.status_code is None  # type: ignore[attr-defined]  # only a rejection has one
     everything = "\n".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
     assert QUESTION not in everything  # AGENTS.md §6.13
     assert secret not in everything  # nor the provider's text
     [summary] = [r for r in caplog.records if r.getMessage() == "request completed"]
     assert (summary.rerank_used, summary.rerank_error) == (False, "unavailable")  # type: ignore[attr-defined]
+
+
+async def test_a_rejected_rerank_logs_its_http_status(
+    db: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    # The runbook reads the status to tell a bad key (401) from a model the key cannot use (403,
+    # 404): a number, never the provider's text.
+    secret = "sk-SECRET-body-from-the-provider"
+    rejected = ProviderRequestRejected(f"Cohere rerank 404: {secret}", status_code=404)
+    with caplog.at_level("INFO"):
+        async with app_client(
+            rerank_settings(db),
+            provider=FakeLLMProvider([good()]),
+            reranker=FakeReranker([rejected]),
+        ) as client:
+            await ask(client)
+
+    [warning] = [r for r in caplog.records if r.getMessage().startswith("rerank degraded")]
+    assert (warning.rerank_error, warning.error, warning.status_code) == (  # type: ignore[attr-defined]
+        "rejected",
+        "ProviderRequestRejected",
+        404,
+    )
+    everything = "\n".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
+    assert QUESTION not in everything  # AGENTS.md §6.13
+    assert secret not in everything
 
 
 # --- the caches --------------------------------------------------------------------------------
