@@ -261,7 +261,7 @@ uv run grounded eval agreement --labels ../eval/judge_agreement/v1.csv --key ../
 ```
 
 ```bash
-uv run grounded measure-cold-start --frontend-url <url> --backend-url <url> --idle-minutes 30 --first health   # times the LIVE deployment after an idle period (ticket 5.10, docs/runbooks/vercel-deploy.md step 9); --asks N (default 4, max 10) sends real questions and uses quota; --backend-url needs PROXY_SHARED_SECRET exported (the production value, sent on /readyz only); the Author runs it
+uv run grounded measure-cold-start --frontend-url <url> --backend-url <url> --idle-minutes 30 --first health   # times the LIVE deployment after an idle period (ticket 5.10, docs/runbooks/vercel-deploy.md step 9); --asks N (default 4, max 10) sends real questions and uses quota; --backend-url needs PROXY_SHARED_SECRET exported (the production value, sent on /readyz only); --retrieval-timeout-s <s> is the deployed RETRIEVAL_TIMEOUT_S (default: this machine's Settings value, and the report says which); the Author runs it
 ```
 
 ```bash
@@ -278,7 +278,10 @@ cd frontend && npm run generate:api   # dumps the OpenAPI schema (`uv run ground
 
 Run the API through `grounded serve`, not bare `uvicorn`: it uses the app factory, keeps logs JSON, turns off uvicorn's
 access log (it prints raw client IPs) and picks an event loop psycopg async can use on Windows. On Windows, use
-`uv run python`, not the `python` on PATH. Integration tests need Docker running.
+`uv run python`, not the `python` on PATH. Integration tests need Docker running. **Two pytest runs on one machine wait for each
+other** (R.30): the session holds an advisory lock named after the test database, so the second run prints "another pytest session is
+using grounded_test, waiting..." and starts when the first ends (it gives up after 15 minutes, so give a tool that runs pytest a
+longer timeout). To really run two at once, give each its own database: `TEST_DATABASE_URL=postgresql://grounded:grounded@localhost:5433/grounded_other_test`.
 
 Before saying a task is done, run the relevant checks and report the actual output: lint, types, tests, and evals if quality-affecting.
 If something was skipped or failed, say so plainly.

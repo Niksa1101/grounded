@@ -32,6 +32,7 @@ brackets). What the documentation does not say is marked **unverified** and is a
 | 8 | Verify on the first deployment | Vercel logs, `curl`, `psql` |
 | 9 | Measure the cold start | local |
 | 10 | Record the results and close the ticket | repo |
+| 11 | Firewall rate-limit rule for `/api/ask` (optional) | Vercel |
 
 ## The two projects at a glance
 
@@ -542,8 +543,8 @@ database call, which is already inside the handler's deadline, so only part of i
 margin.
 
 The report's "Retrieval" line is V17: the first ask's `meta.latency_ms.retrieval` against
-`RETRIEVAL_TIMEOUT_S` (2 s by default; the command reads the value from `Settings`, so export the
-Vercel value if you changed it there). In order `ask` that is the cold retrieval; in order `health`
+`RETRIEVAL_TIMEOUT_S` (pass the deployed value with `--retrieval-timeout-s`; without it the command
+uses this machine's `Settings` value, 2 s by default, and the report says which of the two it used). In order `ask` that is the cold retrieval; in order `health`
 the database is already awake, so it is a lower bound. Within 25% of the timeout the report says to
 raise `RETRIEVAL_TIMEOUT_S` in the backend's Vercel variables (a setting, not code). A cold ask that
 fails with `504 deadline_exceeded` is not a margin verdict: the backend's deadline or retrieval timeout
@@ -560,6 +561,50 @@ Paste both reports under "Results" below, with the answers to V1–V17. In the s
 resolved items of PRD §12, tick the criteria in `tickets/phase-5/5.10-deploy.md` and the first
 criterion of `tickets/phase-5/5.08-backend-vercel.md`, and set both index rows to `done`. The numbers
 reach the README in ticket 5.12, copied from here, never typed.
+
+## 11. Firewall rate-limit rule for `/api/ask` (optional)
+
+**Why (PRD D56b, §12).** `/api/ask` wakes Neon on every request, on purpose: the backend's rate limiter and
+request log are database writes, and they run after the function has started and the database has woken. A
+Vercel Firewall rule sits in front of the frontend project, so it can cut a flood of requests before they reach
+the function. It does **not** stop the slow case, one request every 4 minutes from one address, which keeps
+Neon awake and passes any per-IP limit: that risk is accepted. Watch the compute hours in the Neon console.
+The Agent configures nothing on Vercel; this step is yours, and optional.
+
+**What the documentation says** (`vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting`, page dated
+2026-08-28, read 2026-10-13): WAF rate limiting is "available on all plans". On **Hobby**: one rate-limit rule
+per project (and up to three custom firewall rules in all), the fixed-window algorithm only, counting keys IP
+and JA4 digest, a counting window from 10 s to 10 min, and 1,000,000 allowed requests included. Counters are
+kept per region, so traffic from one source spread over several regions can exceed the limit you set for any
+one region. **Unverified:** what Hobby does after the 1,000,000 included requests (the first rule shows a
+"Rate Limiting Pricing" dialog: read it before you select Continue), and the exact dashboard labels below.
+
+**Steps** (frontend project `grounded-11zh`, the public origin; the backend project does not need one):
+
+1. Dashboard, the frontend project, **Firewall**, **Configure**, **+ New Rule**.
+2. Name it `ask-flood`. Condition: request path equals `/api/ask`.
+3. Then: **Rate Limit**, **Fixed Window**, time window `60` s, request limit `20`, key **IP**. 20 a minute is
+   four times the backend's own 5 a minute, so a visitor who respects the backend's limit never meets the
+   edge's answer, and the backend's own 429 (the friendly "slow down" state) comes first.
+4. For the first days choose the action **Log**: it blocks nothing, and the Firewall overview shows how
+   often the rule would fire. Then edit the rule and choose the default action (429).
+5. **Save Rule**, **Review Changes**, **Publish**.
+
+**Check** (invalid questions only: each one writes a `bad_request` row with no text and spends no LLM call).
+With the action set to the default 429, the first 20 answers are `422` and the rest `429`. With **Log** they
+all stay `422`.
+
+```bash
+FRONTEND_URL="https://<the frontend production domain>"
+```
+
+```bash
+for i in $(seq 1 25); do curl -s -o /dev/null -w "%{http_code} " -X POST "$FRONTEND_URL/api/ask" -H 'content-type: application/json' -d '{"question":"x"}'; done; echo
+```
+
+The edge's 429 is not in our error shape (it is Vercel's page, not JSON from the backend), which is fine
+for a flood and cannot reach a visitor who stays inside the backend's own limit. To remove the rule, delete
+it in the same place; nothing else depends on it.
 
 ## Results
 

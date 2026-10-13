@@ -37,6 +37,7 @@ function lastCall(fetchImpl: ReturnType<typeof vi.fn>) {
 
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "info").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -133,6 +134,38 @@ describe("forwardAsk", () => {
     const html = vi.fn().mockResolvedValue(new Response("<html>", { status: 200 }));
     const res2 = await forwardAsk(askRequest(), { ...CONFIG, fetchImpl: html });
     expect(res2.status).toBe(502);
+  });
+
+  it("logs a visitor who left as info, not as an unreachable backend", async () => {
+    // The visitor closing the tab aborts request.signal while the fetch is in flight (R.29).
+    const controller = new AbortController();
+    const request = new Request("http://localhost/api/ask", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ question: "How do I use Depends?" }),
+      signal: controller.signal,
+    });
+    const fetchImpl = vi.fn(
+      (_url: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason));
+          controller.abort();
+        }),
+    );
+    const res = await forwardAsk(request, { ...CONFIG, fetchImpl });
+
+    expect(console.error).not.toHaveBeenCalled();
+    expect(console.info).toHaveBeenCalledWith("ask proxy: client went away");
+    expect(res.status).toBe(502); // the same answer as before: nobody is left to read it
+    expect(await res.json()).toMatchObject({ error: { code: "upstream_unavailable" } });
+  });
+
+  it("still logs an unreachable backend as an error when the visitor stayed", async () => {
+    const down = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    await forwardAsk(askRequest(), { ...CONFIG, fetchImpl: down });
+
+    expect(console.error).toHaveBeenCalledWith("ask proxy: backend unreachable", "TypeError");
+    expect(console.info).not.toHaveBeenCalled();
   });
 
   it("refuses to run without its configuration and never forwards", async () => {

@@ -146,6 +146,22 @@ async def test_a_question_that_breaks_a_rule_is_a_422_that_does_not_echo_it(
     assert (row["outcome"], row["question"]) == ("bad_request", None)
 
 
+async def test_a_lone_surrogate_is_a_422_with_a_hash_and_no_text(db: str) -> None:
+    # httpx cannot JSON-encode a lone surrogate, so the escape is written into the raw body. The
+    # model rejects the string, and the handler then hashes it for the log: that used to raise
+    # UnicodeEncodeError and answer 500 (R.28).
+    body = b'{"question": "How do I \\ud800 declare a path?"}'
+    async with app_client(make_settings(database_url=db), wall_clock=clock()) as client:
+        response = await post_raw(client, body)
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "bad_request"
+    assert "declare a path" not in response.text
+    [row] = rows(db)
+    assert (row["outcome"], row["question"]) == ("bad_request", None)
+    assert row["question_hash"] is not None
+
+
 async def test_a_padded_question_is_trimmed_and_answered(db: str) -> None:
     async with app_client(make_settings(database_url=db), wall_clock=clock()) as client:
         response = await ask(client, f"  \n{QUESTION}\t ")

@@ -49,5 +49,15 @@ def test_the_hash_is_sha256_of_the_normalized_question() -> None:
     assert question_hash("how do i run a task") == expected
 
 
+def test_a_lone_surrogate_has_a_hash_and_does_not_raise() -> None:
+    # The validation handler hashes text that failed validation, which is where ill-formed strings
+    # end up (R.28). UTF-8 cannot encode a lone surrogate, so the hash must not depend on it.
+    text = "How do I \ud800 declare a path?"
+
+    assert question_hash(text) == question_hash(text)
+    assert len(question_hash(text)) == 64
+    assert question_hash(text) != question_hash("How do I  declare a path?")
+
+
 def test_different_questions_have_different_hashes() -> None:
     assert question_hash("What is C#?") != question_hash("What is C?")
