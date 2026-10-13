@@ -75,5 +75,27 @@
     "git_sha": "18fd3996c5c9b23b0af50257f64a61c20cab83e3",
     "git_dirty": false,
     "date": "2026-10-01T11:23:53.460857Z"
+  },
+  "hybrid_rerank": {
+    "metrics": {
+      "recall@5": 0.9,
+      "recall@10": 0.98,
+      "mrr": 0.8333333333333333,
+      "ndcg@5": 0.8069583129243634,
+      "ndcg@10": 0.8338582316414027
+    },
+    "n": 25,
+    "k": 40,
+    "golden_set_version": "v1",
+    "golden_set_sha256": "8f0848177a5cb5a8ef649ee211ab9afb7f9bc07c73d37b37cbf3ef554e1abcb2",
+    "index_config_hash": "4949e8a3207c4294f1f39a763eba8c286fc4fc79499420b841321a66c4cf7e5a",
+    "retrieval_config_hash": "8b0e1ad066f8e8723c1a3629bb21586524ad6d56cc8918c1f0c6f1459a2cfed2",
+    "fastapi_ref": "0.141.1",
+    "fastapi_sha": "95f8322ee1dcda7ceace7b1c4f6c9915b36d748f",
+    "embedding_model": "gemini-embedding-001",
+    "embedding_dim": 768,
+    "git_sha": "456c709e7a7ae49a6b14175a9cd33fb426481eaa",
+    "git_dirty": false,
+    "date": "2026-10-13T22:24:05.075091Z"
   }
 }
