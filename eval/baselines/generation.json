@@ -55,6 +55,48 @@
     "cost_per_1k_usd": 1.6855083333333332,
     "n_cost": 30
   },
+  "hybrid_rerank": {
+    "metrics": {
+      "citation_precision": 0.7266666666666667,
+      "citation_validity": 1.0,
+      "correctness": 1.0,
+      "faithfulness": 1.0,
+      "refusal_correctness": 1.0,
+      "schema_first_try": 0.9666666666666667
+    },
+    "n": {
+      "citation_precision": 25,
+      "citation_validity": 30,
+      "correctness": 30,
+      "faithfulness": 25,
+      "refusal_correctness": 30,
+      "schema_first_try": 30
+    },
+    "thresholds": {},
+    "cases": 30,
+    "golden_set_version": "v1",
+    "golden_set_sha256": "8f0848177a5cb5a8ef649ee211ab9afb7f9bc07c73d37b37cbf3ef554e1abcb2",
+    "provider": "gemini",
+    "model": "gemini-3.5-flash-lite",
+    "prompt_version": "answer_v1@08cc49e5",
+    "index_version": "0.141.1@4949e8a3",
+    "retrieval_config_hash": "5cff91add75987aff86af5c99aaa73da2568bdc484955d9482938997c1b50adf",
+    "judge_provider": "groq",
+    "judge_model": "openai/gpt-oss-120b",
+    "judge_prompt_versions": {
+      "correctness": "judge_correctness_v1@1bde5fe4",
+      "faithfulness": "judge_faithfulness_v1@84103412"
+    },
+    "promptfoo_version": "0.123.1",
+    "git_sha": "9c0badeaab8ad7dc3adce5b4a9c8aa99efb0aa23",
+    "git_dirty": false,
+    "date": "2026-10-13T22:11:28.870000Z",
+    "latency_p50_ms": 2101.0,
+    "latency_p95_ms": 5038.0,
+    "n_latency": 26,
+    "cost_per_1k_usd": 4.214361666666667,
+    "n_cost": 30
+  },
   "no_rag": {
     "metrics": {
       "correctness": 0.6333333333333333,
