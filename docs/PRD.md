@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-11zh.vercel.app`, and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). **Phase 6: code complete; measurement pending (ticket 6.04b, the Author's Cohere, Gemini and Groq keys).** It is not closed: of its three exit criteria the degradation path is tested, and `hybrid_rerank` rows and the lift report do not exist yet ([§9](#phase-6--re-ranking-with-measured-lift), [§12](#12-assumptions-and-open-items)) |
+| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-11zh.vercel.app`, and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). **Phase 6 done (2026-10-14):** `hybrid_rerank` rows are in both baselines, the lift is reported (nDCG@5 0.665 to 0.807, n = 25) and the degradation path is tested; rerank stays off in the demo ([§9](#phase-6--re-ranking-with-measured-lift), [§12](#12-assumptions-and-open-items)) |
 | Owner / Author | probniprobic4@gmail.com |
 | Last updated | 2026-10-12 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
@@ -331,16 +331,17 @@ trip the gate, and the block depends on the `run-eval` label being added (open i
 
 **Exit:** `hybrid_rerank` rows in both baselines. Lift reported honestly (including "no lift" if so). Degradation path tested.
 
-**Status (the closeout check of 6.05, 2026-10-12): code complete, not closed.** Tickets 6.01 to 6.04a and the diff tool of 6.05 are
-merged or in review; 6.04b (the real runs and the baseline PR) and the lift analysis wait for the Author's keys. Phase 6 is not done.
+**Status (2026-10-14): done.** 6.01 to 6.04a and the tooling of 6.05 were merged on 2026-10-12; the Author ran the real
+evals of 6.04b by hand on 2026-10-13 (the runbook, 30 of the 150 Cohere calls), and the baseline PR added the rows, the
+lift analysis and this check. All three exit criteria are met.
 
 | # | Exit criterion | Status | Evidence |
 |---|---|---|---|
-| 1 | `hybrid_rerank` rows in both baselines | **Not met** | `eval/baselines/retrieval.json` has `dense`, `fts`, `hybrid`; `generation.json` has `no_rag`, `hybrid`. The real runs need `COHERE_API_KEY`, `GEMINI_API_KEY` and `GROQ_API_KEY`, and none was in the root `.env` (checked 2026-10-12 without printing a value). The steps are in [runbooks/rerank-eval.md](runbooks/rerank-eval.md) |
-| 2 | Lift reported honestly (including "no lift") | **Not met yet** | Nothing is measured, so nothing is reported. The README section "Re-ranking: what it bought" is a draft that says "Lift: not yet measured" and holds no metric; `tests/unit/test_rerank_readme.py` fails if it still says so once a `hybrid_rerank` row is committed. The tool for the analysis, `grounded eval diff`, is done (Tech §15.2) |
+| 1 | `hybrid_rerank` rows in both baselines | **Met** | `eval/baselines/retrieval.json` and `generation.json` each gained one `hybrid_rerank` row (no thresholds, ungated), written by `--write-baseline` and `grounded eval baseline` from the runs of 2026-10-13; `git diff` of the baseline PR shows only added lines. Neither run degraded or was `inconclusive` |
+| 2 | Lift reported honestly (including "no lift") | **Met** | README, "Re-ranking: what it bought": nDCG@5 0.665 to 0.807 and MRR 0.657 to 0.833 (n = 25), 13 wins, 3 losses, 9 ties, the generation rows with their limits (one run per config), the cost ($1.6855 to $4.2144 per 1,000 questions) and the live latency (p50 578 / p95 906 ms, n = 24), from `grounded eval report` and `grounded eval diff`. The reading was written by the Agent at the Author's request and reviewed by the Author in the baseline PR |
 | 3 | Degradation path tested | **Met** | `tests/integration/test_rerank_path.py` (25 tests, a real Postgres, `FakeReranker`) and `test_rerank_cap.py` (7): each of the five error codes (`rate_limited`, `timeout`, `unavailable`, `rejected`, `bad_output`) leaves a request that succeeds, with the prompt of a request that never reranked; `cap_reached` and a cap of 0 make no call; a hung reranker degrades at the stage timeout; a cancelled rerank is **not** swallowed as a degradation (`CancelledError` propagates); a failing cap reserve is fail-closed; the log carries the code and the exception type, never the question or the provider's text; an answer-cache hit skips rerank and a degraded answer is not cached; rerank off changes nothing; eval mode has no cap but keeps the stage timeout. The adapter's error mapping is tested over a mock transport (`tests/unit/test_cohere_reranker.py`, 53), the pacing and metering in `test_rerank_pacing.py` (17), the retrieval eval's stop on a reranker error in `test_retrieval_rerank_eval.py` (17), the generation side in `test_promptfoo_rerank.py` (14), and the baseline writer's refusal of a degraded row in `test_rerank_baseline_rows.py` (22). 215 tests in these nine files pass (2026-10-12; the two not named above are `test_rerank.py`, 49, and `test_rerank_wiring.py`, 11) |
 
-What the Author must still do, in order, is the list under "Phase 6 closeout" in §12.
+What stays open after Phase 6 is under "Phase 6 closed" in §12.
 
 ### Phase 7 — Multi-provider fallback + circuit breaker
 | Task | Owner |
@@ -464,8 +465,9 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - **MVP closeout (5.12, 2026-10-12).** The four exit criteria of Phase 5 were checked in [runbooks/mvp-closeout.md](runbooks/mvp-closeout.md), first with two pending and then, after the Author's rollout the same day, all passing: (1) live URL and cold start measured; (2) rate limit and budget verified manually on the live site; (3) README numbers from committed output or a dated measurement; (4) all five workflows green on `main`. What is deferred, with its source, is the last section of that file.
 - **Ask page, open items (5.07).** (1) The page has no jsdom or testing-library, so focus moving to a source card, the ticking countdown and the collapsible are checked by a manual keyboard walkthrough, not a test; a component-test setup needs the Author's approval as a new dev dependency. (2) Claim confidence is shown in a list next to the prose, not on the prose itself: `answer_markdown` is not split per claim, so a `[n]` marker cannot carry its claim's confidence. (3) The page is light-theme only (the `.dark` tokens exist but nothing switches them on); a dark theme would need the code-highlight palette in `app/globals.css` redone for contrast.
 - Exact model IDs (Gemini Flash, Groq model, judge model, Cohere rerank model) are pinned in config at implementation time after checking current availability and free-tier limits. They are never assumed from memory. The embedding model is the exception: it was verified on 2026-09-26 (Phase 1) and is a default in `Settings`, since it is tied to the index. The Gemini generator was pinned in 3.01 (D46, 2026-10-06); the Groq model and the judge in 4.01 (D48, 2026-10-08); the Cohere rerank model in 6.01 (D55, 2026-10-12).
-- **Phase 6 decision (6.01, 2026-10-12), what stays open.** (1) The trial key's acceptance of `rerank-v4.0-pro` is
-  **unverified**: `COHERE_API_KEY` was not in `.env`, so 6.01 made no real call. The first real call settles it; if the
+- **Phase 6 decision (6.01, 2026-10-12), what stays open.** (1) **Resolved 2026-10-13: the Trial key accepts
+  `rerank-v4.0-pro`** (the first real call returned 200). Before that it was unverified: `COHERE_API_KEY` was not in
+  `.env`, so 6.01 made no real call. The first real call settles it; if the
   key rejects the ID, switch `RERANK_MODEL` to `rerank-v4.0-fast` (already priced) and say so in that PR. (2) Cohere's
   pages do not say what a monthly-limit 429 looks like (the API reference has only "Too many requests", a `message` and
   an `id`), whether a 429 carries `Retry-After`, whether the 1,000-call month is a calendar month, or whether it is one
@@ -529,7 +531,17 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   existing tests pinned `hybrid_rerank` as an unknown mode and were changed with the feature (`mode_of` and the CLI's
   list of configs). (9) The generation gate is not run on a rerank-only results file: it fails closed without the
   gated `hybrid` config in the run; the check is `grounded eval baseline`.
-- **Phase 6 closeout (6.05, 2026-10-12): code complete, not closed. Pending-Author list.** The exit criteria are checked in
+- **Phase 6 closed (6.04b, 2026-10-14).** The Author ran the runbook by hand on 2026-10-13: the first call (the Trial key
+  accepts `rerank-v4.0-pro`), the retrieval comparison (24 live calls, latency p50 578 / p95 906 ms), `grounded eval diff`,
+  and the generation run. Its smoke run failed three times that afternoon on Gemini `503 high demand` and 40 s timeouts
+  (Google's side; nothing was written) and passed that evening; the one full run had 0 errors and no degraded case.
+  Cohere tally: **30 of 150** (1 + 24 + 1 + 4, counted from the rerank cache), as the runbook expected. What stays open:
+  (1) q003 (install FastAPI without the Cloud CLI) loses nDCG@5 under rerank because the reranker puts
+  `index.md#without-fastapi-cloud-cli` first, a section that answers the question but is not among its labels: a candidate
+  for golden set `v2` (`v1` is not edited, it is referenced by the baselines); (2) `hybrid_rerank` schema first-try validity
+  is 0.967 (one retry in 30), not attributed to rerank, ungated; (3) switching rerank on in the demo needs a paid Cohere key
+  and the Author's decision (D55 keeps it off); (4) the items under "Still open" below.
+- **Phase 6 closeout (6.05, 2026-10-12): code complete, not closed (historical: done by 6.04b, the item above). Pending-Author list.** The exit criteria are checked in
   §9 (degradation tested; rows and lift report missing). No real call was made in Phase 6 (tally 0 of 150), no number
   of the lift exists, and none is written anywhere. What the Author does, in order (the commands are in
   [runbooks/rerank-eval.md](runbooks/rerank-eval.md), which says which are copy and which are typed):

@@ -1,6 +1,7 @@
 """The baselines and the gates with ``hybrid_rerank`` rows in them (6.04, PRD D55).
 
-The committed files are never written: every test reads ``eval/baselines/*.json`` and adds a
+The committed files are never written: every test reads ``eval/baselines/*.json`` (taken back to
+before the real ``hybrid_rerank`` rows of 6.04b where a test replays that write) and adds a
 synthetic ``hybrid_rerank`` row, without thresholds, to a copy in ``tmp_path``. What is pinned is
 that the two gates (Author-owned, untouched) report that row or skip it and keep their verdict, that
 a rewrite of a baseline adds a row without touching the others, and that a reranked row cannot be
@@ -61,6 +62,20 @@ runner = CliRunner()
 
 
 # --- The committed files ------------------------------------------------------------------------
+
+
+def before_the_rerank_row(path: Path) -> str:
+    """The committed baseline as it was before 6.04b added its ``hybrid_rerank`` row: the row
+    removed and the rest dumped the way ``write_json`` writes it (byte for byte the file of then).
+    The tests below replay that write, so they start from the state it was made on."""
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    rows.pop("hybrid_rerank", None)
+    return json.dumps(rows, indent=2, ensure_ascii=False) + "\n"
+
+
+def without_rerank_row[Row](rows: dict[str, Row]) -> dict[str, Row]:
+    """The loaded baseline rows without ``hybrid_rerank``: the report as it was before 6.04b."""
+    return {name: row for name, row in rows.items() if name != "hybrid_rerank"}
 
 
 def test_the_committed_baselines_still_load() -> None:
@@ -213,10 +228,10 @@ def test_an_old_results_file_without_the_rerank_key_still_validates() -> None:
 def test_adding_the_rerank_row_rewrites_no_other_byte_of_the_committed_file(
     tmp_path: Path,
 ) -> None:
-    committed = RETRIEVAL_BASELINE.read_text(encoding="utf-8")
+    committed = before_the_rerank_row(RETRIEVAL_BASELINE)
     copy = tmp_path / "retrieval.json"
     copy.write_text(committed, encoding="utf-8", newline="\n")
-    real = read_baseline(RETRIEVAL_BASELINE)
+    real = read_baseline(copy)
     # A rerank-only run on the committed setup, as `--config hybrid_rerank --write-baseline` is.
     run = retrieval_run(real, "hybrid_rerank")
     run = run.model_copy(update={"configs": {"hybrid_rerank": run.configs["hybrid_rerank"]}})
@@ -331,9 +346,9 @@ def test_the_generation_gate_only_reports_a_rerank_config_next_to_the_gated_hybr
 def test_a_clean_rerank_run_becomes_an_ungated_row_and_keeps_the_others_byte_for_byte(
     tmp_path: Path,
 ) -> None:
-    real = read_generation_baseline(GENERATION_BASELINE)
     copy = tmp_path / "generation.json"
-    copy.write_text(GENERATION_BASELINE.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+    copy.write_text(before_the_rerank_row(GENERATION_BASELINE), encoding="utf-8", newline="\n")
+    real = read_generation_baseline(copy)
     committed = json.loads(copy.read_text(encoding="utf-8"))
 
     update = update_generation_baseline(copy, generation_run(real, {"hybrid_rerank": reranked()}))
@@ -535,8 +550,8 @@ def test_the_report_puts_hybrid_rerank_right_after_hybrid_in_both_tables() -> No
 
 
 def test_without_a_rerank_row_the_report_is_what_it_was() -> None:
-    retrieval = read_baseline(RETRIEVAL_BASELINE)
-    generation = read_generation_baseline(GENERATION_BASELINE)
+    retrieval = without_rerank_row(read_baseline(RETRIEVAL_BASELINE))
+    generation = without_rerank_row(read_generation_baseline(GENERATION_BASELINE))
 
     assert "hybrid_rerank" not in render_report(retrieval, generation)
     # The existing rows print the same with the extra one present (it only adds a row).
