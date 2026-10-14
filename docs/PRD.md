@@ -703,7 +703,10 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   inside the SDK would sleep in the request path and turn a 429 into a timeout, so 7.04 pins one attempt explicitly
   instead of relying on the default. (6) *The deadline.* One LLM attempt may take 12 s and the request deadline is 25 s
   (D53), so of a Gemini attempt, its validation retry and a Groq attempt at their timeouts only two fit; the router (or
-  the pipeline) must look at the time left before it starts an attempt. Left to 7.02 to 7.04; D53 is not changed here.
+  the pipeline) must look at the time left before it starts an attempt. D53 is not changed here. **7.02 designed the
+  rule (the Author reviews it):** the router reads a `time_left` hook before every call and starts a call only if the
+  time left holds its whole timeout; otherwise it raises `RouterDeadlineError`, which 7.04 maps to the 504, and it never
+  shortens the timeout (Tech §10, "Contract (7.02)"). Not measured: how often the third attempt is refused in practice.
   (7) *Time zones.* The midnight-Pacific reset needs `zoneinfo`. `tzdata` is locked for Windows only (a psycopg
   dependency, `uv.lock`); Linux uses the system database, which Vercel's Python runtime may or may not have
   (unverified). If the zone cannot be loaded, the reset counts as not derivable (900 s) and the router logs a warning;
