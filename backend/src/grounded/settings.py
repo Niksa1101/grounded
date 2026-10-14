@@ -124,6 +124,26 @@ class Settings(BaseSettings):
     # quota, whenever the generator's answer cap moved.
     judge_max_output_tokens: int = Field(default=800, gt=0)
 
+    # --- Provider router and circuit breaker (Tech §10, PRD D57) -------------------------------
+    # The breaker's state is in memory, per function instance and per provider; these are its
+    # timings, in seconds. The defaults are the ones Tech §10 has always stated.
+    # A per-minute 429 that carries no Retry-After opens the breaker this long.
+    breaker_rate_limit_open_s: float = Field(default=60.0, gt=0)
+    # A daily-quota 429 whose reset cannot be derived opens it this long, then one half-open trial.
+    # (Derived resets: Gemini's midnight Pacific, Groq's own Retry-After; Tech §10.)
+    breaker_quota_open_s: float = Field(default=900.0, gt=0)
+    # This many consecutive timeouts or 5xx within BREAKER_FAILURE_WINDOW_S open the breaker for
+    # BREAKER_FAILURE_OPEN_S.
+    breaker_failure_threshold: int = Field(default=3, ge=1)
+    breaker_failure_window_s: float = Field(default=60.0, gt=0)
+    breaker_failure_open_s: float = Field(default=30.0, gt=0)
+    # The longest provider-supplied wait (``Retry-After`` / ``retryDelay``) the breaker honors. A
+    # per-minute limit cannot ask for more than its 60 s window, so a wait this long is a daily
+    # limit or a bad header; the half-open trial after the cap finds out whether the provider is
+    # back. Not applied to a reset the router derives itself (midnight Pacific), nor to
+    # BREAKER_RATE_LIMIT_OPEN_S and BREAKER_QUOTA_OPEN_S, which stand in for a missing wait.
+    breaker_max_retry_after_s: float = Field(default=3600.0, gt=0)
+
     rerank_provider: RerankProvider = "none"
     rerank_model: str | None = None
     rerank_daily_cap: int = Field(default=30, ge=0)

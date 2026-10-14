@@ -229,7 +229,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [6.05](phase-6/6.05-lift-analysis.md) | Lift analysis and Phase 6 closeout | Closeout | A (+G tooling) | done (the reading delegated to G by the Author, 2026-10-14) | [#116](https://github.com/Niksa1101/grounded/pull/116); the baseline PR |
 | [R.31](phase-6/R.31-review-followups.md) | Phase 6 review follow-ups: rerank degrade status, pacing margin, runbook gaps | Build | G | done | [#122](https://github.com/Niksa1101/grounded/pull/122) |
 | **7** | **[Multi-provider fallback + circuit breaker](phase-7/README.md)** | | | | |
-| [7.01](phase-7/7.01-decision-breaker.md) | Decision: breaker state on serverless, quota reset, breaker timings | Decision | D | todo | |
+| [7.01](phase-7/7.01-decision-breaker.md) | Decision: breaker state on serverless, quota reset, breaker timings | Decision | D (research and wording delegated to G, D57) | done | [#124](https://github.com/Niksa1101/grounded/pull/124) |
 | [7.02](phase-7/7.02-router-spec.md) | Provider router — spec | Spec | A+G | todo | |
 | [7.03](phase-7/7.03-router.md) | Provider router — implementation | Author | A | todo | |
 | [7.04](phase-7/7.04-router-wiring.md) | Router in the pipeline, fallback metrics, demo and Phase 7 closeout | Build + Closeout | G | todo | |

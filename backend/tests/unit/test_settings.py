@@ -347,6 +347,63 @@ def test_the_judge_output_cap_is_its_own_positive_setting(monkeypatch: pytest.Mo
         make_settings(judge_max_output_tokens=0)
 
 
+_BREAKER_VARIABLES = (
+    "BREAKER_RATE_LIMIT_OPEN_S",
+    "BREAKER_QUOTA_OPEN_S",
+    "BREAKER_FAILURE_THRESHOLD",
+    "BREAKER_FAILURE_WINDOW_S",
+    "BREAKER_FAILURE_OPEN_S",
+    "BREAKER_MAX_RETRY_AFTER_S",
+)
+_BREAKER_SECONDS = (
+    "breaker_rate_limit_open_s",
+    "breaker_quota_open_s",
+    "breaker_failure_window_s",
+    "breaker_failure_open_s",
+    "breaker_max_retry_after_s",
+)
+
+
+def test_the_breaker_timings_default_to_the_tech_10_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # PRD D57b (7.01): per-minute 429 without Retry-After: 60 s; daily quota with no derivable
+    # reset: 15 min; 3 consecutive timeouts or 5xx within 60 s: open 30 s; a provider-supplied
+    # Retry-After is honored up to an hour.
+    for name in _BREAKER_VARIABLES:
+        monkeypatch.delenv(name, raising=False)
+    s = make_settings()
+    assert (s.breaker_rate_limit_open_s, s.breaker_quota_open_s) == (60.0, 900.0)
+    assert (s.breaker_failure_threshold, s.breaker_failure_window_s) == (3, 60.0)
+    assert (s.breaker_failure_open_s, s.breaker_max_retry_after_s) == (30.0, 3600.0)
+
+
+def test_the_breaker_timings_are_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    values = {name: "7" for name in _BREAKER_VARIABLES}
+    for name, value in values.items():
+        monkeypatch.setenv(name, value)
+    s = make_settings()
+    assert s.breaker_failure_threshold == 7
+    assert [getattr(s, name) for name in _BREAKER_SECONDS] == [7.0] * len(_BREAKER_SECONDS)
+
+
+@pytest.mark.parametrize("name", _BREAKER_SECONDS)
+@pytest.mark.parametrize("value", [0, -1.0])
+def test_a_breaker_duration_must_be_positive(name: str, value: float) -> None:
+    # 0 would mean "never open" (or "open and half-open at once"), which is no breaker.
+    with pytest.raises(ValidationError):
+        make_settings(**{name: value})
+
+
+def test_the_breaker_threshold_is_a_whole_number_of_at_least_one() -> None:
+    assert make_settings(breaker_failure_threshold=1).breaker_failure_threshold == 1
+    for bad in (0, -1, 2.5):
+        with pytest.raises(ValidationError):
+            make_settings(breaker_failure_threshold=bad)
+
+
 def test_the_rerank_defaults_are_the_ones_of_the_phase_6_decision(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
