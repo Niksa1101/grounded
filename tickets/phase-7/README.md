@@ -17,7 +17,8 @@ real recordings, the Vercel Groq variables, a docstring of `router.py`) is "Phas
 ## Tickets (in order)
 
 - [7.01 — Decision: breaker state on serverless, quota reset, breaker timings](7.01-decision-breaker.md)
-- [7.02 — Provider router — spec](7.02-router-spec.md)
+- [7.02 — Provider router — spec](7.02-router-spec.md) (its open criterion, the Author's review of the cases, has a
+  [review sheet](7.02-case-review.md))
 - [7.03 — Provider router — implementation](7.03-router.md)
 - [7.04 — Router in the pipeline, fallback metrics, demo and Phase 7 closeout](7.04-router-wiring.md) (done: #127, #128)
 

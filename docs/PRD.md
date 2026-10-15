@@ -745,6 +745,8 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   Phase 7 touched a real provider** (the Author's rule): no real Gemini 429, no real Groq call. What stays open, all
   pending-Author unless noted: (1) *The 7.02 router cases.* The Author's review (and extension) of the router's scenarios
   in `tests/unit/test_router.py` was agreed to come after the phase, in a follow-up PR; it is the open criterion of 7.02.
+  The review sheet (every case by Tech §10 row, candidate extra cases, the decisions to confirm, what to tick) is
+  `tickets/phase-7/7.02-case-review.md`.
   (2) *Groq as the first entry and the cache key.* `build_provider` refuses it (7.04a); the other way out, moving
   `thinking_level` and `GROQ_REASONING_EFFORT` into the providers and the answer-cache key, is the Author's decision and
   nothing needs it today (see the `thinking_level` item above). (3) *Real recordings.* The Gemini 429 fixtures
