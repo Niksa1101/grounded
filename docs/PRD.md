@@ -756,10 +756,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   (8) of the Phase 7 decision above). (5) *The Vercel environment.* Setting `GROQ_API_KEY` and `GROQ_MODEL` on the backend
   project is the Author's step; Phase 7 set nothing in Vercel, Neon or GitHub. Until it is done the deployed backend logs
   `fallback provider skipped, it cannot be built` at startup and answers from Gemini alone, so the demo has no fallback.
-  **A discrepancy to settle with it:** the Vercel runbook (§3.2, "Production variables") tells the Author **not** to set
-  `GROQ_API_KEY` on the backend, true while Groq was only the eval judge; it was left as it is, because whether to put
-  the Groq key (and its 8K tokens a minute, about 65 to 80 questions a day at the median size, shared with the CI judge)
-  in production is the decision, not a typo. (6) *A docstring of the Author-owned `router.py`.* It words
+  **The runbook discrepancy is settled (PR #129):** the Vercel runbook told the Author **not** to set `GROQ_API_KEY`,
+  true while Groq was only the eval judge. It now documents the pair as the **optional** step 3.2a (the two
+  `vercel env add` commands, the key typed at the prompt, the redeploy, and a check: the startup line
+  `generator providers ready` lists `gemini` and `groq` and there is no `fallback provider skipped` WARNING). Setting
+  it stays the Author's action and decision, because the Groq free plan (8K tokens a minute, about 65 to 80 questions a
+  day at the median size) is shared with the CI judge and `DAILY_LLM_BUDGET` counts Groq calls too; nothing in
+  production changed. (6) *A docstring of the Author-owned `router.py`.* It words
   `breakers_enabled=False` as "eval mode and nothing else" and says `Settings` enforces the single provider; since 7.04a
   `grounded ask` (single question and `--golden`) also builds the router primary only, without breakers or fallbacks, so
   its golden batch keeps waiting out a 429 and stopping at a daily quota on the provider's own errors (Tech §10, "Wired

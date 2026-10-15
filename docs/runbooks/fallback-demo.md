@@ -141,7 +141,8 @@ docker exec grounded-db-1 psql -U grounded -d grounded -c "delete from request_l
   is the real limit of the fallback: about 2 to 3 questions a minute and about 65 to 80 a day at the median size.
 - **The breaker is per function instance and in memory** (D57a): a cold start forgets it, and instances do not share
   it. The demo is one process.
-- The deployed demo has **no fallback until `GROQ_API_KEY` and `GROQ_MODEL` are set in Vercel** (the Author's step;
+- The deployed demo has **no fallback until `GROQ_API_KEY` and `GROQ_MODEL` are set in Vercel** (the Author's step,
+  [step 3.2a of the Vercel runbook](vercel-deploy.md#32a-optional-enable-the-groq-fallback-your-production-decision);
   without them the backend logs `fallback provider skipped, it cannot be built` and runs on Gemini alone).
 
 The service tests behind the same behavior, with a scripted fake Gemini and Groq and the checks of the Phase 7 exit
