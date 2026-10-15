@@ -247,9 +247,9 @@ The model is a plain value:
 vercel env add GROQ_MODEL production --value openai/gpt-oss-120b --no-sensitive --yes
 ```
 
-The key is a secret. Type it at the prompt, which does not echo it: never with `--value`, and never
-piped from a command that has the key in its text, because that would put it in a process's argument
-list and the shell history. On Windows `vercel` is a `.cmd` shim, so the same rule as for the other
+The key is a secret. Type it at the prompt, which does not echo it. Never put it on a command line
+(`--value`) or in a pipe (`echo <key> | vercel ...`): it would stay in the shell history or in a
+process's argument list. On Windows `vercel` is a `.cmd` shim, so the same rule as for the other
 secrets above applies (the prompt, not an argument); the command is the same in PowerShell:
 
 ```bash
