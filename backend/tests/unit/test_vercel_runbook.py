@@ -83,8 +83,9 @@ def test_the_groq_fallback_pair_is_optional_and_matches_the_code() -> None:
     required = table_names(section(RUNBOOK, "### 3.2 Production variables"))
     assert table_names(optional_section) == ["GROQ_API_KEY", "GROQ_MODEL"]
     assert not {"GROQ_API_KEY", "GROQ_MODEL"} & set(required)
-    assert "Optional" in OPTIONAL_HEADING and "not part of the nine" in optional_section
-    # The "do not set" list of 3.2 does not forbid the key any more (it did while Groq was the judge).
+    assert "Optional" in OPTIONAL_HEADING
+    assert "not part of the nine" in optional_section
+    # The "do not set" list of 3.2 no longer forbids the key (it did while Groq was the judge).
     [forbidden] = re.findall(
         r"Do \*\*not\*\* set\b[^.]*\.", section(RUNBOOK, "### 3.2 Production variables")
     )
@@ -94,19 +95,24 @@ def test_the_groq_fallback_pair_is_optional_and_matches_the_code() -> None:
     key = next(c for c in commands if "GROQ_API_KEY" in c)
     model = next(c for c in commands if "GROQ_MODEL" in c)
     assert len(commands) == 2
-    assert key.endswith("--sensitive") and "--value" not in key and "printf" not in key
-    assert "--value openai/gpt-oss-120b" in model and "--no-sensitive" in model
+    assert key.endswith("--sensitive")
+    assert "--value" not in key
+    assert "printf" not in key
+    assert "--value openai/gpt-oss-120b" in model
+    assert "--no-sensitive" in model
     example = (ROOT / ".env.example").read_text(encoding="utf-8")
     assert re.search(r"(?m)^# GROQ_MODEL=.*openai/gpt-oss-120b", example)  # the pinned ID of D48
     # Previews get no Groq variable (a preview then logs the skip WARNING, which is expected).
-    assert not [c for c in env_add_commands() if "GROQ_" in c and " preview" in c]
+    in_preview = [c for c in env_add_commands() if "GROQ_" in c and " preview" in c]
+    assert in_preview == []
     # The verification names the log lines the code really writes, with their field names.
     runtime = (ROOT / "backend" / "src" / "grounded" / "runtime.py").read_text(encoding="utf-8")
     for message in ("generator providers ready", "fallback provider skipped, it cannot be built"):
         assert f'"{message}"' in runtime, message
         assert message in optional_section, message
     for field in ("providers", "primary_only"):
-        assert f'"{field}":' in runtime and f"`{field}`" in optional_section, field
+        assert f'"{field}":' in runtime, field
+        assert f"`{field}`" in optional_section, field
     # Tech §18 lists it beside, not inside, the required production variables.
     assert "step 3.2a" in section(TECH, "## 18. Deployment")
 
