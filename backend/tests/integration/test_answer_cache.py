@@ -22,7 +22,7 @@ from grounded.generation.prompts import load_answer_prompt
 from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.infra.answer_cache import AnswerCache, CacheKey
 from grounded.infra.db import create_pool
-from grounded.infra.provider_errors import ProviderBadOutput, ProviderRateLimited
+from grounded.infra.provider_errors import ProviderBadOutput, ProviderUnavailable
 from grounded.infra.timing import StageTimer
 from grounded.ingest.embed import FakeEmbedder
 from grounded.observability.request_log import RequestTrace
@@ -207,9 +207,9 @@ async def test_a_stored_row_has_the_columns_and_the_retention_limit(env: Env) ->
 
 async def test_errors_are_never_cached(env: Env) -> None:
     bad = ProviderBadOutput("bad", raw="{", validation_error="oops")
-    llm = FakeLLMProvider(
-        [ProviderRateLimited("slow", retry_after_s=1.0, is_quota=False), bad, bad, good()]
-    )
+    # One 5xx does not open the breaker (three in a row do), so the next request calls again; a 429
+    # would, and the second request would then be skipped by the router, not served by the provider.
+    llm = FakeLLMProvider([ProviderUnavailable("down"), bad, bad, good()])
     statuses = [r.status_code for r in await post(env, llm, (QUESTION,) * 3)]
 
     assert statuses == [503, 502, 200]  # each request tried the provider again

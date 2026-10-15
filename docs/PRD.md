@@ -669,9 +669,12 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   every stored answer comes from the first entry of `GENERATOR_PROVIDERS` (Gemini in the deployment), whose
   `thinking_level` is already in the key. The move becomes necessary in two cases: (1) fallback answers are ever
   cached; (2) `groq` can be the **first** entry outside eval mode (`Settings` allows `GENERATOR_PROVIDERS=groq,gemini`,
-  and `build_provider` refuses it only until the router exists): its answers would be stored under a key without the
-  reasoning effort. 7.04 must not leave (2) silently open: it either refuses a first entry that is not `gemini` (or
-  `fake`) outside eval mode, or does the move. Which of the two is the Author's decision.
+  and `build_provider` refused it only until the router existed): its answers would be stored under a key without the
+  reasoning effort. **7.04 refused it (2026-10-15, the Agent's choice for the Author to revisit):** `build_provider`
+  refuses a first entry that is not `gemini` (or `fake`) at startup, with an error that names the reason (Tech §4,
+  §10); Groq stays the fallback and the judge. The other way out, moving `thinking_level` and `GROQ_REASONING_EFFORT`
+  into the providers and the key (so `groq` could be first), is **still the Author's decision** and nothing needs it
+  today: the refusal costs only the ability to run Groq as the primary in the deployment, which no phase asks for.
 - **Phase 7 decision (7.01, 2026-10-14, D57), what stays open.** (1) *Instances.* The docs give no number for the
   instances a burst creates or for how long an idle one lives, and whether the backend project has Fluid compute on
   (V13 of the Vercel runbook) was not checked. At the demo's cap of 300 LLM calls a day one warm instance serves most
@@ -701,7 +704,8 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   (2026-10-13) says the official SDKs retry a 429 or 5xx up to four times; `google-genai` 2.25.0 as `runtime.py`
   builds the client has `retry_options=None` (checked 2026-10-14: no retry), so a 429 reaches the adapter. A retry
   inside the SDK would sleep in the request path and turn a 429 into a timeout, so 7.04 pins one attempt explicitly
-  instead of relying on the default. (6) *The deadline.* One LLM attempt may take 12 s and the request deadline is 25 s
+  instead of relying on the default (done: `runtime.gemini_http_options()`, `HttpRetryOptions(attempts=1)`, pinned by
+  `tests/unit/test_runtime_providers.py`). (6) *The deadline.* One LLM attempt may take 12 s and the request deadline is 25 s
   (D53), so of a Gemini attempt, its validation retry and a Groq attempt at their timeouts only two fit; the router (or
   the pipeline) must look at the time left before it starts an attempt. D53 is not changed here. **7.02 designed the
   rule (the Author reviews it):** the router reads a `time_left` hook before every call and starts a call only if the

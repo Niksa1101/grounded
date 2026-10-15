@@ -16,6 +16,7 @@ from pgvector import Vector
 
 from grounded.generation.providers.base import LLMProvider
 from grounded.generation.providers.fake import StubLLMProvider
+from grounded.generation.router import SYSTEM_CLOCK, RouterClock
 from grounded.infra.timing import Clock
 from grounded.ingest.embed import Embedder, FakeEmbedder
 from grounded.main import create_app
@@ -88,6 +89,8 @@ async def app_client(
     wall_clock: Callable[[], datetime] | None = None,
     no_peer: bool = False,
     reranker: Reranker | None = None,
+    fallback_providers: Sequence[LLMProvider] | None = None,
+    router_clock: RouterClock = SYSTEM_CLOCK,
 ) -> AsyncGenerator[httpx.AsyncClient]:
     """An app built from ``settings`` with its lifespan running, plus an in-process HTTP client.
 
@@ -99,7 +102,9 @@ async def app_client(
     sees (``request.client``); ``no_peer`` gives the app none at all (``request.client`` is
     ``None``). ``direct_api`` lets a test call ``/v1/*`` without the proxy headers
     (``ALLOW_DIRECT_API``, 5.03); the tests of the proxy check itself pass ``False`` to use the
-    settings as given.
+    settings as given. ``fallback_providers`` are the router's later entries (``provider`` is the
+    first; with none the router has one provider) and ``router_clock`` is the breaker's clock, a
+    ``RouterClock`` a test moves by hand (no test sleeps for a breaker).
     """
     if direct_api:
         settings = settings.model_copy(update={"allow_direct_api": True})
@@ -110,6 +115,8 @@ async def app_client(
         clock=clock,
         wall_clock=wall_clock,
         reranker=reranker,
+        fallback_providers=fallback_providers,
+        router_clock=router_clock,
     )
     asgi: Any = app
     if no_peer:

@@ -63,6 +63,9 @@ class AskRoute(APIRoute):
             request.state.trace = trace
             settings = get_settings_dep(request)
             deadline_s = None if settings.app_env == "eval" else settings.request_deadline_s
+            # The router starts an LLM attempt only if the time left holds its whole timeout
+            # (Tech §10); the pipeline reads the time left from the trace, on its clock.
+            trace.deadline_s = deadline_s
             async with request_deadline(deadline_s):  # DeadlineExceededError -> 504, logged
                 request = await read_limited_body(request)  # InputRejectedError -> 422, logged
                 response = await handle(request)  # a failure raises and is logged by its handler

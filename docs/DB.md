@@ -231,10 +231,10 @@ CREATE TABLE request_logs (
                                'validation_failed', 'provider_unavailable', 'internal_error')),
                                                       -- 0004 adds 'deadline_exceeded' (below)
     cache_hit              boolean  NOT NULL DEFAULT false,
-    provider               text,                      -- 'gemini' | 'groq' | 'fake'
-    model                  text,
-    fallback_used          boolean  NOT NULL DEFAULT false,
-    validation_retries     smallint NOT NULL DEFAULT 0,
+    provider               text,                      -- 'gemini' | 'groq' | 'fake': the provider that answered; on a failed request the last one that reported back, else the primary (Tech §10, "Wired in 7.04"); NULL when the request was rejected before the pipeline (bad_request, rate_limited)
+    model                  text,                      -- the model of that provider
+    fallback_used          boolean  NOT NULL DEFAULT false,  -- a provider other than the first entry of GENERATOR_PROVIDERS was called (7.04): true for an answer that fell back and for a request that tried the fallback and failed; counted in v_request_stats_daily (§8)
+    validation_retries     smallint NOT NULL DEFAULT 0,      -- retry attempts across providers (the router's one retry per provider after bad output), not retries of one provider
     rerank_used            boolean  NOT NULL DEFAULT false,  -- the context was built from the reranked order (6.03)
     rerank_error           text,                      -- why the RRF order stood although rerank is on: 'cap_reached' | 'rate_limited' | 'timeout' | 'unavailable' | 'rejected' | 'bad_output' (Tech §8); NULL otherwise
     prompt_version         text,

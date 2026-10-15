@@ -1,20 +1,22 @@
 """Long-lived resources of the request path, built once and shared by the API and the CLI.
 
-``open_runtime`` creates the connection pool, the query embedder, the generator provider and the
-``AskPipeline`` over them, and closes what it opened. The API lifespan and ``grounded ask`` both go
-through it, so they cannot drift apart. Tests pass their own ``embedder`` and ``provider``
-(AGENTS.md §8: no real calls).
+``open_runtime`` creates the connection pool, the query embedder, the generator providers and the
+``AskPipeline`` over them (which builds the provider router, Tech §10), and closes what it opened.
+The API lifespan and ``grounded ask`` both go through it, so they cannot drift apart. Tests pass
+their own ``embedder``, ``provider`` and ``fallback_providers`` (AGENTS.md §8: no real calls).
 """
 
 from __future__ import annotations
 
+import logging
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
 
 from google import genai
+from google.genai import types as genai_types
 from psycopg_pool import AsyncConnectionPool
 
 from grounded.evals.judge import Judge, JudgeConfig
@@ -25,6 +27,7 @@ from grounded.generation.providers.eval_wrappers import EvalLLM
 from grounded.generation.providers.fake import StubJudgeProvider, StubLLMProvider
 from grounded.generation.providers.gemini import GeminiProvider
 from grounded.generation.providers.groq import GroqProvider
+from grounded.generation.router import SYSTEM_CLOCK, RouterClock
 from grounded.infra.budget import DailyBudget, RerankCap
 from grounded.infra.db import create_pool
 from grounded.infra.kvcache import KVCache
@@ -49,10 +52,28 @@ from grounded.settings import Settings
 # not a tunable: 0.4 s leaves the rest of the budget to the other closers.
 POOL_CLOSE_TIMEOUT_S = 0.4
 
+logger = logging.getLogger(__name__)
+
+# The names ``GENERATOR_PROVIDERS`` may hold, and the ones that may come first (Tech §4, §10). The
+# first entry names the answer-cache key and the adapter parameters in it (``thinking_level``;
+# ``GROQ_REASONING_EFFORT`` is not there), so Groq cannot be first until the key moves (PRD §12).
+KNOWN_PROVIDERS = ("gemini", "groq", "fake")
+PRIMARY_PROVIDERS = ("gemini", "fake")
+
 
 class ProviderConfigError(Exception):
     """A provider this build cannot create or must not use: an unknown ``GENERATOR_PROVIDERS``
-    entry, a missing key or model ID, a judge on the generator's provider."""
+    entry, a missing key or model ID, a judge on the generator's provider.
+
+    ``unconfigured`` marks the one case a later entry of ``GENERATOR_PROVIDERS`` may be skipped
+    for (PRD D57d, ``build_fallback_providers``): a missing key or model ID, whose message names the
+    variable and never a value. It is a flag, not a subclass, because the eval harness records an
+    error by its class name and the gate classifies it that way (``ProviderConfigError``).
+    """
+
+    def __init__(self, message: str, *, unconfigured: bool = False) -> None:
+        super().__init__(message)
+        self.unconfigured = unconfigured
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,21 +90,94 @@ class Runtime:
 
 
 def build_provider(settings: Settings) -> LLMProvider:
-    """The generator: the first entry of ``GENERATOR_PROVIDERS`` (no router before Phase 7).
+    """The primary generator: the first entry of ``GENERATOR_PROVIDERS`` (Tech §4, §10).
 
-    ``gemini`` is the real adapter; ``fake`` is a dev-only stand-in (refused in prod).
+    ``gemini`` is the real adapter; ``fake`` is a dev-only stand-in (refused in prod). Anything
+    else is refused with an error that says why. **``groq`` cannot be first** (7.04, PRD §12): the
+    answer-cache key names the first entry's model and ``thinking_level`` but not
+    ``GROQ_REASONING_EFFORT``, so Groq answers stored under it could be served after the setting
+    moved. Groq is the fallback (a later entry) and the judge.
     """
+    _check_provider_names(settings.generator_providers)
     name = settings.generator_providers[0]
     if name == "gemini":
         return _build_gemini(settings)
     if name == "fake":
-        if settings.app_env == "prod":
-            raise ProviderConfigError("the fake provider must not be used with APP_ENV=prod")
+        _refuse_fake_in_prod(settings)
         return StubLLMProvider()
     raise ProviderConfigError(
-        f"provider {name!r} cannot be the generator yet (the router arrives in Phase 7); "
-        "set GENERATOR_PROVIDERS=gemini (or fake for local runs)"
+        f"provider {name!r} cannot be the first entry of GENERATOR_PROVIDERS: only "
+        f"{' or '.join(PRIMARY_PROVIDERS)} can (Groq answers would be cached under a key that "
+        "lacks GROQ_REASONING_EFFORT, PRD §12); set GENERATOR_PROVIDERS=gemini,groq "
+        "(or fake for local runs)"
     )
+
+
+def build_fallback_providers(settings: Settings, stack: AsyncExitStack) -> list[LLMProvider]:
+    """The entries of ``GENERATOR_PROVIDERS`` after the first, in order, for the router (D57d).
+
+    An entry whose key or model is missing (``GROQ_API_KEY``, ``GROQ_MODEL``) is **skipped with a
+    WARNING** that names the provider and the reason (a variable name, never a value): the router
+    then runs on what is left, and a service without its fallback still answers from the primary.
+    Only the first entry stops startup (``build_provider``). A contradiction in the configuration
+    is not "cannot be built": an unknown name, a duplicate, or the stub in prod stay loud. Eval
+    mode has no later entries (``Settings`` takes exactly one provider), so it gets none. The
+    caller owns what is built and ``stack`` closes it.
+    """
+    _check_provider_names(settings.generator_providers)
+    built: list[LLMProvider] = []
+    for name in settings.generator_providers[1:]:
+        try:
+            built.append(_build_named(settings, name, stack))
+        except ProviderConfigError as exc:
+            if not exc.unconfigured:
+                raise  # a contradiction in the list, not a missing variable: stays loud
+            logger.warning(
+                "fallback provider skipped, it cannot be built",
+                extra={"provider": name, "reason": str(exc)},
+            )
+    return built
+
+
+def _check_provider_names(names: Sequence[str]) -> None:
+    for name in names:
+        if name not in KNOWN_PROVIDERS:
+            raise ProviderConfigError(
+                f"unknown provider {name!r} in GENERATOR_PROVIDERS (known: "
+                f"{', '.join(KNOWN_PROVIDERS)})"
+            )
+        if names.count(name) > 1:
+            raise ProviderConfigError(f"GENERATOR_PROVIDERS names {name!r} more than once")
+
+
+def _refuse_fake_in_prod(settings: Settings) -> None:
+    if settings.app_env == "prod":
+        raise ProviderConfigError("the fake provider must not be used with APP_ENV=prod")
+
+
+def _build_named(settings: Settings, name: str, stack: AsyncExitStack) -> LLMProvider:
+    """One later entry of ``GENERATOR_PROVIDERS``, with its client closed by ``stack``."""
+    if name == "gemini":
+        gemini = _build_gemini(settings)
+        stack.push_async_callback(gemini.aclose)
+        return gemini
+    if name == "groq":
+        groq = build_groq_provider(settings, model=settings.groq_model)
+        stack.push_async_callback(groq.aclose)
+        return groq
+    _refuse_fake_in_prod(settings)
+    return StubLLMProvider()
+
+
+def gemini_http_options() -> genai_types.HttpOptions:
+    """One HTTP attempt, set explicitly (7.04, Tech §10 "For 7.02 to 7.04", PRD §12).
+
+    ``google-genai`` 2.25.0 retries nothing by default, but Google's troubleshooting page says its
+    SDKs retry a 429 or 5xx up to four times, and a retry inside the SDK would sleep in the request
+    path and turn a 429 into a timeout that the router never sees as a 429. ``attempts=1`` means
+    no retries (the SDK's own words), so the failure reaches the adapter and the router decides.
+    """
+    return genai_types.HttpOptions(retry_options=genai_types.HttpRetryOptions(attempts=1))
 
 
 def _build_gemini(settings: Settings) -> GeminiProvider:
@@ -91,28 +185,38 @@ def _build_gemini(settings: Settings) -> GeminiProvider:
     key = settings.gemini_api_key.get_secret_value().strip() if settings.gemini_api_key else ""
     model = (settings.gemini_model or "").strip()
     if not key:
-        raise ProviderConfigError("GEMINI_API_KEY must be set to use the gemini provider")
+        raise ProviderConfigError(
+            "GEMINI_API_KEY must be set to use the gemini provider", unconfigured=True
+        )
     if not model:
         raise ProviderConfigError(
-            "GEMINI_MODEL must be set to a pinned model ID (PRD D46: gemini-3.5-flash-lite)"
+            "GEMINI_MODEL must be set to a pinned model ID (PRD D46: gemini-3.5-flash-lite)",
+            unconfigured=True,
         )
     return GeminiProvider(
-        genai.Client(api_key=key), model=model, thinking_level=settings.gemini_thinking_level
+        genai.Client(api_key=key, http_options=gemini_http_options()),
+        model=model,
+        thinking_level=settings.gemini_thinking_level,
     )
 
 
-def build_groq_provider(settings: Settings, *, model: str | None) -> GroqProvider:
-    """A Groq adapter for ``model``: ``GROQ_MODEL`` for the fallback generator (Phase 7),
-    ``JUDGE_MODEL`` for the judge (4.04). ``GENERATOR_PROVIDERS`` cannot select it before the router
-    exists. The caller owns the provider and closes it (``aclose``)."""
+def build_groq_provider(
+    settings: Settings, *, model: str | None, model_variable: str = "GROQ_MODEL"
+) -> GroqProvider:
+    """A Groq adapter for ``model``: ``GROQ_MODEL`` for the fallback generator (a later entry of
+    ``GENERATOR_PROVIDERS``), ``JUDGE_MODEL`` for the judge (4.04); ``model_variable`` is the name
+    an error gives for it. The caller owns the provider and closes it (``aclose``)."""
     key = settings.groq_api_key.get_secret_value().strip() if settings.groq_api_key else ""
     pinned = (model or "").strip()
     if not key:
-        raise ProviderConfigError("GROQ_API_KEY must be set to use the groq provider")
+        raise ProviderConfigError(
+            "GROQ_API_KEY must be set to use the groq provider", unconfigured=True
+        )
     if not pinned:
         raise ProviderConfigError(
-            "the Groq model must be set to a pinned model ID (GROQ_MODEL or JUDGE_MODEL; "
-            "PRD D48: openai/gpt-oss-120b)"
+            f"the Groq model ({model_variable}) must be set to a pinned model ID "
+            "(PRD D48: openai/gpt-oss-120b)",
+            unconfigured=True,
         )
     return GroqProvider.create(key, model=pinned, reasoning_effort=settings.groq_reasoning_effort)
 
@@ -131,7 +235,7 @@ def build_judge_provider(settings: Settings) -> GroqProvider | StubJudgeProvider
         raise ProviderConfigError(
             "JUDGE_MODEL must be set to a pinned model ID (PRD D48: openai/gpt-oss-120b)"
         )
-    return build_groq_provider(settings, model=settings.judge_model)
+    return build_groq_provider(settings, model=settings.judge_model, model_variable="JUDGE_MODEL")
 
 
 def build_reranker(
@@ -234,10 +338,25 @@ async def open_runtime(
     clock: Clock = time.perf_counter,
     wall_clock: Callable[[], datetime] | None = None,
     reranker: Reranker | None = None,
+    fallback_providers: Sequence[LLMProvider] | None = None,
+    router_clock: RouterClock = SYSTEM_CLOCK,
+    primary_only: bool = False,
 ) -> AsyncGenerator[Runtime]:
     """``wall_clock`` replaces the database's ``now()`` as the rate limiter's clock, and
     ``reranker`` the one ``build_reranker`` makes from the settings (tests only; it must go with a
-    ``RERANK_PROVIDER`` other than ``none``, the pipeline checks)."""
+    ``RERANK_PROVIDER`` other than ``none``, the pipeline checks).
+
+    The router is built once here (inside the pipeline), over the primary and the later entries of
+    ``GENERATOR_PROVIDERS`` (``build_fallback_providers``: one that cannot be built is skipped with
+    a warning). An injected ``provider`` stands for the whole list unless the test also passes
+    ``fallback_providers`` (no real fallback is ever built next to an injected primary), and
+    ``router_clock`` is how a test moves the breaker's time (the real monotonic clock otherwise).
+
+    ``primary_only`` is for the CLI (``grounded ask``) and is implied by eval mode: only the first
+    entry is built, without a breaker, and the provider's own typed errors come out (the golden
+    batch waits out a 429 and stops at a daily quota by reading them, Tech §15.8).
+    """
+    primary_only = primary_only or settings.app_env == "eval"
     async with AsyncExitStack() as stack:
         pool = create_pool(settings)
         # wait=False: start serving even if the database is unreachable; /readyz reports it.
@@ -253,6 +372,8 @@ async def open_runtime(
             if settings.app_env == "eval" and not isinstance(provider, StubLLMProvider):
                 eval_llm = EvalLLM.open(settings, stack)
                 provider = eval_llm.wrap(provider)
+            if fallback_providers is None and not primary_only:
+                fallback_providers = build_fallback_providers(settings, stack)
         pricing = pricing or load_pricing()
         # No budget in eval mode (Tech §15.6: the LLM calls of a run must neither use up the demo's
         # day nor end in budget_exhausted) and none without a cap (dev and test; prod requires one).
@@ -286,6 +407,17 @@ async def open_runtime(
             budget=budget,
             reranker=reranker,
             rerank_cap=rerank_cap,
+            fallback_providers=fallback_providers or (),
+            router_clock=router_clock,
+            primary_only=primary_only,
+        )
+        # The order is the router's: a deployment whose fallback was skipped shows one name here.
+        logger.info(
+            "generator providers ready",
+            extra={
+                "providers": [p.name for p in (provider, *(fallback_providers or ()))],
+                "primary_only": primary_only,
+            },
         )
         # Eval runs are told apart from real traffic in the table (DB.md §4, CI database only).
         request_logger = RequestLogger(

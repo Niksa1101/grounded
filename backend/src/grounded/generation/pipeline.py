@@ -10,8 +10,15 @@ today is marked below.
 - Citation mapping lives in ``citations.py`` (3.06). A semantic failure (an answer with no valid
   citation) is treated like a schema failure: ``ProviderBadOutput``, which gets the one retry.
   ``invalid_citation_count`` is computed per request and recorded on the trace.
-- ``_generate_validated`` is the one retry with feedback (3.07, Tech §9.5 step 3). It counts
-  ``validation_retries`` on the trace, and 7.04 moves it into the router.
+- Generation goes through the provider router (7.04, Tech §10): ``_generate_routed`` hands it the
+  hooks and reads back the answering provider. The one retry with error feedback (3.07, Tech §9.5
+  step 3) is the router's now, as are the fallback to the next provider and the circuit breaker;
+  the pipeline has no retry loop of its own, so a bad output costs two calls on a provider, not
+  four. The hooks are the budget reserve before **every** call (a retry and a fallback included),
+  the citation checks (``validate``), the retry wording (``Prompt.render_retry``), the usage record
+  of every call (``on_attempt``: tokens, retries, the provider that answered) and the time left
+  before the request deadline. The router is built here from ``Settings`` and the providers
+  ``open_runtime`` passes, once per process, so the breaker state outlives a request.
 - Claim confidence comes from ``confidence.score_claims`` (3.10): the server computes it from the
   retrieval signals of the cited chunks, and the model's ``self_confidence`` is only one weak input,
   never shown as confidence (AGENTS.md §6.6).
@@ -40,12 +47,22 @@ today is marked below.
   The ``rerank`` stage never aborts a request: only a cancellation (the request deadline) passes
   through it. A degraded answer is not stored in the answer cache, because the key of a reranked
   configuration must only ever hold reranked answers.
+- A **fallback** answer (the router's ``fallback_used``) is not stored either (D57c): the key names
+  the configured primary's model and generation parameters, so a Groq answer under it would be
+  served as Gemini's for up to 29 days. A cache lookup is unaffected, so a cached answer keeps
+  being served while a breaker is open.
+- In eval mode (and for ``grounded ask``: ``primary_only``) the router has no breakers and one
+  provider, and the pipeline re-raises the typed error of that provider instead of the router's
+  wrapper (``AllProvidersUnavailable.causes[-1]``), so ``ask_batch``, the promptfoo provider and
+  the gate see the same ``ProviderRateLimited`` (``is_quota``, ``retry_after_s``),
+  ``BackoffExhaustedError`` or ``ProviderUnavailable`` as before the router existed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -64,13 +81,19 @@ from grounded.generation.context import BuiltContext, build_context, escape_cont
 from grounded.generation.params import GenerationParams
 from grounded.generation.prompts import Prompt
 from grounded.generation.providers.base import GenerationResult, LLMProvider, Usage
+from grounded.generation.router import (
+    SYSTEM_CLOCK,
+    AllProvidersUnavailable,
+    Attempt,
+    AttemptOutcome,
+    BreakerConfig,
+    ProviderRouter,
+    RoutedGeneration,
+    RouterClock,
+)
 from grounded.infra.answer_cache import AnswerCache, CacheKey, from_stored
 from grounded.infra.budget import DailyBudget, RerankCap, RerankCapReachedError
-from grounded.infra.provider_errors import (
-    ProviderBadOutput,
-    ProviderError,
-    ProviderRequestRejected,
-)
+from grounded.infra.provider_errors import ProviderError, ProviderRequestRejected
 from grounded.infra.timing import Clock, StageTimer
 from grounded.ingest.embed import Embedder, Vector
 from grounded.observability.cost import Pricing
@@ -91,7 +114,8 @@ from grounded.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-# AGENTS.md §6.4: one retry on the same provider, then give up (fallback arrives with the router).
+# AGENTS.md §6.4: one retry on the same provider with error feedback, then the next provider. The
+# router makes it (7.04); the judge (``evals/judge.py``) applies the same bound to its own call.
 MAX_VALIDATION_RETRIES = 1
 
 # ``Meta`` has two required strings that describe the retrieval; a mode without retrieval fills them
@@ -108,10 +132,12 @@ class AskMode(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class Generation:
-    """An answer that passed the checks, plus what it took to get it."""
+    """An answer that passed the checks, plus what it took to get it. ``routed`` is the router's
+    report: the answering provider and model, ``fallback_used`` and every attempt."""
 
     result: GenerationResult[LLMAnswer]  # the successful attempt
     mapped: MappedAnswer
+    routed: RoutedGeneration[LLMAnswer]
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,12 +184,36 @@ class AskPipeline:
         budget: DailyBudget | None = None,
         reranker: Reranker | None = None,
         rerank_cap: RerankCap | None = None,
+        fallback_providers: Sequence[LLMProvider] = (),
+        router_clock: RouterClock = SYSTEM_CLOCK,
+        primary_only: bool = False,
     ) -> None:
+        """``provider`` is the primary, the first entry of ``GENERATOR_PROVIDERS`` (it names the
+        answer-cache key); ``fallback_providers`` are the next entries, in order. The router over
+        them is built here, once per pipeline (so once per process). ``router_clock`` is how a
+        test moves the breaker's time without sleeping.
+
+        ``primary_only`` (always on in eval mode, where ``Settings`` allows one provider anyway,
+        and for ``grounded ask``) makes the router a pass-through for the primary alone: no
+        fallback, no breaker, and the provider's own typed error instead of the router's wrapper.
+        The eval harness and the golden batch wait out a 429 and stop at a daily quota by reading
+        that error (``ask_batch``, ``promptfoo_provider``, the gate), and a breaker would skip
+        every question after one 429 and hide the quota from them (Tech §10, "Breakers off").
+        """
         self._settings = settings
         self._pool = pool
         self._index_cache = index_cache
         self._embedder = embedder
         self._provider = provider
+        self._primary_only = primary_only or settings.app_env == "eval"
+        if self._primary_only and fallback_providers:
+            raise ValueError("a primary-only pipeline (eval mode, the CLI) takes no fallback")
+        self._router = ProviderRouter(
+            [provider, *fallback_providers],
+            config=BreakerConfig.from_settings(settings),
+            clock=router_clock,
+            breakers_enabled=not self._primary_only,
+        )
         self._prompt = prompt
         self._no_rag_prompt = no_rag_prompt
         self._cfg = RetrievalConfig.from_settings(settings, "hybrid")
@@ -200,7 +250,8 @@ class AskPipeline:
         # An unpriced model stops the service here, at startup, instead of turning into a silent
         # cost of 0 (Tech §14). The embedder is built from ``settings.embedding_model``, so that
         # is the model whose price the shadow cost uses.
-        pricing.require_generator(provider.name, provider.model)
+        for generator in (provider, *fallback_providers):
+            pricing.require_generator(generator.name, generator.model)
         pricing.require_embedding(settings.embedding_model)
         if reranker is not None:
             rerank_model = (self._cfg.rerank_model or "").strip()
@@ -283,7 +334,7 @@ class AskPipeline:
             user = prompt.render_user(question=escape_content(question), sources=context.text)
 
         with timer.stage("llm"):
-            generation = await self._generate_validated(
+            generation = await self._generate_routed(
                 prompt,
                 user,
                 labels,
@@ -292,7 +343,7 @@ class AskPipeline:
                 trace,
                 require_citations=mode is AskMode.HYBRID,
             )
-        result, mapped = generation.result, generation.mapped
+        result, mapped, routed = generation.result, generation.mapped, generation.routed
 
         # ``mapped.claims`` are the model's claims one to one (citations.py), except that an
         # ``insufficient_context`` answer has none: its claims are dropped, so nothing is scored.
@@ -326,9 +377,9 @@ class AskPipeline:
             min_confidence=min_confidence,
             meta=Meta(
                 request_id=request_id,
-                provider=result.provider,
-                model=result.model,
-                fallback_used=False,
+                provider=routed.provider,
+                model=routed.model,
+                fallback_used=routed.fallback_used,
                 cache_hit=False,
                 rerank_used=trace.rerank_used,
                 prompt_version=prompt.version,
@@ -341,8 +392,15 @@ class AskPipeline:
         )
         # An answer built from the RRF order because the rerank degraded is not what this key (it
         # holds the rerank config) stands for, and a hit would serve it for the answer cache's TTL
-        # (``ANSWER_CACHE_TTL_DAYS``) after the reranker is back. It is simply not stored.
-        if self._cache is not None and cache_key is not None and trace.rerank_error is None:
+        # (``ANSWER_CACHE_TTL_DAYS``) after the reranker is back. It is simply not stored. The same
+        # goes for a fallback answer (D57c): the key names the primary's model and generation
+        # parameters, so Groq's answer would be served as Gemini's for up to 29 days.
+        if (
+            self._cache is not None
+            and cache_key is not None
+            and trace.rerank_error is None
+            and not routed.fallback_used
+        ):
             await self._cache.put(cache_key, response)
         return response
 
@@ -540,7 +598,7 @@ class AskPipeline:
         trace.min_claim_confidence = response.min_confidence
         return response
 
-    async def _generate_validated(
+    async def _generate_routed(
         self,
         prompt: Prompt,
         user: str,
@@ -551,77 +609,101 @@ class AskPipeline:
         *,
         require_citations: bool,
     ) -> Generation:
-        """Generate, check the answer, and on bad output retry exactly once on the same provider.
+        """Generate through the router and check the answer (Tech §9.5, §10).
 
         Bad output is either a schema failure raised by the adapter or a semantic failure from the
-        citation checks (Tech §9.5). The retry's user message is the original one plus the
-        prompt's "Retry feedback" section with the reason filled in. A second failure propagates
-        as ``ProviderBadOutput`` (HTTP 502), and so does a first one the adapter marks not
-        ``retryable`` (a content-filter block, which the same request would hit again). Rate
-        limits, 5xx and timeouts are not bad output and propagate straight away, on the retry as
-        well. There is no loop, no sleep, and no fallback yet: 7.04 moves this whole step into the
-        router, which then falls back instead of failing.
+        citation checks (``validate``). The router retries it once on the same provider with the
+        prompt's "Retry feedback" section (``retry_user``), then tries the next provider. A rate
+        limit, 5xx or timeout goes to the next provider at once and opens that provider's breaker
+        (nothing here sleeps). What comes out when nobody answers is the router's: bad output
+        again is a ``ProviderBadOutput`` (502), a refused attempt (too little time before the
+        request deadline) a ``RouterDeadlineError`` (504), and any transient failure an
+        ``AllProvidersUnavailable`` (503, with the wait the breakers say), except in eval mode,
+        where it is the provider's own typed error (the handler below).
+
+        The hooks are the pipeline's side of the contract. ``before_call`` reserves one budget unit
+        before **every** call, so a retry and a fallback each reserve and a skipped provider
+        reserves nothing; the router calls it only for a call it is going to make. ``validate`` is
+        pure and cannot raise: ``map_citations`` over this request's labels, remembering the last
+        mapping (the router validates the answering result last). ``on_attempt`` records each
+        call as it ends: the trace follows the provider that answered (or the last that reported
+        back), counts the retries, and adds the usage of failed calls that were billed too, so a
+        request that fails later still logs what it spent.
 
         ``require_citations=False`` (``no_rag``) turns the zero-valid-citations check off, so only a
         schema failure can cause the retry.
-
-        The trace gets the usage of every attempt, a schema-invalid one included (the adapter puts
-        the billed tokens on ``ProviderBadOutput``), the retry count and the citation counts of the
-        last attempt, so a request that fails here still logs what it spent. The citation-check
-        error raised below carries no tokens: that attempt's usage was added right after the call.
         """
-        attempt_user = user
-        while True:
-            try:
-                if self._budget is not None:
-                    await self._budget.reserve()  # one unit per call: the retry reserves again
-                result = await self._generate(prompt, attempt_user)
-                await self._record_usage(trace, result.usage)
-                trace.llm_cache_hits += int(result.cache_hit)
-                mapped = map_citations(
-                    result.parsed, labels, titles, require_citations=require_citations
-                )
-                trace.invalid_citation_count = mapped.invalid_citation_count
-                trace.dropped_claim_count = mapped.dropped_claim_count
-                trace.removed_url_count = mapped.removed_url_count
-                if mapped.bad_output is not None:
-                    raise ProviderBadOutput(
-                        "the answer failed the citation checks",
-                        raw=result.raw_text,
-                        validation_error=mapped.bad_output,
-                    )
-                return Generation(result, mapped)
-            except ProviderBadOutput as exc:
-                if exc.input_tokens or exc.output_tokens:
-                    await self._record_usage(
-                        trace, Usage(input_tokens=exc.input_tokens, output_tokens=exc.output_tokens)
-                    )
-                if not exc.retryable or trace.validation_retries >= MAX_VALIDATION_RETRIES:
-                    raise
-                trace.validation_retries += 1
-                logger.info(
-                    "model output invalid, retrying once",
-                    extra={
-                        "request_id": str(request_id),
-                        "validation_retries": trace.validation_retries,
-                    },
-                )
-                attempt_user = prompt.render_retry(user, error=exc.validation_error or str(exc))
+        mapping: list[MappedAnswer] = []  # the last ``validate`` call's result, the answering one
 
-    async def _record_usage(self, trace: RequestTrace, usage: Usage) -> None:
-        trace.add_usage(usage)
+        async def before_call() -> None:
+            if self._budget is not None:
+                await self._budget.reserve()  # a retry or a fallback reserves again
+
+        def validate(result: GenerationResult[LLMAnswer]) -> str | None:
+            mapped = map_citations(
+                result.parsed, labels, titles, require_citations=require_citations
+            )
+            trace.invalid_citation_count = mapped.invalid_citation_count
+            trace.dropped_claim_count = mapped.dropped_claim_count
+            trace.removed_url_count = mapped.removed_url_count
+            mapping[:] = [mapped]
+            return mapped.bad_output
+
+        async def on_attempt(attempt: Attempt) -> None:
+            await self._record_attempt(trace, attempt)
+
+        def time_left() -> float:
+            left = trace.time_left_s()
+            return math.inf if left is None else left
+
+        try:
+            routed = await self._router.generate(
+                system=prompt.system,
+                user=user,
+                schema=LLMAnswer,
+                temperature=self._generation.temperature,
+                max_output_tokens=self._generation.max_output_tokens,
+                timeout_s=self._settings.call_timeout_s,
+                retry_user=lambda original, reason: prompt.render_retry(original, error=reason),
+                before_call=before_call if self._budget is not None else None,
+                validate=validate,
+                on_attempt=on_attempt,
+                time_left=time_left if trace.deadline_s is not None else None,
+                log_extra={"request_id": str(request_id)},
+            )
+        except AllProvidersUnavailable as exc:
+            if self._primary_only and exc.causes:
+                # The router wraps what the provider raised; the eval harness and the golden
+                # batch read the provider's own error (``is_quota``, ``retry_after_s``,
+                # ``BackoffExhaustedError``).
+                raise exc.causes[-1] from exc
+            raise
+        return Generation(routed.result, mapping[-1], routed)
+
+    async def _record_attempt(self, trace: RequestTrace, attempt: Attempt) -> None:
+        """What one finished call adds to the trace (the router's ``on_attempt``, never a skip).
+
+        ``trace.provider`` and ``model`` follow the calls, so a request that dies after trying a
+        fallback names the one that was tried last. ``fallback_used`` means a provider other than
+        the primary was called, whether or not it answered. ``validation_retries`` counts the
+        retry attempts across providers. The usage of a call that billed tokens is added even when
+        the call failed (a bad output was billed), at the price of the model that billed it.
+        """
+        trace.provider, trace.model = attempt.provider, attempt.model
+        if attempt.provider != self._provider.name:
+            trace.fallback_used = True
+        trace.validation_retries += int(attempt.is_retry)
+        trace.llm_cache_hits += int(attempt.cache_hit)
+        usage = attempt.usage
+        if attempt.outcome is AttemptOutcome.SUCCESS or usage.input_tokens or usage.output_tokens:
+            await self._record_usage(trace, usage, attempt.provider, attempt.model)
+
+    async def _record_usage(
+        self, trace: RequestTrace, usage: Usage, provider: str, model: str
+    ) -> None:
+        trace.add_usage(usage, provider=provider, model=model)
         if self._budget is not None:
             await self._budget.add_tokens(usage)
-
-    async def _generate(self, prompt: Prompt, user: str) -> GenerationResult[LLMAnswer]:
-        return await self._provider.generate(
-            system=prompt.system,
-            user=user,
-            schema=LLMAnswer,
-            temperature=self._generation.temperature,
-            max_output_tokens=self._generation.max_output_tokens,
-            timeout_s=self._settings.call_timeout_s,
-        )
 
     def _check_embedder(self, index: IndexVersion) -> None:
         if (self._embedder.model, self._embedder.dim) != (

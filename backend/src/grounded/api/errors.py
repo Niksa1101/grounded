@@ -26,6 +26,7 @@ from grounded.api.deps import get_request_logger, request_id_of
 from grounded.api.input_limits import InputRejectedError
 from grounded.api.security import ProxyAuthError
 from grounded.generation.pipeline import RetrievalTimeoutError
+from grounded.generation.router import AllProvidersUnavailable, RouterDeadlineError
 from grounded.infra.budget import BudgetExhaustedError
 from grounded.infra.hashing import question_hash
 from grounded.infra.provider_errors import (
@@ -163,6 +164,59 @@ async def _provider_unavailable(request: Request, exc: Exception) -> JSONRespons
     )
 
 
+async def _all_providers_unavailable(request: Request, exc: Exception) -> JSONResponse:
+    """Every provider was skipped or failed (Tech §10, §13): 503 ``provider_unavailable``.
+
+    ``Retry-After`` is the router's ``retry_after_s``, the smallest time left on an open breaker
+    when none can be tried now, and **absent** when it is ``None`` (some provider could be tried at
+    once, or no breaker is open): a made-up wait would be a guess. The body is the generic message;
+    which providers failed, and how, goes to the log (their names and outcomes, never a provider's
+    text or the question).
+    """
+    unavailable = exc if isinstance(exc, AllProvidersUnavailable) else None
+    logger.warning(
+        "all providers unavailable",
+        extra={
+            "request_id": str(request_id_of(request)),
+            "attempts": (
+                [f"{a.provider}:{a.outcome.value}" for a in unavailable.attempts]
+                if unavailable is not None
+                else None
+            ),
+            "retry_after_s": unavailable.retry_after_s if unavailable is not None else None,
+        },
+    )
+    return await _fail(
+        request,
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "provider_unavailable",
+        "The answer service is temporarily unavailable. Try again shortly.",
+        retry_after_s=unavailable.retry_after_s if unavailable is not None else None,
+    )
+
+
+async def _router_deadline(request: Request, exc: Exception) -> JSONResponse:
+    """The router refused an attempt because too little time was left before the request deadline
+    (Tech §10, "The deadline rule"): the same 504 and row as the deadline itself, so the caller
+    sees one kind of timeout; the log line says which one fired."""
+    trace: RequestTrace | None = getattr(request.state, "trace", None)
+    logger.warning(
+        "router refused an attempt, too little time left",
+        extra={
+            "request_id": str(request_id_of(request)),
+            "time_left_s": exc.time_left_s if isinstance(exc, RouterDeadlineError) else None,
+            "timeout_s": exc.timeout_s if isinstance(exc, RouterDeadlineError) else None,
+            "stage_latency_ms": trace.latency_ms() if trace is not None else None,
+        },
+    )
+    return await _fail(
+        request,
+        status.HTTP_504_GATEWAY_TIMEOUT,
+        "deadline_exceeded",
+        "The request took too long and was stopped. Try again shortly.",
+    )
+
+
 async def _deadline_exceeded(request: Request, exc: Exception) -> JSONResponse:
     trace: RequestTrace | None = getattr(request.state, "trace", None)
     logger.warning(
@@ -242,7 +296,9 @@ def install_error_handlers(app: FastAPI) -> None:
         RateLimitedError: _rate_limited,
         DeadlineExceededError: _deadline_exceeded,
         RetrievalTimeoutError: _retrieval_timeout,
+        RouterDeadlineError: _router_deadline,
         BudgetExhaustedError: _budget_exhausted,
+        AllProvidersUnavailable: _all_providers_unavailable,
         ProviderRateLimited: _provider_unavailable,
         ProviderUnavailable: _provider_unavailable,
         ProviderTimeout: _provider_unavailable,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import asynccontextmanager
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -21,6 +21,7 @@ from grounded.api.errors import install_error_handlers
 from grounded.api.routes_ask import router as ask_router
 from grounded.api.routes_health import router as health_router
 from grounded.generation.providers.base import LLMProvider
+from grounded.generation.router import SYSTEM_CLOCK, RouterClock
 from grounded.infra.logging import configure_logging
 from grounded.infra.timing import Clock
 from grounded.ingest.embed import Embedder
@@ -55,12 +56,16 @@ def create_app(
     clock: Clock = time.perf_counter,
     wall_clock: Callable[[], datetime] | None = None,
     reranker: Reranker | None = None,
+    fallback_providers: Sequence[LLMProvider] | None = None,
+    router_clock: RouterClock = SYSTEM_CLOCK,
 ) -> FastAPI:
     """``embedder``, ``provider`` and ``reranker`` replace the real ones (tests); by default they
     are built from ``settings`` in the lifespan, once per process (no reranker for
     ``RERANK_PROVIDER=none``). ``pricing`` defaults to ``pricing.toml`` and ``clock`` to the
     monotonic clock; tests inject their own. ``wall_clock`` is the rate limiter's clock (default:
-    the database's ``now()``, Tech §12)."""
+    the database's ``now()``, Tech §12). The provider router, with the breaker state that outlives
+    a request, is built once per process in the lifespan; a test gives it ``fallback_providers``
+    (an injected ``provider`` has none otherwise) and a ``router_clock`` it moves by hand."""
     settings = settings or get_settings()
     configure_logging(settings.log_level)
 
@@ -74,6 +79,8 @@ def create_app(
             clock=clock,
             wall_clock=wall_clock,
             reranker=reranker,
+            fallback_providers=fallback_providers,
+            router_clock=router_clock,
         ) as runtime:
             app.state.db_pool = runtime.pool
             app.state.pipeline = runtime.pipeline

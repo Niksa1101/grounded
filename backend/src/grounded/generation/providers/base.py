@@ -2,8 +2,8 @@
 
 An adapter turns a Pydantic model into the provider's structured-output format, calls the API and
 returns an **already validated** object, or raises one of the typed errors in
-``infra/provider_errors.py``. Callers (the pipeline now, the router in Phase 7) decide what to do
-from the exception type alone and never import an SDK.
+``infra/provider_errors.py``. Callers (the provider router, Tech §10) decide what to do from the
+exception type alone and never import an SDK.
 """
 
 from __future__ import annotations
