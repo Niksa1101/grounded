@@ -4,10 +4,8 @@ They are the scenarios of the contract in ``grounded/generation/router.py`` (its
 is the rulebook): one test per row of the Tech §10 event table, plus the D57 and 7.01 points
 (timings from ``Settings``, the quota reset, the cap, a ``Retry-After`` of zero, logging, the
 deadline). They run against scripted fake providers and a hand-moved clock, never against the wall
-clock (AGENTS.md §8). Each test that needs the router's logic is a strict ``xfail`` until the Author
-implements it in 7.03, who then removes the marker (``raises=NotImplementedError`` makes it mean
-"not written yet": a real failure of the finished code is a failure, not an expected one). The tests
-that need no logic (the value types, ``BreakerConfig``) are plain tests.
+clock (AGENTS.md §8). Written in 7.02 as strict ``xfail`` specs, they all pass since the router
+was implemented in 7.03 (the markers are gone).
 
 How the Author adds a case
 --------------------------
@@ -33,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import FrozenInstanceError, replace
@@ -84,10 +83,6 @@ from grounded.infra.provider_errors import (
 )
 from grounded.schemas.llm import LLMAnswer
 from tests.support import FakeClock, WallClock, make_settings
-
-SPEC = pytest.mark.xfail(
-    strict=True, raises=NotImplementedError, reason="Author implements in 7.03"
-)
 
 HOUR = 3600.0
 OUTCOME = AttemptOutcome
@@ -391,7 +386,6 @@ GEMINI_RESETS = [
 ]
 
 
-@SPEC
 @pytest.mark.parametrize(("now", "expected_s"), GEMINI_RESETS)
 def test_gemini_quota_resets_at_the_next_midnight_in_los_angeles(
     now: datetime, expected_s: float
@@ -402,20 +396,17 @@ def test_gemini_quota_resets_at_the_next_midnight_in_los_angeles(
     ) == pytest.approx(expected_s)
 
 
-@SPEC
 def test_gemini_quota_reset_ignores_a_retry_after_and_the_offset_of_now() -> None:
     plus_nine = timezone(timedelta(hours=9))
     now = datetime(2026, 10, 14, 21, 0, tzinfo=plus_nine)  # the same instant as 12:00 UTC
     assert quota_reset_s("gemini", now, 5.0, max_retry_after_s=3600.0) == pytest.approx(19 * HOUR)
 
 
-@SPEC
 def test_gemini_quota_reset_needs_an_aware_now() -> None:
     with pytest.raises(ValueError, match="aware"):
         quota_reset_s("gemini", datetime(2026, 10, 14, 12, 0), None, max_retry_after_s=3600.0)
 
 
-@SPEC
 @pytest.mark.parametrize(
     "failure", [ZoneInfoNotFoundError("America/Los_Angeles"), OSError("corrupt"), ValueError("bad")]
 )
@@ -436,7 +427,6 @@ def test_a_zone_that_cannot_be_loaded_makes_the_reset_not_derivable(
     assert (record.__dict__["provider"], record.__dict__["zone"]) == ("gemini", GEMINI_QUOTA_ZONE)
 
 
-@SPEC
 @pytest.mark.parametrize(
     ("retry_after", "expected"),
     [
@@ -456,7 +446,6 @@ def test_groq_quota_resets_after_its_own_retry_after_cut_to_the_cap(
     assert reset == (None if expected is None else pytest.approx(expected))
 
 
-@SPEC
 @pytest.mark.parametrize("provider", ["fake", "other", ""])
 def test_any_other_provider_has_no_derivable_reset(provider: str) -> None:
     assert quota_reset_s(provider, WALL_START, 30.0, max_retry_after_s=3600.0) is None
@@ -467,7 +456,6 @@ def assert_plan(plan: OpenPlan, seconds: float, reason: OpenReason, derived: Der
     assert (plan.reason, plan.derived) == (reason, derived)
 
 
-@SPEC
 @pytest.mark.parametrize(
     ("provider", "retry_after", "seconds", "derived"),
     [
@@ -488,7 +476,6 @@ def test_a_per_minute_429_opens_for_the_retry_after_or_the_default(
     assert_plan(plan, seconds, OpenReason.RATE_LIMIT, derived)
 
 
-@SPEC
 @pytest.mark.parametrize(
     ("provider", "retry_after", "seconds", "derived"),
     [
@@ -508,7 +495,6 @@ def test_a_daily_quota_429_opens_until_the_providers_reset_or_for_the_default(
     assert_plan(plan, seconds, OpenReason.QUOTA, derived)
 
 
-@SPEC
 def test_a_quota_429_with_an_unloadable_zone_falls_back_to_the_default() -> None:
     def broken(key: str) -> Any:
         raise ZoneInfoNotFoundError(key)
@@ -537,14 +523,12 @@ def open_and_wait(breaker: CircuitBreaker, seconds: float = 60.0) -> float:
     return seconds + 1.0
 
 
-@SPEC
 def test_a_new_breaker_is_closed_and_lets_calls_through() -> None:
     breaker = new_breaker()
     assert breaker.status(0.0) == BreakerStatus(BreakerState.CLOSED, None, False)
     assert breaker.admit(0.0) is Admission.ALLOWED
 
 
-@SPEC
 def test_the_threshold_of_failures_within_the_window_opens_it() -> None:
     """Tech §10 'Unavailable / Timeout' row: 3 consecutive within 60 s open it for 30 s."""
     breaker = new_breaker()
@@ -556,7 +540,6 @@ def test_the_threshold_of_failures_within_the_window_opens_it() -> None:
     assert status.remaining_s == pytest.approx(30.0)
 
 
-@SPEC
 def test_the_breaker_ignores_failures_older_than_the_window() -> None:
     breaker = new_breaker()
     assert [fail(breaker, t) for t in (0.0, 40.0, 100.0, 110.0)] == [None, None, None, None]
@@ -564,7 +547,6 @@ def test_the_breaker_ignores_failures_older_than_the_window() -> None:
     assert fail(breaker, 120.0) == pytest.approx(30.0)  # 100, 110, 120: three inside one window
 
 
-@SPEC
 def test_a_reply_clears_the_failure_run() -> None:
     breaker = new_breaker()
     assert (fail(breaker, 0.0), fail(breaker, 10.0)) == (None, None)
@@ -574,7 +556,6 @@ def test_a_reply_clears_the_failure_run() -> None:
     assert fail(breaker, 50.0) == pytest.approx(30.0)
 
 
-@SPEC
 def test_an_open_breaker_skips_until_the_open_time_has_elapsed() -> None:
     """Tech §10 'breaker open' and 'time elapsed' rows."""
     breaker = new_breaker()
@@ -585,7 +566,6 @@ def test_an_open_breaker_skips_until_the_open_time_has_elapsed() -> None:
     assert breaker.status(61.0) == BreakerStatus(BreakerState.HALF_OPEN, None, True)
 
 
-@SPEC
 def test_half_open_admits_exactly_one_trial() -> None:
     breaker = new_breaker()
     later = open_and_wait(breaker)
@@ -594,7 +574,6 @@ def test_half_open_admits_exactly_one_trial() -> None:
     assert [breaker.admit(later), breaker.admit(later + 5.0)] == [Admission.SKIP_TRIAL] * 2
 
 
-@SPEC
 def test_a_trial_reply_closes_the_breaker() -> None:
     breaker = new_breaker()
     later = open_and_wait(breaker)
@@ -603,7 +582,6 @@ def test_a_trial_reply_closes_the_breaker() -> None:
     assert breaker.admit(later) is Admission.ALLOWED
 
 
-@SPEC
 def test_a_trial_failure_opens_it_again_with_a_fresh_timer() -> None:
     breaker = new_breaker()
     later = open_and_wait(breaker)
@@ -613,7 +591,6 @@ def test_a_trial_failure_opens_it_again_with_a_fresh_timer() -> None:
     assert breaker.admit(later + 31.0) is Admission.TRIAL
 
 
-@SPEC
 def test_a_trial_that_gets_a_429_opens_for_the_given_seconds() -> None:
     breaker = new_breaker()
     later = open_and_wait(breaker)
@@ -621,7 +598,6 @@ def test_a_trial_that_gets_a_429_opens_for_the_given_seconds() -> None:
     assert breaker.status(later).remaining_s == pytest.approx(45.0)
 
 
-@SPEC
 def test_a_released_trial_is_given_back_without_a_verdict() -> None:
     breaker = new_breaker()
     later = open_and_wait(breaker)
@@ -630,7 +606,6 @@ def test_a_released_trial_is_given_back_without_a_verdict() -> None:
     assert breaker.admit(later) is Admission.TRIAL
 
 
-@SPEC
 def test_a_call_that_finishes_after_the_breaker_opened_changes_nothing() -> None:
     """A straggler (admitted while closed) must not close, extend or re-time an open breaker, and
     its failures must not pile up into a new opening (three of them reach the threshold)."""
@@ -653,7 +628,6 @@ def test_a_call_that_finishes_after_the_breaker_opened_changes_nothing() -> None
 # --- The router: one test per row of the Tech §10 table ------------------------------------------
 
 
-@SPEC
 async def test_success_returns_the_answer_and_the_report() -> None:
     """Tech §10 'Success' row, and the report: provider, model, fallback_used, attempts."""
     p, q = Probe("gemini", [GOOD]), Probe("groq")
@@ -669,7 +643,6 @@ async def test_success_returns_the_answer_and_the_report() -> None:
     assert p.calls == [RecordedCall("sys", "question", LLMAnswer, 0.0, 256, 12.0)]
 
 
-@SPEC
 async def test_success_resets_the_failure_count() -> None:
     """Tech §10 'Success' row: two timeouts, a success, two more timeouts open nothing."""
     p = Probe("gemini", [timeout(), timeout(), GOOD, timeout(), timeout(), GOOD])
@@ -682,7 +655,6 @@ async def test_success_resets_the_failure_count() -> None:
     assert len(p.calls) == 6
 
 
-@SPEC
 async def test_bad_output_gets_one_retry_on_the_same_provider_with_the_feedback() -> None:
     """Tech §10 'BadOutput' row, §9.5 step 3: the retry's user message carries the reason."""
     p, q = Probe("gemini", [BAD, GOOD]), Probe("groq")
@@ -698,7 +670,6 @@ async def test_bad_output_gets_one_retry_on_the_same_provider_with_the_feedback(
     assert q.entries == 0
 
 
-@SPEC
 async def test_a_validate_rejection_is_bad_output_with_the_hooks_reason() -> None:
     """§9.5 step 2: the citation checks run after each call; a failure is bad output."""
     p = Probe("gemini", [GOOD, GOOD])
@@ -711,7 +682,6 @@ async def test_a_validate_rejection_is_bad_output_with_the_hooks_reason() -> Non
     ]
 
 
-@SPEC
 async def test_a_second_bad_output_goes_to_the_next_provider() -> None:
     """Tech §10 'BadOutput' row: exactly one retry, then the next provider (a fallback)."""
     p, q = Probe("gemini", [BAD, BAD]), Probe("groq", [GOOD])
@@ -725,7 +695,6 @@ async def test_a_second_bad_output_goes_to_the_next_provider() -> None:
     ]
 
 
-@SPEC
 async def test_bad_output_that_is_not_retryable_skips_the_retry() -> None:
     """§9.5 step 3: a content-filter block would be hit again, so the next provider is tried."""
     blocked = ProviderBadOutput("blocked by the content filter", retryable=False)
@@ -739,7 +708,6 @@ async def test_bad_output_that_is_not_retryable_skips_the_retry() -> None:
     assert out.fallback_used
 
 
-@SPEC
 async def test_bad_output_is_proof_of_life_and_resets_the_failure_count() -> None:
     """A reply of any kind clears the run, so T, T, bad output, T, T opens nothing."""
     p = Probe("gemini", [timeout(), timeout(), BAD, BAD, timeout(), timeout()])
@@ -750,7 +718,6 @@ async def test_bad_output_is_proof_of_life_and_resets_the_failure_count() -> Non
     assert rig.status("gemini").state is BreakerState.CLOSED
 
 
-@SPEC
 @pytest.mark.parametrize(
     ("retry_after", "open_s"),
     [(30.0, 30.0), (None, 60.0), (0.0, 60.0), (-1.0, 60.0), (7200.0, 3600.0)],
@@ -772,7 +739,6 @@ async def test_a_rate_limit_opens_the_breaker_for_the_planned_time(
     assert status.remaining_s == pytest.approx(open_s)
 
 
-@SPEC
 async def test_a_429_breaker_skips_the_provider_then_goes_half_open_and_recovers() -> None:
     """Tech §10 'RateLimited', 'breaker open' and 'time elapsed' rows, end to end."""
     p = Probe("gemini", [limited(30.0), GOOD])
@@ -790,7 +756,6 @@ async def test_a_429_breaker_skips_the_provider_then_goes_half_open_and_recovers
     assert rig.status("gemini") == BreakerStatus(BreakerState.CLOSED, None, False)
 
 
-@SPEC
 async def test_gemini_quota_opens_until_the_next_midnight_pacific_then_half_open() -> None:
     """Tech §10 'is_quota' row, D57b: midnight America/Los_Angeles on the wall clock."""
     p = Probe("gemini", [limited(None, quota=True), GOOD])
@@ -807,7 +772,6 @@ async def test_gemini_quota_opens_until_the_next_midnight_pacific_then_half_open
     assert rig.status("gemini").state is BreakerState.CLOSED
 
 
-@SPEC
 @pytest.mark.parametrize(
     ("retry_after", "open_s"), [(120.0, 120.0), (7200.0, 3600.0), (None, 900.0)]
 )
@@ -821,7 +785,6 @@ async def test_groq_quota_opens_for_its_own_wait_capped_else_the_default(
     assert rig.status("groq").remaining_s == pytest.approx(open_s)
 
 
-@SPEC
 async def test_a_quota_with_an_unloadable_zone_opens_for_the_quota_default_and_warns(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -837,7 +800,6 @@ async def test_a_quota_with_an_unloadable_zone_opens_for_the_quota_default_and_w
     assert [r for r in caplog.records if r.getMessage() == LOG_ZONE_UNAVAILABLE]
 
 
-@SPEC
 @pytest.mark.parametrize("failure", [timeout, down], ids=["timeout", "unavailable"])
 async def test_three_consecutive_failures_open_the_breaker_and_each_fails_over_at_once(
     failure: Any,
@@ -859,7 +821,6 @@ async def test_three_consecutive_failures_open_the_breaker_and_each_fails_over_a
     ]
 
 
-@SPEC
 async def test_failures_outside_the_window_do_not_accumulate() -> None:
     """Tech §10 'Unavailable / Timeout' row: the 60 s window."""
     p, q = Probe("gemini", [timeout(), timeout(), timeout()]), Probe("groq", [GOOD] * 3)
@@ -873,7 +834,6 @@ async def test_failures_outside_the_window_do_not_accumulate() -> None:
     assert len(p.calls) == 3
 
 
-@SPEC
 async def test_an_open_breaker_is_skipped_without_a_call() -> None:
     """Tech §10 'P's breaker open' row: zero calls on the provider, recorded as a skip."""
     p, q = Probe("gemini", [limited(30.0)]), Probe("groq", [GOOD, GOOD])
@@ -887,7 +847,6 @@ async def test_an_open_breaker_is_skipped_without_a_call() -> None:
     assert [a.provider for a in rig.seen] == ["gemini", "groq", "groq"]  # never for a skip
 
 
-@SPEC
 async def test_reading_the_status_never_claims_the_trial() -> None:
     p, q = Probe("gemini", [limited(30.0), GOOD]), Probe("groq", [GOOD])
     rig = Rig(p, q)
@@ -898,7 +857,6 @@ async def test_reading_the_status_never_claims_the_trial() -> None:
     assert (await rig.ask()).provider == "gemini"
 
 
-@SPEC
 async def test_half_open_lets_exactly_one_trial_through_under_concurrent_requests(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -934,7 +892,6 @@ async def test_half_open_lets_exactly_one_trial_through_under_concurrent_request
     assert rig.status("gemini").state is BreakerState.CLOSED
 
 
-@SPEC
 async def test_a_failed_trial_opens_again_with_a_fresh_timer_and_a_good_one_closes() -> None:
     """Tech §10 'Breaker time elapsed' row: success -> closed, failure -> open again."""
     p = Probe("gemini", [limited(30.0), timeout(), GOOD])
@@ -953,7 +910,6 @@ async def test_a_failed_trial_opens_again_with_a_fresh_timer_and_a_good_one_clos
     assert (recovered.provider, rig.status("gemini").state) == ("gemini", BreakerState.CLOSED)
 
 
-@SPEC
 async def test_all_providers_open_raises_with_the_minimum_remaining_time() -> None:
     """Tech §10 'All providers open/failed' row: ``retry_after_s`` is the smallest time left."""
     p, q = Probe("gemini", [limited(60.0)]), Probe("groq", [GOOD, limited(20.0)])
@@ -977,7 +933,6 @@ async def test_all_providers_open_raises_with_the_minimum_remaining_time() -> No
     assert (len(p.calls), len(q.calls)) == (1, 2)
 
 
-@SPEC
 async def test_every_provider_failing_this_call_with_nothing_open_has_no_retry_after() -> None:
     """The case the table leaves open: nothing to wait for, so ``retry_after_s`` is ``None``."""
     p, q = Probe("gemini", [timeout()]), Probe("groq", [down()])
@@ -990,7 +945,6 @@ async def test_every_provider_failing_this_call_with_nothing_open_has_no_retry_a
     ]
 
 
-@SPEC
 async def test_a_half_open_provider_with_its_trial_taken_is_not_a_time_to_wait_for() -> None:
     """A trial in flight has no remaining time: with nothing else open there is no wait."""
     p, q = Probe("gemini", [limited(30.0), GOOD]), Probe("groq", [GOOD, timeout()])
@@ -1007,7 +961,6 @@ async def test_a_half_open_provider_with_its_trial_taken_is_not_a_time_to_wait_f
     await trial
 
 
-@SPEC
 async def test_when_nothing_answered_only_bad_output_raises_the_last_provider_bad_output() -> None:
     """§9.5 step 5: 502, not 503, when the providers answered but never validly."""
     p, q = Probe("gemini", [BAD, BAD]), Probe("groq", [BAD, BAD])
@@ -1017,7 +970,6 @@ async def test_when_nothing_answered_only_bad_output_raises_the_last_provider_ba
     assert (len(p.calls), len(q.calls)) == (2, 2)  # one retry on each, no more
 
 
-@SPEC
 async def test_a_validate_rejection_that_survives_the_retry_raises_provider_bad_output() -> None:
     p = Probe("gemini", [GOOD, GOOD])
     with pytest.raises(ProviderBadOutput) as info:
@@ -1026,7 +978,6 @@ async def test_a_validate_rejection_that_survives_the_retry_raises_provider_bad_
     assert info.value.raw == GOOD.model_dump_json()
 
 
-@SPEC
 async def test_bad_output_next_to_a_transient_failure_is_unavailable_not_bad_output() -> None:
     p, q = Probe("gemini", [BAD, BAD]), Probe("groq", [timeout()])
     with pytest.raises(AllProvidersUnavailable) as info:
@@ -1034,7 +985,6 @@ async def test_bad_output_next_to_a_transient_failure_is_unavailable_not_bad_out
     assert info.value.retry_after_s is None
 
 
-@SPEC
 async def test_a_single_entry_list_is_the_primary_only_with_no_fallback() -> None:
     """Tech §10 'Eval mode': ``Settings`` allows one provider there; the router routes over what it
     is given, so one entry means no fallback and ``fallback_used`` stays false."""
@@ -1048,7 +998,6 @@ async def test_a_single_entry_list_is_the_primary_only_with_no_fallback() -> Non
     assert trail(info.value.attempts) == [("gemini", OUTCOME.RATE_LIMITED, False)]
 
 
-@SPEC
 async def test_fallback_used_is_true_when_the_answering_provider_is_not_the_first() -> None:
     """Tech §10 requirements: the router reports ``fallback_used``, provider, model, attempts."""
     p, q = Probe("gemini", [timeout()]), Probe("groq", [GOOD])
@@ -1058,7 +1007,6 @@ async def test_fallback_used_is_true_when_the_answering_provider_is_not_the_firs
     assert [a.outcome for a in out.attempts] == [OUTCOME.TIMEOUT, OUTCOME.SUCCESS]
 
 
-@SPEC
 async def test_fallback_used_is_also_true_when_the_first_provider_was_only_skipped() -> None:
     p, q = Probe("gemini", [limited(30.0)]), Probe("groq", [GOOD, GOOD])
     rig = Rig(p, q)
@@ -1067,7 +1015,6 @@ async def test_fallback_used_is_also_true_when_the_first_provider_was_only_skipp
     assert (out.provider, out.fallback_used) == ("groq", True)
 
 
-@SPEC
 async def test_attempts_carry_latency_usage_and_the_retry_flag() -> None:
     """The record the pipeline accounts from: usage also of a bad output that billed tokens."""
     clock = FakeClock()
@@ -1089,7 +1036,6 @@ async def test_attempts_carry_latency_usage_and_the_retry_flag() -> None:
     assert p.calls[1].user == feedback("question", "write less")
 
 
-@SPEC
 async def test_a_rejected_reply_still_bills_and_keeps_the_cache_flag() -> None:
     """A reply ``validate`` rejects carries its own usage and ``cache_hit`` (the eval cache)."""
     usage = Usage(input_tokens=11, output_tokens=7, thinking_tokens=2)
@@ -1100,7 +1046,6 @@ async def test_a_rejected_reply_still_bills_and_keeps_the_cache_flag() -> None:
     assert (first.outcome, first.usage, first.cache_hit) == (OUTCOME.BAD_OUTPUT, usage, True)
 
 
-@SPEC
 async def test_the_router_never_sleeps_and_never_waits_out_a_retry_after(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1109,7 +1054,11 @@ async def test_the_router_never_sleeps_and_never_waits_out_a_retry_after(
     async def no_sleep(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("the router must not sleep")
 
+    def no_blocking_sleep(seconds: float) -> None:
+        raise AssertionError("the router must not block the event loop either")
+
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(time, "sleep", no_blocking_sleep)
     p, q = Probe("gemini", [limited(30.0)]), Probe("groq", [GOOD])
     rig = Rig(p, q)
     started = rig.clock.now
@@ -1124,7 +1073,6 @@ async def test_the_router_never_sleeps_and_never_waits_out_a_retry_after(
 # --- Requests the provider rejected (a 4xx other than 429) --------------------------------------
 
 
-@SPEC
 async def test_a_rejected_request_fails_over_and_never_opens_the_breaker() -> None:
     """Router docstring: our key or request, not the provider's health, so a bad key on the primary
     does not take the service down while a fallback exists."""
@@ -1143,7 +1091,6 @@ async def test_a_rejected_request_fails_over_and_never_opens_the_breaker() -> No
     assert (await rig.ask()).provider == "gemini"  # a fourth time it is still called, never skipped
 
 
-@SPEC
 async def test_a_rejected_request_is_logged_with_provider_and_status_code_only(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1156,7 +1103,6 @@ async def test_a_rejected_request_is_logged_with_provider_and_status_code_only(
     assert "SECRET-KEY-TEXT" not in str(record.__dict__) + caplog.text
 
 
-@SPEC
 async def test_when_every_provider_rejects_the_first_rejection_propagates_unchanged() -> None:
     """Loud on purpose (a 500 in 7.04): a Retry-After would invite retries that cannot work."""
     first = ProviderRequestRejected("bad key", status_code=401)
@@ -1168,14 +1114,12 @@ async def test_when_every_provider_rejects_the_first_rejection_propagates_unchan
     assert [rig.status(name).state for name in ("gemini", "groq")] == [BreakerState.CLOSED] * 2
 
 
-@SPEC
 async def test_a_rejected_request_next_to_a_transient_failure_is_unavailable() -> None:
     rejected = ProviderRequestRejected("bad key", status_code=401)
     with pytest.raises(AllProvidersUnavailable):
         await Rig(Probe("gemini", [rejected]), Probe("groq", [timeout()])).ask()
 
 
-@SPEC
 async def test_a_rejected_trial_leaves_the_breaker_half_open_with_the_trial_free() -> None:
     rejected = ProviderRequestRejected("bad key", status_code=401)
     p, q = Probe("gemini", [limited(30.0), rejected]), Probe("groq", [GOOD, GOOD])
@@ -1190,7 +1134,6 @@ class OtherProviderError(ProviderError):
     """A provider error the router has no rule for."""
 
 
-@SPEC
 async def test_a_provider_error_the_router_has_no_rule_for_propagates() -> None:
     """Only the five typed errors are routed; a new kind stays loud, not a quiet fallback."""
     odd = OtherProviderError("a new kind of failure")
@@ -1201,7 +1144,6 @@ async def test_a_provider_error_the_router_has_no_rule_for_propagates() -> None:
     assert q.entries == 0
 
 
-@SPEC
 async def test_the_open_time_counts_from_when_the_failure_is_seen() -> None:
     """The call took 5 s before the 429 arrived; the 30 s start there, not when the call began."""
     clock = FakeClock()
@@ -1214,7 +1156,6 @@ async def test_the_open_time_counts_from_when_the_failure_is_seen() -> None:
 # --- Hooks and errors that must not be mistaken for a provider failure ---------------------------
 
 
-@SPEC
 async def test_the_hooks_run_in_the_documented_order() -> None:
     """before_call, the call, validate (only when there was a reply), on_attempt; per call."""
     log: list[str] = []
@@ -1242,7 +1183,6 @@ async def test_the_hooks_run_in_the_documented_order() -> None:
     ]
 
 
-@SPEC
 async def test_before_call_runs_for_every_call_but_not_for_a_skip() -> None:
     """The budget reserve is per call: retries and fallbacks included (5.05), skips excluded."""
     reserved = 0
@@ -1271,7 +1211,6 @@ class BugError(Exception):
     is one, so ``pytest.raises(RuntimeError)`` would catch the stub's and fake a pass."""
 
 
-@SPEC
 async def test_a_before_call_error_propagates_and_is_not_a_provider_failure() -> None:
     """The reserve refuses the fallback's call: the error passes through as it is, the earlier
     call's attempt was already reported (its usage is not lost), and no provider is blamed."""
@@ -1290,7 +1229,6 @@ async def test_a_before_call_error_propagates_and_is_not_a_provider_failure() ->
     assert rig.status("groq").state is BreakerState.CLOSED
 
 
-@SPEC
 async def test_a_before_call_error_makes_no_call_and_opens_nothing() -> None:
     async def before_call() -> None:
         raise BudgetGoneError
@@ -1304,7 +1242,6 @@ async def test_a_before_call_error_makes_no_call_and_opens_nothing() -> None:
     assert rig.status("gemini").state is BreakerState.CLOSED
 
 
-@SPEC
 async def test_a_before_call_error_releases_a_held_trial() -> None:
     async def before_call() -> None:
         raise BudgetGoneError
@@ -1319,7 +1256,6 @@ async def test_a_before_call_error_releases_a_held_trial() -> None:
     assert (await rig.ask()).provider == "gemini"
 
 
-@SPEC
 async def test_a_validate_error_propagates_and_is_never_counted_against_the_provider() -> None:
     """Four hook errors on a threshold of three: the breaker must still be closed."""
 
@@ -1334,7 +1270,6 @@ async def test_a_validate_error_propagates_and_is_never_counted_against_the_prov
     assert (len(p.calls), rig.status("gemini").state) == (4, BreakerState.CLOSED)
 
 
-@SPEC
 async def test_the_breaker_hears_of_the_reply_before_validate_runs() -> None:
     """A hook error after a trial's reply must not leave the trial claimed: the reply closed it."""
 
@@ -1350,7 +1285,6 @@ async def test_the_breaker_hears_of_the_reply_before_validate_runs() -> None:
     assert rig.status("gemini") == BreakerStatus(BreakerState.CLOSED, None, False)
 
 
-@SPEC
 async def test_an_on_attempt_error_propagates_and_no_further_provider_is_tried() -> None:
     async def on_attempt(attempt: Attempt) -> None:
         raise BugError("could not record the usage")
@@ -1361,7 +1295,6 @@ async def test_an_on_attempt_error_propagates_and_no_further_provider_is_tried()
     assert q.entries == 0
 
 
-@SPEC
 async def test_an_unexpected_exception_propagates_and_releases_the_trial() -> None:
     """Anything that is not one of the five typed provider errors is a bug and must stay loud."""
     p, q = Probe("gemini", [limited(30.0), GOOD]), Probe("groq", [GOOD])
@@ -1375,7 +1308,6 @@ async def test_an_unexpected_exception_propagates_and_releases_the_trial() -> No
     assert (await rig.ask()).provider == "gemini"  # the next request takes the trial
 
 
-@SPEC
 async def test_a_cancelled_trial_is_released() -> None:
     """The request deadline cancels a call in flight: the trial must not stay claimed forever."""
     p, q = Probe("gemini", [limited(30.0), GOOD]), Probe("groq", [GOOD])
@@ -1398,7 +1330,6 @@ async def test_a_cancelled_trial_is_released() -> None:
 # --- The deadline ---------------------------------------------------------------------------------
 
 
-@SPEC
 async def test_the_router_does_not_start_an_attempt_the_deadline_cannot_hold(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1425,7 +1356,6 @@ async def test_the_router_does_not_start_an_attempt_the_deadline_cannot_hold(
     assert (skip.__dict__["provider"], skip.__dict__["reason"]) == ("groq", "deadline")
 
 
-@SPEC
 async def test_a_timeout_followed_by_a_fallback_still_fits_the_deadline() -> None:
     """After a 12 s timeout 13 s are left, enough for a 12 s attempt, which is not shortened."""
     clock = FakeClock()
@@ -1437,7 +1367,6 @@ async def test_a_timeout_followed_by_a_fallback_still_fits_the_deadline() -> Non
     assert q.calls[0].timeout_s == 12.0
 
 
-@SPEC
 async def test_the_retry_is_gated_by_the_deadline_too() -> None:
     clock = FakeClock()
     p = Probe("gemini", [BAD, GOOD], clock=clock, takes_s=20.0)
@@ -1451,7 +1380,6 @@ async def test_the_retry_is_gated_by_the_deadline_too() -> None:
     ]
 
 
-@SPEC
 async def test_without_a_deadline_slow_attempts_are_never_refused() -> None:
     """``time_left`` is optional (eval mode, the CLI): no deadline, no refusal."""
     clock = FakeClock()
@@ -1461,7 +1389,6 @@ async def test_without_a_deadline_slow_attempts_are_never_refused() -> None:
     assert (out.provider, out.fallback_used) == ("groq", True)
 
 
-@SPEC
 async def test_a_deadline_refusal_does_not_consume_the_half_open_trial() -> None:
     p, q = Probe("gemini", [limited(30.0), GOOD]), Probe("groq", [GOOD])
     rig = Rig(p, q)
@@ -1478,7 +1405,6 @@ async def test_a_deadline_refusal_does_not_consume_the_half_open_trial() -> None
 # --- Logging --------------------------------------------------------------------------------------
 
 
-@SPEC
 async def test_every_open_and_every_skip_is_logged_without_the_question(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1503,7 +1429,6 @@ async def test_every_open_and_every_skip_is_logged_without_the_question(
     assert all("SECRET-QUESTION" not in str(r.__dict__) for r in caplog.records)
 
 
-@SPEC
 async def test_opening_after_repeated_failures_is_logged_with_its_reason(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1520,7 +1445,6 @@ async def test_opening_after_repeated_failures_is_logged_with_its_reason(
     assert opened["open_s"] == pytest.approx(30.0)
 
 
-@SPEC
 async def test_a_quota_open_is_logged_with_the_derived_reset(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -1534,20 +1458,17 @@ async def test_a_quota_open_is_logged_with_the_derived_reset(
 # --- Construction ---------------------------------------------------------------------------------
 
 
-@SPEC
 def test_a_router_needs_at_least_one_provider() -> None:
     with pytest.raises(RouterConfigError):
         ProviderRouter([], config=CONFIG)
 
 
-@SPEC
 def test_provider_names_must_be_unique() -> None:
     """Breakers are keyed by name, so two providers of one name would share (and corrupt) one."""
     with pytest.raises(RouterConfigError, match="gemini"):
         ProviderRouter([Probe("gemini"), Probe("gemini")], config=CONFIG)
 
 
-@SPEC
 def test_the_status_of_an_unknown_provider_is_a_typed_error() -> None:
     rig = Rig(Probe("gemini"))
     with pytest.raises(UnknownProviderError):

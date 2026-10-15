@@ -710,7 +710,13 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   (7) *Time zones.* The midnight-Pacific reset needs `zoneinfo`. `tzdata` is locked for Windows only (a psycopg
   dependency, `uv.lock`); Linux uses the system database, which Vercel's Python runtime may or may not have
   (unverified). If the zone cannot be loaded, the reset counts as not derivable (900 s) and the router logs a warning;
-  a new dependency would be the Author's call.
+  a new dependency would be the Author's call. (8) *Monotonic time on an idle instance (7.03 review).* The breaker's
+  durations count on the monotonic clock (`RouterClock.monotonic`). How that clock behaves while a Vercel instance is
+  frozen is not documented (unverified): if it stood still, a daily-quota open (Gemini: until midnight Pacific, up to
+  about 24 h) could outlast the real reset on that instance until it is recycled. The direction is fail-safe (the
+  provider is skipped longer, never hammered, and the other one answers). A cheap mitigation is not done: for a
+  `QUOTA_RESET` open, also keep the wall-clock reset instant and treat the breaker as elapsed once the wall clock
+  passes it. It would change `CircuitBreaker.open_for`, which would take that instant as a parameter.
 - `strip_urls` (Tech §9.6) is a regex, not a Markdown parser: a URL between escaped backticks, or after a "fence" with
   four spaces of indentation, or a bare e-mail address (GFM makes it a `mailto:` link) passes it. Reference
   definitions and `<scheme:…>` autolinks are removed since R.17. The guarantee is planned for the frontend (Phase 5):
