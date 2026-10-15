@@ -5,7 +5,8 @@ request skips Gemini while its circuit breaker is open, and after the open time 
 API is called, no key is needed, nothing sleeps, and the same code runs that serves `POST /v1/ask`.
 
 An agent wrote this file and the command and ran them once on a local database on 2026-10-15 (the output below is
-that run). The command is a **dev tool**: it refuses `APP_ENV=prod` and `APP_ENV=eval`.
+that run). The command is a **dev tool**: it refuses `APP_ENV=prod` and `APP_ENV=eval`, and it refuses any database
+that is not local (see [What it needs](#what-it-needs)): it writes rows, and it must never write to Neon.
 
 **How the steps are marked.** Every command is for **PowerShell**, in the folder the step names (the repository root
 or `backend/`), and the Git Bash form follows it where it differs. Nothing here needs a value from you: no `YOU TYPE`
@@ -30,6 +31,9 @@ with `provider` and `fallback_used`). It ends with `PASS` (exit 0) or `FAIL` (ex
 
 ## What it needs
 
+- A **local** database: `DATABASE_URL` must name `localhost`, `127.0.0.1` or `::1` (the default of `Settings`, the compose container on port 5433, does). The
+  demo checks the host **before it opens any connection** and refuses anything else, whatever `APP_ENV` is, so a shell
+  whose `DATABASE_URL` points at Neon is refused. It reads only `DATABASE_URL`; `DATABASE_URL_DIRECT` is not used.
 - The local database up and migrated, with an **active index** (Phase 1: `grounded ingest --activate`). Check it with
   `uv run grounded index list`. The demo embeds the question with a fake embedder under your `EMBEDDING_MODEL`, so it
   makes no embedding call either; the full-text half of retrieval still finds chunks, and the dense half ranks by a
@@ -123,6 +127,7 @@ docker exec grounded-db-1 psql -U grounded -d grounded -c "delete from request_l
 | Output | Cause | Fix |
 |---|---|---|
 | `demo-fallback is for dev and test: refused with APP_ENV=prod` (or `eval`) | the environment says so | use a dev shell; this command must not run against production |
+| `demo-fallback writes request_logs and answer_cache rows, so it runs only against a local database: DATABASE_URL points at host '...'` | `DATABASE_URL` is not `localhost`, `127.0.0.1` or `::1` (a Neon URL in a dev shell, a remote host, an IP, a Unix socket), or names no host, or cannot be parsed | point `DATABASE_URL` at the local container (`postgresql://grounded:grounded@localhost:5433/grounded`); the message names the host only, never the URL or the password. Nothing was written |
 | `set GEMINI_MODEL and GROQ_MODEL ...` | a model name is missing | set the pinned IDs from `.env.example`; no key is needed |
 | `The demo's model names need a verified price` | a model ID is not in `backend/pricing.toml` | use the pinned IDs of PRD D46 and D48 |
 | `Database error: ...` | the local database is not running | step 1 |

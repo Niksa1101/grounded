@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 from typer.testing import CliRunner
 
 import grounded.cli
+import grounded.fallback_demo
 import grounded.runtime
 from grounded.cli import app
 from grounded.settings import Settings
@@ -232,3 +233,60 @@ def test_without_an_active_index_it_fails_and_says_what_to_do(
     assert result.exit_code == 1
     assert "FAIL:" in result.stdout
     assert "grounded ingest --activate" in result.stdout
+
+
+NEON_URL = "postgresql://app:hunter2pw@ep-cool-darkness-123456.us-east-2.aws.neon.tech/neondb"
+
+
+def test_a_database_that_is_not_local_is_refused_before_anything_is_opened(
+    database: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A dev shell whose DATABASE_URL points at Neon: the demo must not write to it. The app is
+    # never built (so no pool is made and no connection is tried), and the message names the host
+    # and nothing of the credentials.
+    use_settings(monkeypatch, NEON_URL, tmp_path)
+
+    def never(*args: object, **kwargs: object) -> None:
+        raise AssertionError("the demo built the app although the database is not local")
+
+    monkeypatch.setattr(grounded.fallback_demo, "create_app", never)
+    monkeypatch.setattr(grounded.runtime, "open_runtime", never)
+
+    result = runner.invoke(app, ["demo-fallback"])
+
+    assert result.exit_code == 1
+    assert "ep-cool-darkness-123456.us-east-2.aws.neon.tech" in result.stderr
+    assert "only against a local database" in result.stderr
+    for text in (result.stderr, result.stdout):
+        assert "hunter2pw" not in text
+        assert NEON_URL not in text
+        assert "neondb" not in text  # the database name is part of the URL, not of the message
+    assert rows(database) == []  # and the local test database got nothing either
+
+
+def test_127_0_0_1_is_local_and_the_unused_owner_url_is_not_looked_at(
+    database: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The demo opens only DATABASE_URL. A remote DATABASE_URL_DIRECT (the owner URL of migrate and
+    # ingest) is never used by it, so it does not stop the demo.
+    url = database.replace("localhost", "127.0.0.1")
+    assert "127.0.0.1" in url
+    use_settings(monkeypatch, url, tmp_path, database_url_direct=NEON_URL)
+
+    result = runner.invoke(app, ["demo-fallback"])
+
+    assert result.exit_code == 0, result.output
+    assert len(rows(database)) == 3
+
+
+def test_an_unparsable_database_url_is_refused_without_echoing_it(
+    database: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    use_settings(monkeypatch, "not a url hunter2pw", tmp_path)
+
+    result = runner.invoke(app, ["demo-fallback"])
+
+    assert result.exit_code == 1
+    assert "cannot be parsed" in result.stderr
+    assert "hunter2pw" not in result.stderr
+    assert rows(database) == []

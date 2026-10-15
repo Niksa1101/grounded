@@ -20,11 +20,19 @@ quickstart) and writes what any request writes: three ``request_logs`` rows and 
 third request in the answer cache. Each run asks questions of its own (a nonce in the text), so a
 re-run is not answered from the cache.
 
-**Dev only.** ``APP_ENV=prod`` is refused (a production database must not get demo rows) and so is
-``eval`` (eval mode runs one provider). The demo takes the names of its two fakes from
-``GEMINI_MODEL`` and ``GROQ_MODEL`` (pinned IDs that ``pricing.toml`` prices, so the shadow cost is
-a real calculation); it needs no key. The copy of the settings it runs on has rerank off, no budget,
-no client IP hash (so no rate limit) and direct API access, none of which touches your ``.env``.
+**Dev only, local database only.** ``APP_ENV=prod`` is refused (a production database must not
+get demo rows) and so is ``eval`` (eval mode runs one provider). Whatever ``APP_ENV`` says, the
+demo also refuses unless the database it would open is on ``localhost``, ``127.0.0.1`` or ``::1``.
+That is ``DATABASE_URL``, the one ``create_app`` uses (the owner URL ``DATABASE_URL_DIRECT`` is
+never touched): a Neon URL in a ``dev`` shell must not receive ``request_logs`` and
+``answer_cache`` rows (AGENTS.md §5). ``check_local_database`` decides from the parsed host,
+before ``create_app`` and so before any connection, and its error names the host and never the
+URL or the password.
+
+The demo takes the names of its two fakes from ``GEMINI_MODEL`` and ``GROQ_MODEL`` (pinned IDs
+that ``pricing.toml`` prices, so the shadow cost is a real calculation); it needs no key. The copy
+of the settings it runs on has rerank off, no budget, no client IP hash (so no rate limit) and
+direct API access, none of which touches your ``.env``.
 
 It prints one line per request and the router's and the request's own log lines (the very JSON
 lines the service writes: ``breaker opened``, ``provider attempt failed``, ``provider skipped``,
@@ -40,6 +48,8 @@ from typing import Any, cast
 from uuid import uuid4
 
 import httpx
+import psycopg
+from psycopg.conninfo import conninfo_to_dict
 from psycopg_pool import AsyncConnectionPool
 
 from grounded.generation.providers.base import Usage
@@ -57,6 +67,10 @@ from grounded.settings import Settings
 RETRY_AFTER_S = 30.0
 GAP_AFTER_FIRST_S = 5.0
 GAP_AFTER_SECOND_S = 30.0
+
+# The only database hosts the demo will write to (``check_local_database``).
+_LOCAL_HOST_NAMES = ("localhost", "127.0.0.1", "::1")
+LOCAL_HOSTS = frozenset(_LOCAL_HOST_NAMES)
 
 # What the demo prints of the logs: the router's lines and the request's summary.
 _ROUTER_LOGGER = "grounded.generation.router"
@@ -116,13 +130,61 @@ class _Outcome:
     gemini_calls: int = 0  # how many calls the fake Gemini had received when the response came
 
 
+def check_local_database(conninfo: str) -> None:
+    """Raise ``DemoRefusedError`` unless every host of ``conninfo`` is local.
+
+    Parsed with libpq's own rules (``conninfo_to_dict``: the ``postgresql://user:pass@host:port/db``
+    form and the ``key=value`` form). Both ``host`` and ``hostaddr`` count (libpq connects to
+    ``hostaddr`` when it is given), a comma-separated list needs every entry to be local, an empty
+    entry or no host at all (libpq would then take ``PGHOST`` or a Unix socket) is refused, and so
+    is anything that does not parse: the demo writes rows, so "cannot tell" means no. A host is
+    compared case-insensitively with ``LOCAL_HOSTS``. The message names the problem and the
+    offending **host only**: never the URL, the user or the password, and never libpq's own parse
+    error (it quotes pieces of the string).
+    """
+    try:
+        params = conninfo_to_dict(conninfo)
+    except (psycopg.Error, ValueError):
+        raise DemoRefusedError(
+            "demo-fallback writes request_logs and answer_cache rows, so it runs only against a "
+            "local database, and DATABASE_URL cannot be parsed to tell where it points "
+            f"(allowed hosts: {_allowed()})"
+        ) from None
+    found = False
+    for key in ("hostaddr", "host"):
+        value = params.get(key)
+        if value is None:
+            continue
+        found = True
+        for host in str(value).split(","):
+            host = host.strip()
+            if host.lower() not in LOCAL_HOSTS:
+                raise DemoRefusedError(
+                    "demo-fallback writes request_logs and answer_cache rows, so it runs only "
+                    f"against a local database: DATABASE_URL points at {key} {host!r} "
+                    f"(allowed hosts: {_allowed()})"
+                )
+    if not found:
+        raise DemoRefusedError(
+            "demo-fallback writes request_logs and answer_cache rows, so it runs only against a "
+            "local database, and DATABASE_URL names no host "
+            f"(allowed hosts: {_allowed()})"
+        )
+
+
+def _allowed() -> str:
+    return ", ".join(_LOCAL_HOST_NAMES)
+
+
 def demo_settings(settings: Settings) -> Settings:
-    """The settings the demo runs on, or ``DemoRefusedError``. A copy: ``.env`` is not touched."""
+    """The settings the demo runs on, or ``DemoRefusedError`` (prod, eval, a database that is not
+    local, a missing model name). A copy: ``.env`` is not touched."""
     if settings.app_env in ("prod", "eval"):
         raise DemoRefusedError(
             f"demo-fallback is for dev and test: refused with APP_ENV={settings.app_env} "
             "(it writes request_logs rows, and eval mode runs one provider)"
         )
+    check_local_database(settings.database_url.get_secret_value())
     missing = [
         name
         for name, value in (
