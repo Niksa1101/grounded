@@ -290,8 +290,11 @@ async def test_eval_mode_has_no_deadline(
 
 
 async def test_a_request_inside_the_deadline_is_unaffected(db: str) -> None:
+    # The router starts a call only if the time left holds its whole timeout (Tech §10): a 5 s
+    # deadline cannot hold the default 12 s call timeout, so this request names a 2 s one.
     async with app_client(
-        make_settings(database_url=db, request_deadline_s=5.0), provider=FakeLLMProvider([good()])
+        make_settings(database_url=db, request_deadline_s=5.0, llm_timeout_s=2.0),
+        provider=FakeLLMProvider([good()]),
     ) as client:
         response = await ask(client)
     assert response.status_code == 200

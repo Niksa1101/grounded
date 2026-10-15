@@ -311,7 +311,9 @@ def ask(
         raise _fail(f"Invalid question: {exc.errors()[0]['msg']}") from exc
 
     async def run() -> str:
-        async with open_runtime(settings, provider=StubLLMProvider() if fake else None) as runtime:
+        async with open_runtime(
+            settings, provider=StubLLMProvider() if fake else None, primary_only=True
+        ) as runtime:
             response = await runtime.pipeline.ask(request.question, uuid4(), mode=mode)
         return json.dumps(response.model_dump(mode="json"), indent=2)  # ASCII-escaped: any console
 
@@ -362,7 +364,9 @@ def _ask_golden(
         typer.echo(f"{result.id} {result.status if result.outcome == 'ok' else 'FAILED'}")
 
     async def run() -> str | None:
-        async with open_runtime(settings, provider=StubLLMProvider() if fake else None) as runtime:
+        async with open_runtime(
+            settings, provider=StubLLMProvider() if fake else None, primary_only=True
+        ) as runtime:
 
             async def ask_one(item: GoldenItem, trace: RequestTrace) -> AskResponse:
                 return await runtime.pipeline.ask(

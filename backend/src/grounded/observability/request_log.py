@@ -95,8 +95,13 @@ class RequestTrace:
     question_hash: str | None = None  # set directly when the question is not stored (bad_request)
     source: Source | None = None  # from the caller (web or api); None: the logger's own default
     ip_hash: str | None = None  # HMAC of the client IP; None when it cannot be computed
+    # The provider and model that answered. A request that failed has the last one that reported
+    # back (a failed call included), or the primary until one has (Tech §14, "provider and model").
     provider: str | None = None
     model: str | None = None
+    # A provider other than the first entry of GENERATOR_PROVIDERS was called (7.04, DB.md §4): true
+    # for an answer that fell back and for a request that failed after trying a fallback.
+    fallback_used: bool = False
     prompt_version: str | None = None
     index_version_id: int | None = None  # None in no_rag mode: there is no index
     retrieval_config_hash: str | None = None
@@ -107,7 +112,16 @@ class RequestTrace:
     embedding_tokens: int = 0
     input_tokens: int | None = None  # None until a generation attempt reported usage
     output_tokens: int | None = None
+    # The same tokens split by the provider and model that billed them: a fallback answer costs the
+    # failed Gemini attempt at Gemini's price and the Groq one at Groq's (``shadow_cost``).
+    generation_usage: dict[tuple[str | None, str | None], tuple[int, int]] = field(
+        default_factory=lambda: dict[tuple[str | None, str | None], tuple[int, int]]()
+    )
+    # Retry attempts across providers (the router's ``Attempt.is_retry``), not retries of one.
     validation_retries: int = 0
+    # The request deadline this request runs under, or None (eval mode, the CLI: no deadline). The
+    # route sets it; the pipeline reads ``time_left_s`` for the router's deadline rule (Tech §10).
+    deadline_s: float | None = None
     cache_hit: bool = False  # answered from the answer cache (3.13): no embedding, no LLM call
     # Generation attempts the eval LLM cache served (4.03). No column: only eval runs have any, and
     # they read it from the trace to leave a cached latency out of the latency statistics.
@@ -136,23 +150,50 @@ class RequestTrace:
     latency_total_ms: int | None = None  # frozen when the response meta is built
     written: bool = field(default=False, repr=False)
 
-    def add_usage(self, usage: Usage) -> None:
+    def add_usage(
+        self, usage: Usage, *, provider: str | None = None, model: str | None = None
+    ) -> None:
+        """Count one generation attempt's tokens. ``provider`` and ``model`` name who billed them
+        (the router's ``Attempt``); without them the trace's current provider and model stand in,
+        which is right whenever only one provider can have answered."""
         self.input_tokens = (self.input_tokens or 0) + usage.input_tokens
         self.output_tokens = (self.output_tokens or 0) + usage.output_tokens
+        key = (provider or self.provider, model or self.model)
+        spent_in, spent_out = self.generation_usage.get(key, (0, 0))
+        self.generation_usage[key] = (
+            spent_in + usage.input_tokens,
+            spent_out + usage.output_tokens,
+        )
+
+    def time_left_s(self) -> float | None:
+        """Seconds until the request deadline, or ``None`` when there is none. On the trace's own
+        clock (the timer starts with the request, a moment before the deadline scope), so it can
+        only be a hair short, never long."""
+        if self.deadline_s is None:
+            return None
+        return self.deadline_s - self.timer.total_ms() / 1000
 
     def shadow_cost(self, pricing: Pricing) -> Decimal:
         """What the work done so far costs: a request that failed halfway is charged for the part
-        that ran (the embedding, and the generation attempts that reported usage)."""
-        return pricing.shadow_cost(
-            provider=self.provider,
-            model=self.model if self.input_tokens is not None else None,
-            input_tokens=self.input_tokens or 0,
-            output_tokens=self.output_tokens or 0,
+        that ran (the embedding, the rerank calls, and every generation attempt that reported
+        usage, each at the price of the model that billed it)."""
+        total = pricing.shadow_cost(
             embedding_model=self.embedding_model,
             embedding_tokens=self.embedding_tokens,
             rerank_model=self.rerank_model if self.rerank_calls else None,
             rerank_calls=self.rerank_calls,
         )
+        # Each part is rounded to the 8 places of the column; the listed per-token prices have at
+        # most 7 decimals, so no part is ever rounded and the sum equals one combined calculation.
+        for (provider, model), (input_tokens, output_tokens) in self.generation_usage.items():
+            if model is not None:
+                total += pricing.shadow_cost(
+                    provider=provider,
+                    model=model,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                )
+        return total
 
     def total_ms(self) -> int:
         if self.latency_total_ms is None:
@@ -239,6 +280,8 @@ class RequestLogger:
                 "error_code": error_code,
                 "latency_total_ms": total_ms,
                 "validation_retries": trace.validation_retries,
+                "provider": trace.provider,
+                "fallback_used": trace.fallback_used,
                 "invalid_citation_count": trace.invalid_citation_count,
                 "dropped_claim_count": trace.dropped_claim_count,
                 "removed_url_count": trace.removed_url_count,
@@ -269,7 +312,7 @@ class RequestLogger:
             "cache_hit": trace.cache_hit,
             "provider": trace.provider,
             "model": trace.model,
-            "fallback_used": False,  # Phase 7
+            "fallback_used": trace.fallback_used,
             "validation_retries": trace.validation_retries,
             "rerank_used": trace.rerank_used,
             "rerank_error": trace.rerank_error,
