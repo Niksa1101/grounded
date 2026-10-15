@@ -31,6 +31,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import time
 from collections import deque
 from collections.abc import Sequence
 from dataclasses import FrozenInstanceError, replace
@@ -1053,7 +1054,11 @@ async def test_the_router_never_sleeps_and_never_waits_out_a_retry_after(
     async def no_sleep(*args: Any, **kwargs: Any) -> None:
         raise AssertionError("the router must not sleep")
 
+    def no_blocking_sleep(seconds: float) -> None:
+        raise AssertionError("the router must not block the event loop either")
+
     monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    monkeypatch.setattr(time, "sleep", no_blocking_sleep)
     p, q = Probe("gemini", [limited(30.0)]), Probe("groq", [GOOD])
     rig = Rig(p, q)
     started = rig.clock.now

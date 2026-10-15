@@ -2,11 +2,13 @@
 ``test_router.py`` leave open. Nothing here changes or relaxes a spec test; the helpers (``Probe``,
 ``Rig``, ``trail``...) are the spec file's.
 
-They cover three things the review of the implementation looks at: a half-open trial is given back
-on every exit path (a cancellation at the other ``await``s, a hook that raises), the time checks sit
-exactly on their boundaries (``>`` against ``>=``), and the daylight-saving arithmetic does not
-depend on the zone ``now`` arrives in. The last test throws seeded random traffic (random outcomes,
-cancellations, a clock that jumps) at two providers and audits every trial the breakers hand out.
+They cover what the review of the implementation looks at: a half-open trial is given back on every
+exit path (a cancellation at the other ``await``s, a hook that raises), the time checks sit exactly
+on their boundaries (``>`` against ``>=``), the daylight-saving arithmetic does not depend on the
+zone ``now`` arrives in, the order of what is raised and what is logged for a call that ran out of
+road (a refusal, a skip, a straggler), and the documented limit of the straggler rule. The last test
+throws seeded random traffic (random outcomes, cancellations, hooks that raise, a clock that jumps)
+at two providers, audits every trial the breakers hand out and checks that every breaker recovers.
 """
 
 from __future__ import annotations
@@ -24,8 +26,10 @@ from pydantic import BaseModel
 
 from grounded.generation import router as router_module
 from grounded.generation.providers.base import GenerationResult, Usage
+from grounded.generation.providers.fake import FakeLLMProvider
 from grounded.generation.router import (
     Admission,
+    AllProvidersUnavailable,
     Attempt,
     AttemptOutcome,
     BreakerConfig,
@@ -35,7 +39,11 @@ from grounded.generation.router import (
     RouterDeadlineError,
     quota_reset_s,
 )
-from grounded.infra.provider_errors import ProviderBadOutput, ProviderError
+from grounded.infra.provider_errors import (
+    ProviderBadOutput,
+    ProviderError,
+    ProviderRequestRejected,
+)
 from tests.unit.test_router import (
     BAD,
     CONFIG,
@@ -45,6 +53,7 @@ from tests.unit.test_router import (
     Rig,
     down,
     limited,
+    opened_logs,
     timeout,
     trail,
 )
@@ -162,6 +171,173 @@ async def test_two_routers_share_no_breaker_state() -> None:
     assert first.status("gemini").state is BreakerState.OPEN
     assert second.status("gemini").state is BreakerState.CLOSED
     assert (await second.ask()).provider == "gemini"
+
+
+class SequencedProbe(Probe):
+    """A provider whose calls each wait at their own gate, so a test decides in which order
+    concurrent calls finish. A call takes its script step when it finishes, not when it starts."""
+
+    def __init__(self, name: str, script: Any = ()) -> None:
+        super().__init__(name, script)
+        self._gates: dict[int, asyncio.Event] = {}
+        self._arrived: dict[int, asyncio.Event] = {}
+
+    def gate_for(self, index: int) -> asyncio.Event:
+        return self._gates.setdefault(index, asyncio.Event())
+
+    def arrival_of(self, index: int) -> asyncio.Event:
+        return self._arrived.setdefault(index, asyncio.Event())
+
+    async def generate[T: BaseModel](
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: type[T],
+        temperature: float,
+        max_output_tokens: int,
+        timeout_s: float,
+    ) -> GenerationResult[T]:
+        index = self.entries
+        self.entries += 1
+        self.arrival_of(index).set()
+        await self.gate_for(index).wait()
+        return await FakeLLMProvider.generate(
+            self,
+            system=system,
+            user=user,
+            schema=schema,
+            temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            timeout_s=timeout_s,
+        )
+
+
+async def test_a_validate_error_loses_that_calls_report_but_not_the_trial() -> None:
+    """``validate`` must not raise (``generate`` says so). If it does anyway: the error propagates
+    unchanged, ``on_attempt`` has not run for that call (its usage is not reported), and the trial
+    is not lost, because the breaker heard the reply first and the reply closed it."""
+    rig, p, _ = await half_open_rig()
+    reported = len(rig.seen)
+
+    def validate(result: GenerationResult[Any]) -> str | None:
+        raise BugError("bug in the citation checks")
+
+    with pytest.raises(BugError, match="citation checks"):
+        await rig.ask(validate=validate)
+    assert p.entries == 2  # the trial was a real call...
+    assert len(rig.seen) == reported  # ...whose attempt was never reported
+    assert rig.status("gemini") == BreakerStatus(BreakerState.CLOSED, None, False)
+
+
+# --- A request that runs out of road: the order of what is raised and logged ---------------
+
+
+async def test_a_refused_attempt_never_calls_before_call() -> None:
+    """The deadline gate comes first: a refused call must not spend a unit of budget."""
+    reserved = 0
+
+    async def before_call() -> None:
+        nonlocal reserved
+        reserved += 1
+
+    p = Probe("gemini", [GOOD])
+    with pytest.raises(RouterDeadlineError):
+        await Rig(p).ask(before_call=before_call, time_left=lambda: 1.0)
+    assert (reserved, p.entries) == (0, 0)
+
+
+async def test_a_refused_retry_has_reserved_nothing_for_itself() -> None:
+    reserved = 0
+    left = iter([25.0, 1.0])  # enough for the first call, not for the retry
+
+    async def before_call() -> None:
+        nonlocal reserved
+        reserved += 1
+
+    p = Probe("gemini", [BAD, GOOD])
+    with pytest.raises(RouterDeadlineError):
+        await Rig(p).ask(before_call=before_call, time_left=lambda: next(left))
+    assert (reserved, len(p.calls)) == (1, 1)
+
+
+async def test_with_every_breaker_open_the_deadline_is_never_consulted() -> None:
+    """Only an entry whose breaker admits a call is looked at by the gate, so with nothing left
+    to call the answer is "unavailable", not "out of time", whatever ``time_left`` says."""
+    rig = Rig(Probe("gemini", [limited(60.0)]), Probe("groq", [limited(60.0)]))
+    with pytest.raises(AllProvidersUnavailable):
+        await rig.ask()  # both breakers open
+    reads = 0
+
+    def time_left() -> float:
+        nonlocal reads
+        reads += 1
+        return 0.0
+
+    with pytest.raises(AllProvidersUnavailable) as info:
+        await rig.ask(time_left=time_left)
+    assert reads == 0
+    assert trail(info.value.attempts) == [
+        ("gemini", OUTCOME.SKIPPED_OPEN, False),
+        ("groq", OUTCOME.SKIPPED_OPEN, False),
+    ]
+
+
+async def test_when_entries_end_in_different_bad_outputs_the_last_one_is_raised() -> None:
+    reasons = iter(["first: call", "first: retry", "second: call", "second: retry"])
+    with pytest.raises(ProviderBadOutput) as info:
+        await Rig(Probe("gemini", [GOOD, GOOD]), Probe("groq", [GOOD, GOOD])).ask(
+            validate=lambda result: next(reasons)
+        )
+    assert info.value.validation_error == "second: retry"
+
+
+async def test_a_stragglers_429_is_not_logged_as_a_breaker_open(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Two calls are in flight while the breaker is closed; the first one's 429 opens it. The
+    second one's 429 arrives later: it must neither be logged as an open nor re-time the breaker."""
+    p, q = SequencedProbe("gemini", [limited(30.0), limited(30.0)]), Probe("groq", [GOOD, GOOD])
+    rig = Rig(p, q)
+    first, second = (asyncio.create_task(rig.ask()) for _ in range(2))
+    await p.arrival_of(0).wait()
+    await p.arrival_of(1).wait()
+    p.gate_for(0).set()
+    await first
+    rig.clock.advance(10.0)
+    p.gate_for(1).set()
+    await second
+    assert len(opened_logs(caplog)) == 1
+    assert rig.status("gemini").remaining_s == pytest.approx(20.0)  # not re-timed to 30 s
+
+
+async def test_the_late_failures_of_calls_started_before_an_opening_still_count() -> None:
+    """The documented limit of the straggler rule (Tech §10): a call admitted while the breaker
+    was closed is ignored only while the breaker is not closed. Here four calls are in flight;
+    one gets a 429 (open for 2 s), a trial then succeeds and closes the breaker, and only then do
+    the other three time out. The breaker cannot tell them from fresh calls (an ``Admission``
+    carries no epoch), so they count, reach the threshold and open it for ``failure_open_s``."""
+    p = SequencedProbe("gemini", [limited(2.0), GOOD, timeout(), timeout(), timeout()])
+    q = Probe("groq", [GOOD] * 4)
+    rig = Rig(p, q)
+    in_flight = [asyncio.create_task(rig.ask()) for _ in range(4)]
+    for index in range(4):
+        await p.arrival_of(index).wait()
+    p.gate_for(0).set()  # script step 0: the 429
+    await in_flight[0]
+    assert rig.status("gemini").remaining_s == pytest.approx(2.0)
+    rig.clock.advance(3.0)
+    trial = asyncio.create_task(rig.ask())
+    await p.arrival_of(4).wait()
+    p.gate_for(4).set()  # script step 1: the trial answers
+    assert (await trial).provider == "gemini"
+    assert rig.status("gemini") == BreakerStatus(BreakerState.CLOSED, None, False)
+    for index in (1, 2, 3):
+        p.gate_for(index).set()  # script steps 2 to 4: the three late timeouts
+    assert [out.provider for out in await asyncio.gather(*in_flight[1:])] == ["groq"] * 3
+    status = rig.status("gemini")
+    assert status.state is BreakerState.OPEN
+    assert status.remaining_s == pytest.approx(CONFIG.failure_open_s)
 
 
 # --- The boundaries --------------------------------------------------------------------------
@@ -307,7 +483,9 @@ class ChaosProvider(Probe):
             raise down()
         if roll < 0.55:
             raise ProviderBadOutput("bad", validation_error="not valid")
-        if roll < 0.60:
+        if roll < 0.58:
+            raise ProviderRequestRejected("bad key", status_code=401)
+        if roll < 0.61:
             raise BugError("bug in an adapter")
         return GenerationResult(
             parsed=schema.model_validate_json(GOOD.model_dump_json()),
@@ -323,9 +501,11 @@ class ChaosProvider(Probe):
 async def test_random_concurrent_traffic_never_loses_or_doubles_a_trial(
     seed: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """300 requests in flight over two providers, with random outcomes, hooks that raise, random
-    cancellations and a clock that jumps past the open times. Whatever happens, no breaker ever
-    holds two trials at once, resolves one twice, or still holds one when the traffic stops."""
+    """300 requests in flight over two providers, with random outcomes (rejected requests
+    included), hooks that raise (``before_call``, ``validate``, ``retry_user``, ``time_left``),
+    random cancellations and a clock that jumps past the open times. Whatever happens, no breaker
+    ever holds two trials at once, resolves one twice, or still holds one when the traffic stops,
+    and once every open time has passed every breaker admits a call again."""
     rng = random.Random(seed)
     audits: dict[str, TrialAudit] = {}
     monkeypatch.setattr(router_module, "CircuitBreaker", audited_breaker(audits))
@@ -342,10 +522,26 @@ async def test_random_concurrent_traffic_never_loses_or_doubles_a_trial(
             raise BugError("citation checks")
         return "no valid citation" if rng.random() < 0.1 else None
 
+    def retry_user(user: str, reason: str) -> str:
+        if rng.random() < 0.05:
+            raise BugError("retry wording")
+        return f"{user} ({reason})"
+
+    def time_left() -> float:
+        roll = rng.random()
+        if roll < 0.03:
+            raise BugError("deadline hook")
+        return 1.0 if roll < 0.08 else 100.0  # now and then too little for a 12 s attempt
+
     async def one_request() -> None:
         # The outcomes under test are the breakers', not the answers': errors are expected.
-        with contextlib.suppress(ProviderError, BugError):
-            await rig.ask(before_call=before_call, validate=validate)
+        with contextlib.suppress(ProviderError, BugError, RouterDeadlineError):
+            await rig.ask(
+                before_call=before_call,
+                validate=validate,
+                retry_user=retry_user,
+                time_left=time_left,
+            )
 
     tasks: list[asyncio.Task[None]] = []
     for _ in range(300):
@@ -365,3 +561,12 @@ async def test_random_concurrent_traffic_never_loses_or_doubles_a_trial(
         assert audit.most_held <= 1, name
         assert audit.held == 0, name
         assert rig.status(name).trial_in_flight is False, name
+
+    # Recoverability: the longest open time is a Gemini quota (up to a day), so two days later no
+    # breaker may still be open or hold a trial, whatever state the traffic left it in.
+    rig.clock.advance(2 * 24 * HOUR)
+    for name in audits:
+        status = rig.status(name)
+        assert status.state in (BreakerState.CLOSED, BreakerState.HALF_OPEN), name
+        assert status.remaining_s is None, name
+        assert status.trial_in_flight is False, name
