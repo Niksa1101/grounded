@@ -20,7 +20,6 @@ from grounded.generation.providers.gemini import GeminiProvider
 from grounded.generation.providers.groq import GroqProvider
 from grounded.runtime import (
     ProviderConfigError,
-    ProviderUnconfiguredError,
     build_fallback_providers,
     build_provider,
     gemini_http_options,
@@ -75,8 +74,11 @@ def test_groq_as_the_first_entry_is_refused_with_the_reason() -> None:
 
 
 def test_an_unbuildable_first_entry_is_not_skipped() -> None:
-    with pytest.raises(ProviderUnconfiguredError, match="GEMINI_API_KEY"):
+    with pytest.raises(ProviderConfigError, match="GEMINI_API_KEY") as caught:
         build_provider(settings_for("gemini", "groq", gemini_model=GEMINI_MODEL))
+    # The class is the one the eval harness and the gate have always seen for a config error.
+    assert type(caught.value) is ProviderConfigError
+    assert caught.value.unconfigured
 
 
 @pytest.mark.parametrize("names", [["gemini", "mistral"], ["mistral"], ["gemini", "gemini"]])

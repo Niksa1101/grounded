@@ -63,13 +63,17 @@ PRIMARY_PROVIDERS = ("gemini", "fake")
 
 class ProviderConfigError(Exception):
     """A provider this build cannot create or must not use: an unknown ``GENERATOR_PROVIDERS``
-    entry, a missing key or model ID, a judge on the generator's provider."""
+    entry, a missing key or model ID, a judge on the generator's provider.
 
+    ``unconfigured`` marks the one case a later entry of ``GENERATOR_PROVIDERS`` may be skipped
+    for (PRD D57d, ``build_fallback_providers``): a missing key or model ID, whose message names the
+    variable and never a value. It is a flag, not a subclass, because the eval harness records an
+    error by its class name and the gate classifies it that way (``ProviderConfigError``).
+    """
 
-class ProviderUnconfiguredError(ProviderConfigError):
-    """A provider whose key or model ID is missing (the message names the variable, never a value).
-    The first entry of ``GENERATOR_PROVIDERS`` that raises it stops startup; a later entry that
-    raises it is skipped with a warning (PRD D57d, ``build_fallback_providers``)."""
+    def __init__(self, message: str, *, unconfigured: bool = False) -> None:
+        super().__init__(message)
+        self.unconfigured = unconfigured
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,7 +129,9 @@ def build_fallback_providers(settings: Settings, stack: AsyncExitStack) -> list[
     for name in settings.generator_providers[1:]:
         try:
             built.append(_build_named(settings, name, stack))
-        except ProviderUnconfiguredError as exc:
+        except ProviderConfigError as exc:
+            if not exc.unconfigured:
+                raise  # a contradiction in the list, not a missing variable: stays loud
             logger.warning(
                 "fallback provider skipped, it cannot be built",
                 extra={"provider": name, "reason": str(exc)},
@@ -179,10 +185,13 @@ def _build_gemini(settings: Settings) -> GeminiProvider:
     key = settings.gemini_api_key.get_secret_value().strip() if settings.gemini_api_key else ""
     model = (settings.gemini_model or "").strip()
     if not key:
-        raise ProviderUnconfiguredError("GEMINI_API_KEY must be set to use the gemini provider")
+        raise ProviderConfigError(
+            "GEMINI_API_KEY must be set to use the gemini provider", unconfigured=True
+        )
     if not model:
-        raise ProviderUnconfiguredError(
-            "GEMINI_MODEL must be set to a pinned model ID (PRD D46: gemini-3.5-flash-lite)"
+        raise ProviderConfigError(
+            "GEMINI_MODEL must be set to a pinned model ID (PRD D46: gemini-3.5-flash-lite)",
+            unconfigured=True,
         )
     return GeminiProvider(
         genai.Client(api_key=key, http_options=gemini_http_options()),
@@ -200,11 +209,14 @@ def build_groq_provider(
     key = settings.groq_api_key.get_secret_value().strip() if settings.groq_api_key else ""
     pinned = (model or "").strip()
     if not key:
-        raise ProviderUnconfiguredError("GROQ_API_KEY must be set to use the groq provider")
+        raise ProviderConfigError(
+            "GROQ_API_KEY must be set to use the groq provider", unconfigured=True
+        )
     if not pinned:
-        raise ProviderUnconfiguredError(
+        raise ProviderConfigError(
             f"the Groq model ({model_variable}) must be set to a pinned model ID "
-            "(PRD D48: openai/gpt-oss-120b)"
+            "(PRD D48: openai/gpt-oss-120b)",
+            unconfigured=True,
         )
     return GroqProvider.create(key, model=pinned, reasoning_effort=settings.groq_reasoning_effort)
 

@@ -232,7 +232,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [7.01](phase-7/7.01-decision-breaker.md) | Decision: breaker state on serverless, quota reset, breaker timings | Decision | D (research and wording delegated to G, D57) | done | [#124](https://github.com/Niksa1101/grounded/pull/124) |
 | [7.02](phase-7/7.02-router-spec.md) | Provider router — spec | Spec | A+G | done (the Author's review of the cases comes after the phase, in a follow-up PR, agreed 2026-10-14) | [#125](https://github.com/Niksa1101/grounded/pull/125) |
 | [7.03](phase-7/7.03-router.md) | Provider router — implementation | Author | A (written by G at the Author's "write it", 2026-10-14) | done | [#126](https://github.com/Niksa1101/grounded/pull/126) |
-| [7.04](phase-7/7.04-router-wiring.md) | Router in the pipeline, fallback metrics, demo and Phase 7 closeout | Build + Closeout | G | todo | |
+| [7.04](phase-7/7.04-router-wiring.md) | Router in the pipeline, fallback metrics, demo and Phase 7 closeout | Build + Closeout | G | in-progress (two stacked PRs, below) | [#127](https://github.com/Niksa1101/grounded/pull/127) (7.04a: the wiring, errors, logs and service tests); 7.04b (the local demo and the closeout) follows |
 | **8** | **[Observability dashboard, cost, calibration](phase-8/README.md)** | | | | |
 | [8.01](phase-8/8.01-dashboard-views.md) | Dashboard views migration | Build | G | todo | |
 | [8.02](phase-8/8.02-metrics-api.md) | `GET /v1/metrics/summary` | Build | G | todo | |
