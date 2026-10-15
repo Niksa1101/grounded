@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any, LiteralString, NamedTuple
+from uuid import uuid4
 
 import httpx
 import psycopg
@@ -38,7 +39,7 @@ from grounded.infra.provider_errors import (
 )
 from grounded.ingest.embed import FakeEmbedder
 from grounded.main import create_app
-from grounded.runtime import ProviderConfigError
+from grounded.runtime import ProviderConfigError, open_runtime
 from grounded.schemas.llm import LLMAnswer, LLMClaim
 from grounded.settings import Settings
 from tests.hybrid_corpus import CORPUS, insert_page
@@ -185,7 +186,7 @@ def embedding_cost(question: str) -> Decimal:
     return Decimal(len(question)) * Decimal("0.15") / Decimal(1_000_000)
 
 
-# --- (a) a 429 on the primary: the fallback answers ----------------------------------------------
+# --- (a) a 429 on the primary: the fallback answers ----
 
 
 async def test_a_429_on_the_primary_is_answered_by_the_fallback_and_logged(
@@ -225,7 +226,7 @@ async def test_a_429_on_the_primary_is_answered_by_the_fallback_and_logged(
     assert Q1 not in caplog.text
 
 
-# --- (b) the breaker skips the primary until its time is up --------------------------------------
+# --- (b) the breaker skips the primary until its time is up ----
 
 
 async def test_the_next_request_skips_an_open_breaker_and_a_trial_closes_it(env: Env) -> None:
@@ -272,7 +273,7 @@ async def test_the_next_request_skips_an_open_breaker_and_a_trial_closes_it(env:
     assert (primary.remaining, fallback.remaining) == (0, 0)
 
 
-# --- (c) every breaker open: a 503 with the wait -------------------------------------------------
+# --- (c) every breaker open: a 503 with the wait ----
 
 
 async def test_every_breaker_open_is_a_503_with_the_remaining_wait(env: Env) -> None:
@@ -326,7 +327,7 @@ async def test_a_503_has_no_retry_after_when_no_wait_is_known(env: Env) -> None:
     )
 
 
-# --- (d) bad output twice: one retry, then the fallback ------------------------------------------
+# --- (d) bad output twice: one retry, then the fallback ----
 
 
 async def test_bad_output_twice_on_the_primary_costs_two_calls_and_then_falls_back(
@@ -390,7 +391,7 @@ async def test_bad_output_on_every_provider_stays_a_502(env: Env) -> None:
     assert (row["input_tokens"], row["output_tokens"]) == (6_000, 1_600)
 
 
-# --- (e) the answer cache -------------------------------------------------------------------
+# --- (e) the answer cache ----
 
 
 async def test_a_fallback_answer_is_not_cached_and_a_cached_answer_is_served_while_open(
@@ -429,7 +430,7 @@ async def test_a_fallback_answer_is_not_cached_and_a_cached_answer_is_served_whi
     assert stored["hit_count"] == 1
 
 
-# --- the budget: a unit for every call that is made, none for one that is not --------------------
+# --- the budget: a unit for every call that is made, none for one that is not ----
 
 
 async def test_the_fallback_reserves_budget_and_stops_when_none_is_left(env: Env) -> None:
@@ -447,7 +448,7 @@ async def test_the_fallback_reserves_budget_and_stops_when_none_is_left(env: Env
     assert llm_calls(env) == 1
 
 
-# --- (f) the request deadline ---------------------------------------------------------------
+# --- (f) the request deadline ----
 
 
 async def test_a_retry_that_does_not_fit_before_the_deadline_is_a_504(env: Env) -> None:
@@ -493,7 +494,7 @@ async def test_a_deadline_shorter_than_one_call_is_a_504_before_any_call(env: En
     assert table(env, "SELECT * FROM daily_usage") == []
 
 
-# --- the primary alone, and the rest of the contract -----------------------------------------
+# --- the primary alone, and the rest of the contract ----
 
 
 async def test_without_a_fallback_a_429_is_a_503_with_the_breaker_wait(env: Env) -> None:
@@ -609,3 +610,51 @@ async def test_an_unbuildable_first_entry_stops_startup(env: Env) -> None:
     with pytest.raises(ProviderConfigError, match="GEMINI_API_KEY"):
         async with started(settings):
             pass
+
+
+def forbid_fallback_builds(monkeypatch: pytest.MonkeyPatch) -> None:
+    def forbidden(*args: object, **kwargs: object) -> None:
+        raise AssertionError("no fallback provider may be built here")
+
+    monkeypatch.setattr(grounded.runtime, "build_fallback_providers", forbidden)
+
+
+async def test_primary_only_builds_no_fallback_from_the_settings(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The CLI (and eval mode) run the first entry alone, even when the settings name a Groq key.
+    monkeypatch.setattr(grounded.runtime, "build_provider", lambda _settings: gemini(good()))
+    forbid_fallback_builds(monkeypatch)
+    settings = make_settings(
+        database_url=env.url,
+        generator_providers=["gemini", "groq"],
+        groq_api_key="k-123",
+        groq_model=GROQ_MODEL,
+    )
+
+    async with open_runtime(
+        settings, embedder=FakeEmbedder(dim=settings.embedding_dim), primary_only=True
+    ) as runtime:
+        response = await runtime.pipeline.ask(Q1, uuid4())
+
+    assert (response.meta.provider, response.meta.fallback_used) == ("gemini", False)
+
+
+async def test_an_injected_provider_stands_for_the_whole_list(
+    env: Env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A test that injects the primary never gets a real Groq built next to it.
+    forbid_fallback_builds(monkeypatch)
+    settings = make_settings(
+        database_url=env.url,
+        generator_providers=["gemini", "groq"],
+        groq_api_key="k-123",
+        groq_model=GROQ_MODEL,
+    )
+
+    async with open_runtime(
+        settings, embedder=FakeEmbedder(dim=settings.embedding_dim), provider=gemini(good())
+    ) as runtime:
+        response = await runtime.pipeline.ask(Q1, uuid4())
+
+    assert response.meta.provider == "gemini"
