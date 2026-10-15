@@ -577,6 +577,9 @@ async def test_an_unbuildable_fallback_is_skipped_with_a_warning_and_the_primary
     assert skipped.__dict__["provider"] == "groq"
     assert "GROQ_MODEL" in skipped.__dict__["reason"]
     assert "secret-key" not in caplog.text  # the name of the variable, never a value
+    # The startup line says which providers the router runs on: only the primary, here.
+    [ready] = [r for r in caplog.records if r.getMessage() == "generator providers ready"]
+    assert ready.__dict__["providers"] == ["gemini"]
 
 
 async def test_a_missing_groq_key_is_named_in_the_warning(

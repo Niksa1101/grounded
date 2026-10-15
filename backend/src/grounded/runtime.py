@@ -411,6 +411,14 @@ async def open_runtime(
             router_clock=router_clock,
             primary_only=primary_only,
         )
+        # The order is the router's: a deployment whose fallback was skipped shows one name here.
+        logger.info(
+            "generator providers ready",
+            extra={
+                "providers": [p.name for p in (provider, *(fallback_providers or ()))],
+                "primary_only": primary_only,
+            },
+        )
         # Eval runs are told apart from real traffic in the table (DB.md §4, CI database only).
         request_logger = RequestLogger(
             pool, pricing, clock=clock, source="eval" if settings.app_env == "eval" else "api"
