@@ -18,6 +18,7 @@ from grounded.cli import app
 ROOT = Path(__file__).resolve().parents[3]
 RUNBOOK = (ROOT / "docs" / "runbooks" / "vercel-deploy.md").read_text(encoding="utf-8")
 TECH = (ROOT / "docs" / "Tech.md").read_text(encoding="utf-8")
+OPTIONAL_HEADING = "### 3.2a Optional: enable the Groq fallback (your production decision)"
 
 
 def section(text: str, heading: str) -> str:
@@ -68,10 +69,52 @@ def test_every_env_command_names_its_environment_and_none_targets_development() 
 def test_the_production_commands_match_the_production_tables() -> None:
     commands = env_add_commands()
     backend = table_names(section(RUNBOOK, "### 3.2 Production variables"))
+    optional = table_names(section(RUNBOOK, OPTIONAL_HEADING))
     frontend = table_names(section(RUNBOOK, "### 5.1 Production variables"))
     in_production = re.findall(r"vercel env add ([A-Z_]+) production", "\n".join(commands))
-    # DATABASE_URL and PROXY_SHARED_SECRET are in both projects' commands or tables.
-    assert set(in_production) == set(backend) | set(frontend)
+    # DATABASE_URL and PROXY_SHARED_SECRET are in both projects' commands or tables. The optional
+    # table of 3.2a is its own section, so the required nine of the first test stay nine.
+    assert set(in_production) == set(backend) | set(optional) | set(frontend)
+
+
+def test_the_groq_fallback_pair_is_optional_and_matches_the_code() -> None:
+    """Phase 7: the Groq pair is documented, labelled optional, never one of the required nine."""
+    optional_section = section(RUNBOOK, OPTIONAL_HEADING)
+    required = table_names(section(RUNBOOK, "### 3.2 Production variables"))
+    assert table_names(optional_section) == ["GROQ_API_KEY", "GROQ_MODEL"]
+    assert not {"GROQ_API_KEY", "GROQ_MODEL"} & set(required)
+    assert "Optional" in OPTIONAL_HEADING
+    assert "not part of the nine" in optional_section
+    # The "do not set" list of 3.2 no longer forbids the key (it did while Groq was the judge).
+    [forbidden] = re.findall(
+        r"Do \*\*not\*\* set\b[^.]*\.", section(RUNBOOK, "### 3.2 Production variables")
+    )
+    assert "GROQ" not in forbidden
+    # The two commands: the model is a plain pinned value, the key is a Secret typed at the prompt.
+    commands = [c for c in env_add_commands() if re.search(r"env add GROQ_\w+ production", c)]
+    key = next(c for c in commands if "GROQ_API_KEY" in c)
+    model = next(c for c in commands if "GROQ_MODEL" in c)
+    assert len(commands) == 2
+    assert key.endswith("--sensitive")
+    assert "--value" not in key
+    assert "printf" not in key
+    assert "--value openai/gpt-oss-120b" in model
+    assert "--no-sensitive" in model
+    example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^# GROQ_MODEL=.*openai/gpt-oss-120b", example)  # the pinned ID of D48
+    # Previews get no Groq variable (a preview then logs the skip WARNING, which is expected).
+    in_preview = [c for c in env_add_commands() if "GROQ_" in c and " preview" in c]
+    assert in_preview == []
+    # The verification names the log lines the code really writes, with their field names.
+    runtime = (ROOT / "backend" / "src" / "grounded" / "runtime.py").read_text(encoding="utf-8")
+    for message in ("generator providers ready", "fallback provider skipped, it cannot be built"):
+        assert f'"{message}"' in runtime, message
+        assert message in optional_section, message
+    for field in ("providers", "primary_only"):
+        assert f'"{field}":' in runtime, field
+        assert f"`{field}`" in optional_section, field
+    # Tech §18 lists it beside, not inside, the required production variables.
+    assert "step 3.2a" in section(TECH, "## 18. Deployment")
 
 
 def test_preview_values_are_placeholders_and_the_set_starts_the_app() -> None:

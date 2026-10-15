@@ -745,21 +745,30 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   Phase 7 touched a real provider** (the Author's rule): no real Gemini 429, no real Groq call. What stays open, all
   pending-Author unless noted: (1) *The 7.02 router cases.* The Author's review (and extension) of the router's scenarios
   in `tests/unit/test_router.py` was agreed to come after the phase, in a follow-up PR; it is the open criterion of 7.02.
+  The review sheet (every case by Tech §10 row, candidate extra cases, the decisions to confirm, what to tick) is
+  `tickets/phase-7/7.02-case-review.md`.
   (2) *Groq as the first entry and the cache key.* `build_provider` refuses it (7.04a); the other way out, moving
   `thinking_level` and `GROQ_REASONING_EFFORT` into the providers and the answer-cache key, is the Author's decision and
   nothing needs it today (see the `thinking_level` item above). (3) *Real recordings.* The Gemini 429 fixtures
   (`generate_429_*.json`) and the Groq 429 and 5xx fixtures are hand-made (the Gemini ones are marked `_synthetic`); replace them with recordings
-  when a real Gemini 429 (per-minute and per-day body) and a Groq daily 429 (its `retry-after`) are seen. The router logs
+  when a real Gemini 429 (per-minute and per-day body) and a Groq daily 429 (its `retry-after`) are seen. The tools are
+  ready (PR #129): `record_generate_fixture.py` of both providers has a `--burst N` option (default 1, hard cap 40) for
+  the per-minute 429 (`error 429_per_minute` for Gemini, `429_per_minute` for Groq) and Groq has the modes
+  `429_per_minute` and `429_daily_quota`; a daily 429 is never provoked, it is recorded right after a real one happened.
+  The recorded body is scrubbed (the `org_...` id of a Groq daily 429, request ids, key shapes). The router logs
   every open with its reason and how the time was derived (`breaker opened`: `reason`, `open_s`, `derived`), so the first
   real one shows what was read. (4) *Instances and the clock.* How many Vercel function instances a burst creates, whether
   Fluid compute is on (V13) and how the monotonic clock behaves while an instance is frozen are unverified (items (1) and
   (8) of the Phase 7 decision above). (5) *The Vercel environment.* Setting `GROQ_API_KEY` and `GROQ_MODEL` on the backend
   project is the Author's step; Phase 7 set nothing in Vercel, Neon or GitHub. Until it is done the deployed backend logs
   `fallback provider skipped, it cannot be built` at startup and answers from Gemini alone, so the demo has no fallback.
-  **A discrepancy to settle with it:** the Vercel runbook (§3.2, "Production variables") tells the Author **not** to set
-  `GROQ_API_KEY` on the backend, true while Groq was only the eval judge; it was left as it is, because whether to put
-  the Groq key (and its 8K tokens a minute, about 65 to 80 questions a day at the median size, shared with the CI judge)
-  in production is the decision, not a typo. (6) *A docstring of the Author-owned `router.py`.* It words
+  **The runbook discrepancy is settled (PR #129):** the Vercel runbook told the Author **not** to set `GROQ_API_KEY`,
+  true while Groq was only the eval judge. It now documents the pair as the **optional** step 3.2a (the two
+  `vercel env add` commands, the key typed at the prompt, the redeploy, and a check: the startup line
+  `generator providers ready` lists `gemini` and `groq` and there is no `fallback provider skipped` WARNING). Setting
+  it stays the Author's action and decision, because the Groq free plan (8K tokens a minute, about 65 to 80 questions a
+  day at the median size) is shared with the CI judge and `DAILY_LLM_BUDGET` counts Groq calls too; nothing in
+  production changed. (6) *A docstring of the Author-owned `router.py`.* It words
   `breakers_enabled=False` as "eval mode and nothing else" and says `Settings` enforces the single provider; since 7.04a
   `grounded ask` (single question and `--golden`) also builds the router primary only, without breakers or fallbacks, so
   its golden batch keeps waiting out a 429 and stopping at a daily quota on the provider's own errors (Tech §10, "Wired

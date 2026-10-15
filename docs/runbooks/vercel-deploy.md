@@ -45,7 +45,7 @@ brackets). What the documentation does not say is marked **unverified** and is a
 | Region | `cle1`, from `backend/vercel.json` | `cle1`, from `frontend/vercel.json` |
 | `maxDuration` | 30 s, `backend/vercel.json` | 40 s, in `route.ts` |
 | Production branch | `main` | `main` |
-| Production variables | 9 (below) | 2 (below) |
+| Production variables | 9 (below), plus 2 optional (3.2a) | 2 (below) |
 | Preview variables | 7 placeholders (below) | none |
 
 The project name decides the production domain (`<name>.vercel.app`; Vercel adds a suffix if it is
@@ -154,7 +154,10 @@ Secret (`cli/env` [2026-08-20]: `--no-sensitive` is Config, `--sensitive` is Sec
 `IP_HASH_SECRET` and `DAILY_LLM_BUDGET`, and the lifespan builds the Gemini adapter, which needs the
 key and the pinned model (Tech §18; a test keeps that list and this table in step). Do **not** set
 `DATABASE_URL_DIRECT` (the owner URL never reaches the runtime), `ALLOW_DIRECT_API` (it must be
-false), `GROQ_API_KEY`, `COHERE_API_KEY`, `CACHE_DIR` or anything with a `NEXT_PUBLIC_` prefix.
+false), `COHERE_API_KEY`, `CACHE_DIR` or anything with a `NEXT_PUBLIC_` prefix. `GROQ_API_KEY` is
+no longer on this list: it was, while Groq was only the eval judge (CI). Since Phase 7 the backend
+can use Groq as a fallback generator, and the optional step [3.2a](#32a-optional-enable-the-groq-fallback-your-production-decision)
+sets it. Leaving it unset is a valid choice.
 
 The plain values:
 
@@ -219,6 +222,83 @@ and the clipboard; paste it into the password manager before generating the next
 ```powershell
 $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); $env:PROXY_SHARED_SECRET = ([BitConverter]::ToString($b) -replace '-','').ToLower(); $env:PROXY_SHARED_SECRET | Set-Clipboard
 ```
+
+### 3.2a Optional: enable the Groq fallback (your production decision)
+
+**Optional, and not part of the nine above.** Without this pair the backend starts and answers from
+Gemini alone. With it, a 429, a 5xx or a timeout on Gemini is answered by Groq, and the circuit breaker
+skips Gemini until its reset (PRD D57, Tech §10). Whether production gets a fallback is **your**
+decision; the Agent sets nothing in Vercel. Read the two caveats at the end of this step first.
+
+| Name | Value | Type |
+|---|---|---|
+| `GROQ_API_KEY` | the Groq key | Secret |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` (PRD D48) | Config |
+
+Both are needed: the lifespan builds the Groq adapter only when it has the key **and** the pinned
+model. If either is missing it logs a WARNING (`fallback provider skipped, it cannot be built`, with the
+variable's name, never a value) and goes on with Gemini alone; only a missing Gemini key or model stops
+the start (PRD D57d). Production only, like the nine; the previews of 3.3 do not get them, so a preview
+logs that WARNING, which is expected.
+
+The model is a plain value:
+
+```bash
+vercel env add GROQ_MODEL production --value openai/gpt-oss-120b --no-sensitive --yes
+```
+
+The key is a secret. Type it at the prompt, which does not echo it. Never put it on a command line
+(`--value`) or in a pipe (`echo <key> | vercel ...`): it would stay in the shell history or in a
+process's argument list. On Windows `vercel` is a `.cmd` shim, so the same rule as for the other
+secrets above applies (the prompt, not an argument); the command is the same in PowerShell:
+
+```bash
+vercel env add GROQ_API_KEY production --sensitive
+```
+
+Environment changes apply only to **new** deployments (3.4), so the running backend still has no Groq
+until you redeploy it. Do it the way 3.4 does: Dashboard, the backend project, Deployments, Create
+Deployment, branch `main`, or open the latest production deployment and use the menu next to Visit,
+Redeploy (it builds the same commit with the current variables; the build cache can stay on this time).
+This is a production action and yours.
+
+**Verify after the redeploy.** The check is a log line, because forcing a real Gemini 429 would burn
+quota on purpose and nothing else shows the providers a running instance has.
+
+1. Start a fresh instance, whose lifespan writes the startup lines: `curl -s "$BACKEND_URL/healthz"`
+   (step 4 has `BACKEND_URL`).
+2. Open the backend project's runtime logs (Dashboard, the backend project, Logs; Vercel keeps them for
+   one hour, Tech §18) and search for `generator providers ready`. The entry is one JSON line from the
+   logger `grounded.runtime`, level `INFO`, with the fields `providers` and `primary_only` (shown here
+   without its `ts` field):
+
+   ```json
+   {"level": "INFO", "logger": "grounded.runtime", "msg": "generator providers ready", "providers": ["gemini", "groq"], "primary_only": false}
+   ```
+
+3. Expected: `providers` is `["gemini", "groq"]` (the router's order, Gemini first), `primary_only` is
+   `false`, and **no** entry with `msg` `fallback provider skipped, it cannot be built` (WARNING, with
+   `provider` `groq` and a `reason` that names `GROQ_API_KEY` or `GROQ_MODEL`). `providers` with only
+   `"gemini"` means the fallback is off: the variable is missing, blank or was added after the
+   deployment that is running (see "When something fails"). An older log than one hour is gone: send one
+   more `/healthz` after the instance went idle, or redeploy.
+
+What the line does not prove is that Groq answers: that needs a real Gemini failure, which nobody
+should provoke. The first real one leaves `breaker opened` (with `reason`, `open_s` and `derived`) and
+`provider attempt failed` lines and a `request_logs` row with `fallback_used` true (PRD §12, "Phase 7
+closed"). Until then the fallback is configured, not measured.
+
+**Two caveats to weigh before you do it** (PRD D57, §12):
+
+- **Groq's free quota is small and shared.** It is 8K tokens a minute and 200K a day for the whole Groq
+  organization, and the CI judge draws on the same quota (a full eval run took about 145K of the 200K).
+  A median answer is about 2.7K input tokens, so the fallback carries about 2 to 3 questions a minute and
+  about 65 to 80 a day, less on a day with evals. When Groq is exhausted too, the answer is the
+  all-providers-unavailable `503` with `Retry-After`, not a wrong answer. A second key from the same
+  organization adds no quota.
+- **`DAILY_LLM_BUDGET` counts Groq calls too.** The budget (300 in 3.2) reserves one unit before every
+  provider call, a fallback call included, so a Gemini failure followed by a Groq answer spends two
+  units of the day's 300.
 
 ### 3.3 Preview variables (placeholders, not secrets)
 
@@ -392,8 +472,8 @@ The backend lists exactly the seven names of 3.3. The frontend lists none. Then:
 vercel env ls production
 ```
 
-The backend lists the nine names of 3.2 and the frontend the two of 5.1, each for Production only
-(the environments column). Then, in the dashboard (Settings, Environment Variables, filter
+The backend lists the nine names of 3.2 (eleven if you did the optional 3.2a) and the frontend the two
+of 5.1, each for Production only (the environments column). Then, in the dashboard (Settings, Environment Variables, filter
 Preview): every row of the backend is type **Config** and its value is a placeholder you can read, in
 particular `DATABASE_URL` is the `db.invalid` URL. No **Secret** row targets Preview or Development.
 Optional hardening: the team policy "Separate Production Secret Values" (Team Settings, Security;
@@ -770,6 +850,7 @@ Regions in `x-vercel-id` (expected `cle1`, D53): `fra1::cle1`
 | The cold ask of step 9 is `504 deadline_exceeded` | Our own backend 504: the 25 s deadline or the 2 s retrieval timeout fired (D53, D54a) | Look up the printed `request_id` in `request_logs` (Neon runbook step 4 shows how to connect as the owner): `latency_retrieval_ms` near 2000 and `latency_llm_ms` NULL is the retrieval timeout (raise `RETRIEVAL_TIMEOUT_S`, V17); otherwise the stage timings show where the 25 s went |
 | Every question is `401 unauthorized` through the frontend | The two projects hold different `PROXY_SHARED_SECRET` values | Set the same value in both, redeploy both |
 | Everything is `429` at once | Every visitor shares one bucket: the proxy's address was used | V2: the forwarded-for header is not what `clientIp` expects |
+| After 3.2a the startup line `generator providers ready` lists only `gemini`, or the log has the WARNING `fallback provider skipped, it cannot be built` | The backend runs without its fallback: `GROQ_API_KEY` or `GROQ_MODEL` (the WARNING's `reason` says which) is unset, blank, or was added after the deployment that is running | `vercel env ls production`, fix the variable, create a new deployment (changes apply only to new ones), then verify again as in 3.2a |
 | A secret leaked | | Generate a new one, update the project(s), redeploy; for the Neon URL see the Neon runbook |
 | A bad production deployment | | Deployments, an earlier good deployment, promote it (the dashboard's labels are **unverified**); then fix forward by a PR |
 
@@ -780,6 +861,7 @@ Tick each box as you do it; the acceptance criteria of ticket 5.10 are the last 
 - [ ] Neon runbook done through step 8
 - [ ] `PROXY_SHARED_SECRET` and `IP_HASH_SECRET` generated, kept in the password manager
 - [ ] Backend project: root `backend`, production variables (9) set for Production only
+- [ ] Optional, your decision: the Groq pair of 3.2a set, the backend redeployed, `generator providers ready` lists `gemini` and `groq` and there is no `fallback provider skipped` WARNING
 - [ ] Backend preview placeholders (7) set as Config
 - [ ] Backend deployed from `main`: `/healthz` 200, `/readyz` with the secret 200 with the active index (without it 401), `/v1/ask` without a secret 401
 - [ ] Frontend project: root `frontend`, `BACKEND_URL` (production domain) and `PROXY_SHARED_SECRET` set for Production only

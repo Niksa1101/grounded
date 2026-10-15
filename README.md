@@ -565,7 +565,8 @@ exhausted too, which is the all-providers-open `503`.
 
 **What is not measured.** No real fallback was ever exercised against live Groq, and no real Gemini 429 has been recorded:
 every 429 in the tests and in the demo is scripted, and the committed 429 and 5xx fixtures are hand-made. The deployed demo
-has **no fallback yet**: it needs `GROQ_API_KEY` and `GROQ_MODEL` in Vercel, which is the Author's step; without them the
+has **no fallback yet**: it needs `GROQ_API_KEY` and `GROQ_MODEL` in Vercel, which is the Author's step (optional, with the
+commands, the redeploy and a log check, in [step 3.2a of the Vercel runbook](docs/runbooks/vercel-deploy.md#32a-optional-enable-the-groq-fallback-your-production-decision)); without them the
 backend logs `fallback provider skipped, it cannot be built` at startup and runs on Gemini alone. `groq` cannot be the
 *first* provider (the answer-cache key does not hold its reasoning effort), and `grounded ask` and the evals run the first
 provider alone, without breakers. The open items are in [PRD §12, "Phase 7 closed"](docs/PRD.md#12-assumptions-and-open-items).
