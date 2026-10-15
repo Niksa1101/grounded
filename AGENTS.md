@@ -174,6 +174,10 @@ uv run grounded ask --golden ../eval/golden/golden_set.v1.jsonl   # real Gemini:
 ```
 
 ```bash
+uv run grounded demo-fallback   # Phase 7 demo, fakes only: no key, no API call, nothing sleeps. Three requests through the real app over the LOCAL database: a 429 on the fake Gemini is answered by the fake Groq (fallback_used true), the next request skips Gemini while its breaker is open, a trial after the simulated open time brings it back; prints the three result lines, the request_logs rows and the router's log lines, then PASS (exit 0) or FAIL (exit 1). Dev only: refused with APP_ENV=prod and eval; needs GEMINI_MODEL and GROQ_MODEL (names only), the local DB and an active index; writes three request_logs rows. Runbook: docs/runbooks/fallback-demo.md
+```
+
+```bash
 uv run grounded ingest --dry-run
 ```
 

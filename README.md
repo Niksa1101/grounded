@@ -32,7 +32,7 @@ frozen snapshot of the official docs, and it **measures** how well it does that.
 Built unless marked *planned*:
 
 - **Hybrid retrieval:** pgvector dense search + Postgres full-text search, fused with Reciprocal Rank Fusion. Optional Cohere re-ranking is built behind `RERANK_PROVIDER` (default `none`, and off in the deployed demo: Cohere's trial key may not be used in production). It degrades to the RRF order on any error, timeout or daily cap. Measured on the golden set it lifts nDCG@5 from 0.665 to 0.807 (n = 25) at about 2.5 times the cost per question ([Re-ranking: what it bought](#re-ranking-what-it-bought)).
-- **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry. Falling back to a second provider after that is *planned* (Phase 7); until then a second invalid output is a `502`.
+- **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry. If it is still invalid, the provider router falls back to a second provider (Groq); only when every provider fails is it a `502` ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
 - **Verifiable citations:** each claim cites source labels. The server validates them and maps them to exact `docs-page#section` links. The model never writes URLs.
 - **Honest refusals:** `answered | partial | insufficient_context`. Out-of-scope questions are refused, and that behavior is measured.
 - **Per-claim confidence:** computed server-side from retrieval signals. Whether it is calibrated is *planned* to be measured (Phase 8); today it is a documented heuristic.
@@ -63,12 +63,12 @@ flowchart LR
     API --> DB[(Neon Postgres<br/>pgvector + FTS<br/>rate limit · budget · cache · logs)]
     API -. "optional, off in the demo" .-> RR[Cohere rerank]
     API --> LLM[Gemini Flash-Lite]
-    API -. "planned: Phase 7<br/>fallback on 429/5xx" .-> LLM2[Groq]
+    API -. "built (Phase 7), waits for the Groq key<br/>fallback on 429/5xx/timeout" .-> LLM2[Groq]
     ING[Ingest CLI<br/>pinned FastAPI tag] --> DB
     CI[GitHub Actions<br/>tests · retrieval eval · promptfoo gate] -. "judge today" .-> LLM2
 ```
 
-Dotted edges are not in the request path of the deployed demo: rerank is built but switched off, the fallback is planned, and Groq is only the eval judge for now.
+Dotted edges are not in the request path of the deployed demo: rerank is built but switched off, and the fallback is built (Phase 7) but waits for the Author to set the Groq key and model in Vercel, so Groq is the eval judge only until then ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
 Request flow: validate → rate-limit → cache lookup → budget check → embed → hybrid retrieve (dense ∪ FTS → RRF) →
 (optional rerank →) build context → reserve budget → structured generation → validate/retry → map citations → score confidence → log →
 respond. Details and the contracts: [docs/Tech.md §1](docs/Tech.md).
@@ -524,6 +524,52 @@ The cold-start measurement times the function start and the Neon wake separately
 when the 10 s between the backend's 25 s deadline and the proxy's 35 s timeout (the budget for a cold start, PRD D53) is not
 enough. If it is not, the ask page shows its retry state and the number is published as it is.
 
+## Resilience: fallback and circuit breaker (draft)
+
+> **Draft written by the Agent for the Author's final edit** (ticket 7.04b). Every statement below is traced to a test, a
+> decision row or a doc section; the wording and what to emphasize are the Author's.
+
+**What the router does** ([Tech §10](docs/Tech.md), [PRD D57](docs/PRD.md#11-decision-log-condensed)). `/v1/ask` generates through a
+router over `GENERATOR_PROVIDERS` (Gemini first, Groq as the fallback). A reply that fails the schema or the citation checks gets
+one retry on the same provider with the reason in the prompt, then goes to the next provider. A 429, a 5xx or a timeout
+goes to the next provider at once, and opens that provider's circuit breaker: for the 429's own `Retry-After` (60 s without
+one), until Gemini's quota resets at midnight Pacific for a daily quota, and for 30 s after three timeouts or 5xx in 60 s.
+An open breaker is skipped without a call; when its time is up, exactly one trial request goes through, and its success
+closes the breaker. The router never sleeps and never waits out a `Retry-After`, and it starts a call only if the time left
+before the request deadline holds the call's whole timeout. When nothing can answer the client gets a `503` with a
+`Retry-After` (only when a wait is known) or, when it ran out of time, a `504`. An answer from the fallback is **not cached**
+(the cache key names Gemini's model and settings), and the budget reserves a unit for every call that is made.
+
+**What shows it.** `meta.provider`, `meta.model` and `meta.fallback_used` in the response; `request_logs.fallback_used`,
+`provider`, `model` and `validation_retries` in the row; `provider` and `fallback_used` on the `request completed` log line;
+and the router's own lines (`breaker opened` with its reason, `provider attempt failed`, `provider skipped`), all with the
+request id. The fallback rate is one query: `count(*) FILTER (WHERE fallback_used)` over `request_logs`. To see the whole
+behavior without any key or API call: `uv run grounded demo-fallback` (three requests through the real app and the local
+database with fake providers: a 429 on the fake Gemini is answered by the fake Groq, the next request skips Gemini, a trial
+brings it back; [runbook](docs/runbooks/fallback-demo.md)). The tests of the exit criteria are
+`backend/tests/integration/test_fallback.py` and the router's three files in `backend/tests/unit/`
+([PRD §9, Phase 7](docs/PRD.md#phase-7--multi-provider-fallback--circuit-breaker)).
+
+**Limits of the breaker state.** It is in memory, per provider and **per function instance** (PRD D57a): a cold start forgets
+it, instances do not share it, and after a burst each instance spends its own first failing call (up to three for timeouts
+and 5xx) before its breaker opens. How many instances a burst creates is not documented and was not measured, and how the
+monotonic clock behaves while an idle instance is frozen is unverified (PRD §12). A Postgres-backed breaker was decided
+against: the demo makes at most 300 LLM calls a day.
+
+**How much the fallback can carry.** Groq's free plan allows 8K tokens a minute and 200K a day, for the whole organization,
+and the CI judge uses the same quota (a full eval run took about 145K). The prompts of the real 30-question runs (Gemini's
+token counts, not Groq's) had a median input of 2,676 tokens, p95 3,887 and a maximum of 5,511, with about 300 to 650 output
+tokens, so the fallback takes **about 2 to 3 questions a minute and about 65 to 80 a day** at the median size, and one
+request of 7,880 plus 1,266 tokens would not fit a window at all (PRD D57, §12). On a day with evals the fallback can be
+exhausted too, which is the all-providers-open `503`.
+
+**What is not measured.** No real fallback was ever exercised against live Groq, and no real Gemini 429 has been recorded:
+every 429 in the tests and in the demo is scripted, and the committed 429 and 5xx fixtures are hand-made. The deployed demo
+has **no fallback yet**: it needs `GROQ_API_KEY` and `GROQ_MODEL` in Vercel, which is the Author's step; without them the
+backend logs `fallback provider skipped, it cannot be built` at startup and runs on Gemini alone. `groq` cannot be the
+*first* provider (the answer-cache key does not hold its reasoning effort), and `grounded ask` and the evals run the first
+provider alone, without breakers. The open items are in [PRD §12, "Phase 7 closed"](docs/PRD.md#12-assumptions-and-open-items).
+
 ## Failure modes and limitations
 
 ### Failure modes observed so far (v1)
@@ -555,7 +601,9 @@ so there is no production failure here: the systematic analysis from request log
 - **Cold start.** The first request after idle pays a serverless function start plus a Neon wake (Neon scales to zero after 5
   minutes): 7.04 s end to end once, against about 2.5 s warm ([cost and latency](#cost-and-latency)); the ask page shows a
   "waking up" state.
-- **No fallback yet.** Until Phase 7, a Gemini outage or an exhausted quota is a `503` for the demo.
+- **No fallback in the deployed demo yet.** The router and its breaker are built and tested (Phase 7), but the backend has no
+  Groq key or model in Vercel, so it answers from Gemini alone: a Gemini outage or an exhausted quota is still a `503` there
+  until that is set. Nothing has been measured against live Groq ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
 - **Single region.** Both Vercel projects run in `cle1`, next to Neon in AWS `us-east-2`. Hobby allows one region and no
   failover; what happens to a project pinned to `cle1` during a `cle1` outage is unverified (PRD §12).
 - **The rate limiter is per client address, in fixed windows.** Up to twice the per-minute limit can pass across a minute
@@ -657,6 +705,9 @@ Every state of the ask page without a backend or an LLM call (development only, 
 
 Without spending generator quota: `uv run grounded ask "How do I declare a query parameter?" --fake` (after the migrate and ingest steps) runs the whole pipeline with a canned stub in place of the LLM, so the answer text is not real. The question's embedding still comes from the Gemini API (or from a cached vector), so it needs `GEMINI_API_KEY` unless that question was embedded before.
 
+To see the provider fallback and the circuit breaker working, again with no key and no API call (fake providers, the local
+database, a hand-moved clock): `uv run grounded demo-fallback` ([runbook](docs/runbooks/fallback-demo.md)).
+
 Run checks and evals:
 
 ```bash
@@ -748,7 +799,7 @@ target); `EVAL_RECORD_RUNS` is unset, so CI does not write `eval_runs`. The keep
 | 4 | promptfoo generation eval + CI quality gate | ✅ done ([closeout](tickets/phase-4/4.12-closeout.md)) |
 | 5 | UI, abuse protection, deployment. **MVP** | ✅ done, live ([closeout](docs/runbooks/mvp-closeout.md); [MVP status](#mvp-status)) |
 | 6 | Re-ranking with measured lift | ✅ done: nDCG@5 0.665 to 0.807 (n = 25), off in the demo ([Re-ranking: what it bought](#re-ranking-what-it-bought)) |
-| 7 | Provider fallback + circuit breaker | ⬜ |
+| 7 | Provider fallback + circuit breaker | ✅ done: a simulated 429 on Gemini is answered by Groq and the breaker skips Gemini until reset, and the fallback rate is in the logs; nothing measured against live Groq, and no fallback in the deployed demo until the Groq key is set ([Resilience](#resilience-fallback-and-circuit-breaker-draft)) |
 | 8 | Observability dashboard, cost, calibration | ⬜ |
 | 9 | Failure-mode analysis, polish | ⬜ |
 

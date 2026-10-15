@@ -113,6 +113,7 @@ from grounded.evals.retrieval_runner import (
     update_baseline,
     write_run,
 )
+from grounded.fallback_demo import DemoRefusedError, run_demo
 from grounded.generation.pipeline import AskMode
 from grounded.generation.providers.eval_wrappers import EvalStats
 from grounded.generation.providers.fake import StubLLMProvider
@@ -157,6 +158,7 @@ from grounded.ingest.pipeline import ingest as run_ingest
 from grounded.ingest.tokens import TokenCounter, make_token_counter
 from grounded.ingest.types import ChunkingConfig
 from grounded.main import create_app
+from grounded.observability.cost import PricingError
 from grounded.observability.request_log import RequestTrace
 from grounded.retrieval.config import RetrievalMode
 from grounded.retrieval.index import NoActiveIndexError
@@ -405,6 +407,29 @@ def _ask_golden(
     for stats in eval_stats:
         typer.echo(stats.render())
     if not is_complete(summary):
+        raise typer.Exit(code=1)
+
+
+@app.command("demo-fallback")
+def demo_fallback() -> None:
+    """Phase 7 in front of you, with fakes only (dev): a 429 on Gemini is answered by Groq, the
+    next request skips Gemini while its breaker is open, and a trial brings Gemini back.
+
+    Three requests go through the real app and the local database; the two providers are scripted
+    fakes and the clock is moved by hand, so no API is called, no key is needed and nothing sleeps
+    (`grounded.fallback_demo`, docs/runbooks/fallback-demo.md). Refused with APP_ENV=prod. Needs
+    the local database with an active index, and GEMINI_MODEL and GROQ_MODEL (names only).
+    Exit 1 when an expectation does not hold.
+    """
+    try:
+        passed = _run_async(run_demo(get_settings(), typer.echo))
+    except DemoRefusedError as exc:
+        raise _fail(str(exc)) from exc
+    except PricingError as exc:
+        raise _fail(f"The demo's model names need a verified price: {exc}") from exc
+    except psycopg.Error as exc:
+        raise _fail(f"Database error: {exc}") from exc
+    if not passed:
         raise typer.Exit(code=1)
 
 

@@ -5,9 +5,9 @@
 
 | | |
 |---|---|
-| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-11zh.vercel.app`, and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). **Phase 6 done (2026-10-14):** `hybrid_rerank` rows are in both baselines, the lift is reported (nDCG@5 0.665 to 0.807, n = 25) and the degradation path is tested; rerank stays off in the demo ([§9](#phase-6--re-ranking-with-measured-lift), [§12](#12-assumptions-and-open-items)) |
+| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-11zh.vercel.app`, and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). **Phase 6 done (2026-10-14):** `hybrid_rerank` rows are in both baselines, the lift is reported (nDCG@5 0.665 to 0.807, n = 25) and the degradation path is tested; rerank stays off in the demo ([§9](#phase-6--re-ranking-with-measured-lift), [§12](#12-assumptions-and-open-items)). **Phase 7 done (2026-10-15):** `/v1/ask` generates through the provider router, so a simulated 429 on Gemini is answered by Groq and the breaker skips Gemini until its reset, and the fallback rate is in `request_logs` and in the log lines. Nothing has been measured against live Groq or a real Gemini 429, and the deployed demo has no fallback until the Author sets `GROQ_API_KEY` and `GROQ_MODEL` in Vercel ([§9](#phase-7--multi-provider-fallback--circuit-breaker), [§12](#12-assumptions-and-open-items)) |
 | Owner / Author | probniprobic4@gmail.com |
-| Last updated | 2026-10-12 |
+| Last updated | 2026-10-15 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
 
 ---
@@ -351,6 +351,25 @@ What stays open after Phase 6 is under "Phase 6 closed" in §12.
 | Fallback metrics in logs and response `meta` | G |
 
 **Exit:** simulated 429 on Gemini → Groq answers, breaker skips Gemini until reset. Fallback rate visible in logs.
+
+**Status (2026-10-15): done.** 7.01 decided the breaker's state and timings (D57); 7.02 wrote the router's contract and its
+spec tests and 7.03 implemented it (the Author-owned module `router.py`, written at the Author's "write it"); 7.04a wired it
+into the pipeline (#127) and 7.04b added the local demo and this check. Both exit criteria are met by tests that use fake
+providers: **no real call to Groq or to a real Gemini 429 was made in Phase 7**, so what a live fallback does is not measured
+(the list of what stays open is "Phase 7 closed" in §12).
+
+| # | Exit criterion | Status | Evidence |
+|---|---|---|---|
+| 1 | A simulated 429 on Gemini → Groq answers, and the breaker skips Gemini until reset | **Met** (simulated, as the criterion says) | Through the real app and a real Postgres, with a scripted fake `gemini` and `groq` and a hand-moved clock (`tests/integration/test_fallback.py`, 20 tests): `test_a_429_on_the_primary_is_answered_by_the_fallback_and_logged` (the 429 is answered by Groq, `meta.provider` is `groq` and `meta.fallback_used` true, the row has Groq's provider and model, the budget reserved a unit for each call); `test_the_next_request_skips_an_open_breaker_and_a_trial_closes_it` (while the breaker is open the primary gets **zero** calls and Groq answers; after the open time one trial goes to Gemini, which answers again with `fallback_used` false; the next request is a normal Gemini call); `test_every_breaker_open_is_a_503_with_the_remaining_wait` (every provider open: 503 `provider_unavailable` with `Retry-After`); the bad-output, cache, budget, deadline and startup cases beside them. The router in isolation: `tests/unit/test_router.py::test_a_429_breaker_skips_the_provider_then_goes_half_open_and_recovers` and the 230 other tests of the three router files (`test_router.py` 150, `test_router_robustness.py` 33, `test_router_review.py` 48: every row of the Tech §10 table, the D57 timings, concurrency, cancellation, the clock). `grounded demo-fallback` shows it with no test runner (`docs/runbooks/fallback-demo.md`, run on 2026-10-15: request 1 `provider=groq fallback_used=true`, request 2 `provider=groq` with the Gemini call count still 1 and the log line `provider skipped` (`breaker_open`, 25 s left), request 3 `provider=gemini fallback_used=false`; `PASS`, exit 0). Test run of the Phase 7 files: `329 passed in 6.85s` (the router files 231, `test_fallback.py` 20, `test_demo_fallback.py` 12, `test_fallback_demo_guard.py` 29, `test_pipeline_router.py` 18, `test_runtime_providers.py` 12, `test_request_trace.py` 7); the whole suite (`uv run pytest`, integration tests included): `3153 passed in 141.06s`, no failures, skips or xfails |
+| 2 | Fallback rate visible in logs | **Met** | The same first test asserts all three places: `request_logs.fallback_used`, `provider` and `model` of the row (Groq's); the stdout summary line `request completed` with `provider` and `fallback_used`; and the router's own lines (`breaker opened` with its reason and how the time was derived, `provider attempt failed`, `provider skipped`), which all carry the request's `request_id`, with no question text in any log line. `test_the_next_request_skips_an_open_breaker_and_a_trial_closes_it` then counts the fallback rate with the expression of the dashboard view (DB §8): `count(*) FILTER (WHERE fallback_used)` is 2 of 4 requests. A failed request that tried the fallback counts too (`test_every_breaker_open_is_a_503_with_the_remaining_wait`). The Phase 8 dashboard (`v_request_stats_daily`, `/v1/metrics/summary`) is not built yet: today the rate is a SQL query on `request_logs` and a field in the logs |
+
+What is **not** verified and so not claimed: that a real Gemini 429 has the body the adapter reads (every committed
+Gemini 429 is hand-built), that Groq's real daily 429 carries a usable `retry-after`, how many function instances a burst
+creates (the breaker is per instance and in memory), and that the deployed demo falls back at all (it needs the Author's
+`GROQ_API_KEY` and `GROQ_MODEL` in Vercel; until then it logs `fallback provider skipped, it cannot be built` and runs on
+Gemini alone).
+
+What stays open after Phase 7 is under "Phase 7 closed" in §12.
 
 ### Phase 8 — Observability dashboard, cost, calibration
 | Task | Owner |
@@ -721,6 +740,31 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   provider is skipped longer, never hammered, and the other one answers). A cheap mitigation is not done: for a
   `QUOTA_RESET` open, also keep the wall-clock reset instant and treat the breaker as elapsed once the wall clock
   passes it. It would change `CircuitBreaker.open_for`, which would take that instant as a parameter.
+- **Phase 7 closed (7.04b, 2026-10-15).** The router is in the request path (7.04a, #127), both exit criteria pass by
+  tests (§9) and `grounded demo-fallback` shows the fallback, the breaker skip and the trial with fakes only. **Nothing in
+  Phase 7 touched a real provider** (the Author's rule): no real Gemini 429, no real Groq call. What stays open, all
+  pending-Author unless noted: (1) *The 7.02 router cases.* The Author's review (and extension) of the router's scenarios
+  in `tests/unit/test_router.py` was agreed to come after the phase, in a follow-up PR; it is the open criterion of 7.02.
+  (2) *Groq as the first entry and the cache key.* `build_provider` refuses it (7.04a); the other way out, moving
+  `thinking_level` and `GROQ_REASONING_EFFORT` into the providers and the answer-cache key, is the Author's decision and
+  nothing needs it today (see the `thinking_level` item above). (3) *Real recordings.* The Gemini 429 fixtures
+  (`generate_429_*.json`) and the Groq 429 and 5xx fixtures are hand-made (the Gemini ones are marked `_synthetic`); replace them with recordings
+  when a real Gemini 429 (per-minute and per-day body) and a Groq daily 429 (its `retry-after`) are seen. The router logs
+  every open with its reason and how the time was derived (`breaker opened`: `reason`, `open_s`, `derived`), so the first
+  real one shows what was read. (4) *Instances and the clock.* How many Vercel function instances a burst creates, whether
+  Fluid compute is on (V13) and how the monotonic clock behaves while an instance is frozen are unverified (items (1) and
+  (8) of the Phase 7 decision above). (5) *The Vercel environment.* Setting `GROQ_API_KEY` and `GROQ_MODEL` on the backend
+  project is the Author's step; Phase 7 set nothing in Vercel, Neon or GitHub. Until it is done the deployed backend logs
+  `fallback provider skipped, it cannot be built` at startup and answers from Gemini alone, so the demo has no fallback.
+  **A discrepancy to settle with it:** the Vercel runbook (§3.2, "Production variables") tells the Author **not** to set
+  `GROQ_API_KEY` on the backend, true while Groq was only the eval judge; it was left as it is, because whether to put
+  the Groq key (and its 8K tokens a minute, about 65 to 80 questions a day at the median size, shared with the CI judge)
+  in production is the decision, not a typo. (6) *A docstring of the Author-owned `router.py`.* It words
+  `breakers_enabled=False` as "eval mode and nothing else" and says `Settings` enforces the single provider; since 7.04a
+  `grounded ask` (single question and `--golden`) also builds the router primary only, without breakers or fallbacks, so
+  its golden batch keeps waiting out a 429 and stopping at a daily quota on the provider's own errors (Tech §10, "Wired
+  in 7.04"). The sentence needs updating by the Author; the Agent did not edit the file. (7) *Draft text.* The README's
+  "Resilience" section and the Phase 7 roadmap line are drafts for the Author's final edit.
 - `strip_urls` (Tech §9.6) is a regex, not a Markdown parser: a URL between escaped backticks, or after a "fence" with
   four spaces of indentation, or a bare e-mail address (GFM makes it a `mailto:` link) passes it. Reference
   definitions and `<scheme:…>` autolinks are removed since R.17. The guarantee is planned for the frontend (Phase 5):
