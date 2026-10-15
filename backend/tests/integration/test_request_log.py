@@ -397,8 +397,9 @@ async def test_an_internal_error_is_logged(env: Env) -> None:
 async def test_a_rejected_provider_request_is_a_500_internal_error_without_details(
     env: Env,
 ) -> None:
-    # A 4xx other than 429 (a bad key, a bad request) is our fault and not retryable; until the
-    # router exists it is "anything else" in Tech §13: 500 internal_error, logged with request_id.
+    # A 4xx other than 429 (a bad key, a bad request) is our fault and not retryable: the router
+    # does not route it (it fails over, and with no other provider re-raises it), so it stays
+    # "anything else" in Tech §13: 500 internal_error, logged with request_id.
     rejected = ProviderRequestRejected(
         "Gemini API 400 INVALID_ARGUMENT: secret-detail", status_code=400
     )

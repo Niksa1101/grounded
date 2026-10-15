@@ -1,7 +1,7 @@
 """Typed provider errors shared by every external-API adapter (Tech.md §9.1, AGENTS.md §9).
 
-Adapters translate SDK-specific exceptions into these, so callers (the embedder's retry loop now,
-the LLM router in Phase 7) decide what to do from the type alone and never import an SDK.
+Adapters translate SDK-specific exceptions into these, so callers (the embedder's retry loop, the
+LLM router) decide what to do from the type alone and never import an SDK.
 """
 
 from __future__ import annotations

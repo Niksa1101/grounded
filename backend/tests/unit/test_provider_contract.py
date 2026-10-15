@@ -235,8 +235,9 @@ async def test_a_failed_call_is_not_retried_or_waited_out_by_the_adapter(
 
 
 # --- The retry with feedback, through the real pipeline ------------------------------------------
-# The loop lives in ``AskPipeline`` until the router (Phase 7); what each adapter owes it is a
-# ``ProviderBadOutput`` that is retryable and carries the feedback. ``no_rag`` needs no database.
+# The retry lives in the provider router (7.04; before that in ``AskPipeline``); what each adapter
+# owes it is a ``ProviderBadOutput`` that is retryable and carries the feedback. ``no_rag`` needs no
+# database.
 
 UNCITED_ANSWER = (
     '{"status": "answered", "answer_markdown": "Quokkas sleep.", "claims": '
