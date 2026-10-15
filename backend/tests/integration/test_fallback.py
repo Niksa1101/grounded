@@ -271,6 +271,13 @@ async def test_the_next_request_skips_an_open_breaker_and_a_trial_closes_it(env:
         ("gemini", False),
     ]
     assert (primary.remaining, fallback.remaining) == (0, 0)
+    # The fallback rate of the log: the count the dashboard view of DB.md §8 makes, as plain SQL.
+    [rate] = table(
+        env,
+        "SELECT count(*) FILTER (WHERE fallback_used) AS fallbacks, count(*) AS requests "
+        "FROM request_logs",
+    )
+    assert (rate["fallbacks"], rate["requests"]) == (2, 4)
 
 
 # --- (c) every breaker open: a 503 with the wait ----
