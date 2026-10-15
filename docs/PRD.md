@@ -751,7 +751,11 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   `thinking_level` and `GROQ_REASONING_EFFORT` into the providers and the answer-cache key, is the Author's decision and
   nothing needs it today (see the `thinking_level` item above). (3) *Real recordings.* The Gemini 429 fixtures
   (`generate_429_*.json`) and the Groq 429 and 5xx fixtures are hand-made (the Gemini ones are marked `_synthetic`); replace them with recordings
-  when a real Gemini 429 (per-minute and per-day body) and a Groq daily 429 (its `retry-after`) are seen. The router logs
+  when a real Gemini 429 (per-minute and per-day body) and a Groq daily 429 (its `retry-after`) are seen. The tools are
+  ready (PR #129): `record_generate_fixture.py` of both providers has a `--burst N` option (default 1, hard cap 40) for
+  the per-minute 429 (`error 429_per_minute` for Gemini, `429_per_minute` for Groq) and Groq has the modes
+  `429_per_minute` and `429_daily_quota`; a daily 429 is never provoked, it is recorded right after a real one happened.
+  The recorded body is scrubbed (the `org_...` id of a Groq daily 429, request ids, key shapes). The router logs
   every open with its reason and how the time was derived (`breaker opened`: `reason`, `open_s`, `derived`), so the first
   real one shows what was read. (4) *Instances and the clock.* How many Vercel function instances a burst creates, whether
   Fluid compute is on (V13) and how the monotonic clock behaves while an instance is frozen are unverified (items (1) and
