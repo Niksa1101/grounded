@@ -5,7 +5,7 @@
 
 | | |
 |---|---|
-| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-11zh.vercel.app`, and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). **Phase 6 done (2026-10-14):** `hybrid_rerank` rows are in both baselines, the lift is reported (nDCG@5 0.665 to 0.807, n = 25) and the degradation path is tested; rerank stays off in the demo ([§9](#phase-6--re-ranking-with-measured-lift), [§12](#12-assumptions-and-open-items)). **Phase 7 done (2026-10-15):** `/v1/ask` generates through the provider router, so a simulated 429 on Gemini is answered by Groq and the breaker skips Gemini until its reset, and the fallback rate is in `request_logs` and in the log lines. Nothing has been measured against live Groq or a real Gemini 429, and the deployed demo has no fallback until the Author sets `GROQ_API_KEY` and `GROQ_MODEL` in Vercel ([§9](#phase-7--multi-provider-fallback--circuit-breaker), [§12](#12-assumptions-and-open-items)) |
+| Status | Phases 0–5 done. **The MVP is complete (2026-10-12):** the demo is live at `https://grounded-alpha.vercel.app` (another Vercel account since 2026-10-23, §12), and all four exit criteria of Phase 5 pass ([closeout](runbooks/mvp-closeout.md)). **Phase 6 done (2026-10-14):** `hybrid_rerank` rows are in both baselines, the lift is reported (nDCG@5 0.665 to 0.807, n = 25) and the degradation path is tested; rerank stays off in the demo ([§9](#phase-6--re-ranking-with-measured-lift), [§12](#12-assumptions-and-open-items)). **Phase 7 done (2026-10-15):** `/v1/ask` generates through the provider router, so a simulated 429 on Gemini is answered by Groq and the breaker skips Gemini until its reset, and the fallback rate is in `request_logs` and in the log lines. Nothing has been measured against live Groq or a real Gemini 429; the deployed demo has the fallback configured since 2026-10-23 ([§9](#phase-7--multi-provider-fallback--circuit-breaker), [§12](#12-assumptions-and-open-items)) |
 | Owner / Author | probniprobic4@gmail.com |
 | Last updated | 2026-10-15 |
 | Related | [Tech.md](Tech.md) · [DB.md](DB.md) · [../AGENTS.md](../AGENTS.md) · [../README.md](../README.md) |
@@ -365,9 +365,9 @@ providers: **no real call to Groq or to a real Gemini 429 was made in Phase 7**,
 
 What is **not** verified and so not claimed: that a real Gemini 429 has the body the adapter reads (every committed
 Gemini 429 is hand-built), that Groq's real daily 429 carries a usable `retry-after`, how many function instances a burst
-creates (the breaker is per instance and in memory), and that the deployed demo falls back at all (it needs the Author's
-`GROQ_API_KEY` and `GROQ_MODEL` in Vercel; until then it logs `fallback provider skipped, it cannot be built` and runs on
-Gemini alone).
+creates (the breaker is per instance and in memory), and that the deployed demo falls back on a real failure (its
+`GROQ_API_KEY` and `GROQ_MODEL` are set since 2026-10-23 and the startup line lists `["gemini", "groq"]`, but no production
+request has been answered by Groq yet).
 
 What stays open after Phase 7 is under "Phase 7 closed" in §12.
 
@@ -482,6 +482,23 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
 - **Open after 5.08, resolved by D54 (2026-10-12).** (1) The 2 s retrieval stage timeout: the `Settings` field `RETRIEVAL_TIMEOUT_S` (D54a, ticket [R.21](../tickets/phase-5/R.21-retrieval-timeout.md), done). (2) The outcome of a deadline row: migration `0004` adds `deadline_exceeded` (D54b, [R.20](../tickets/phase-5/R.20-deadline-outcome.md), done). (3) The Gemini adapter stays eager (D54d, no ticket: nothing changes).
 - **Open after the second Phase 5 review (2026-10-13, D56b).** (1) *Neon wake.* `/api/ask` wakes Neon on every request, by design: the rate limiter and the request log are database writes, and a 422 or 429 writes a row too. Neon Free scales to zero after 5 minutes (Tech §18), so one request every 4 minutes keeps the compute awake, about 180 CU-hours a month against the 100 of the plan. No per-IP limit prevents that (one request per 4 minutes passes any of them), and D54c closed only the extra `/readyz` path. The risk is accepted. Watch the compute hours in the Neon console; what Neon does at the limit (expected: the compute is suspended until the month resets, with no data lost) was not checked. An optional Vercel Firewall rate-limit rule caps the volume of a flood, not this slow keep-awake; its steps and Hobby limits are in the Vercel runbook ("Firewall rate-limit rule for `/api/ask`"). (2) *IPv6 `/64`.* The deployment serves no IPv6 on 2026-10-12 (no AAAA record), so `_canonical_ip` keeps one bucket per address. If that changes, a visitor holding a whole `/64` could take one bucket per address and `_canonical_ip` should group IPv6 addresses by their `/64`.
 - Vercel Hobby is non-commercial only: no ads or paid features on the demo.
+- **Vercel Hobby fair use and the account move (2026-10-23).** Hobby includes 4 hours of Fluid Active CPU a month, and
+  the allowance (like Fluid Provisioned Memory, 360 GB-hours) belongs to the **team**, not to a project. The team that
+  hosted the demo went over it with another project of the Author's (its usage page showed 3 h 28 min of 4 h when it was
+  read; how much each project used was not read), and Vercel paused **every** project of the team from 2026-10-16 to the
+  end of the window, 2026-11-14 ("Upgrade to resume service" was the only way out). Both URLs answered
+  `402 DEPLOYMENT_DISABLED` (a manual pause is `503 DEPLOYMENT_PAUSED`), and the daily keep-warm failed from 2026-10-16.
+  The Author moved the demo to a new Vercel account (Hobby) with the same recipe (Vercel runbook, steps 1 to 6): backend
+  `grounded-api` at `https://grounded-tan.vercel.app`, frontend `grounded-web` at `https://grounded-alpha.vercel.app`, both
+  in `cle1`, deployed from `main`; new `PROXY_SHARED_SECRET` and `IP_HASH_SECRET`, the same Neon database and keys; the old
+  projects were deleted. The architecture and the platform do not change (D24, D53). Checked on 2026-10-23: `/healthz`
+  200, `/readyz` 200 with index `0.141.1@4949e8a3`, `/v1/ask` without the secret 401, one uncached question answered by
+  `gemini-3.5-flash-lite` (2.7 s, no retry, no fallback), and a manual `housekeeping` run green (keep-warm `HTTP 200`).
+  Observed while moving: the same GitHub user can be the Login Connection of only one Vercel account at a time; connecting
+  it to the new account succeeded without an error and left it disconnected on the old one. **Risks that stay:** the new
+  account has the same 4-hour allowance, so nothing else may be deployed in it; Vercel's fair-use guidelines treat
+  circumventing a limit as a violation and say nothing about several accounts, which the Author accepts; the cold-start and
+  V1 to V17 results of the Vercel runbook were measured on the first account and were not repeated.
 - **MVP closeout (5.12, 2026-10-12).** The four exit criteria of Phase 5 were checked in [runbooks/mvp-closeout.md](runbooks/mvp-closeout.md), first with two pending and then, after the Author's rollout the same day, all passing: (1) live URL and cold start measured; (2) rate limit and budget verified manually on the live site; (3) README numbers from committed output or a dated measurement; (4) all five workflows green on `main`. What is deferred, with its source, is the last section of that file.
 - **Ask page, open items (5.07).** (1) The page has no jsdom or testing-library, so focus moving to a source card, the ticking countdown and the collapsible are checked by a manual keyboard walkthrough, not a test; a component-test setup needs the Author's approval as a new dev dependency. (2) Claim confidence is shown in a list next to the prose, not on the prose itself: `answer_markdown` is not split per claim, so a `[n]` marker cannot carry its claim's confidence. (3) The page is light-theme only (the `.dark` tokens exist but nothing switches them on); a dark theme would need the code-highlight palette in `app/globals.css` redone for contrast.
 - Exact model IDs (Gemini Flash, Groq model, judge model, Cohere rerank model) are pinned in config at implementation time after checking current availability and free-tier limits. They are never assumed from memory. The embedding model is the exception: it was verified on 2026-09-26 (Phase 1) and is a default in `Settings`, since it is tied to the index. The Gemini generator was pinned in 3.01 (D46, 2026-10-06); the Groq model and the judge in 4.01 (D48, 2026-10-08); the Cohere rerank model in 6.01 (D55, 2026-10-12).
@@ -760,8 +777,9 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   real one shows what was read. (4) *Instances and the clock.* How many Vercel function instances a burst creates, whether
   Fluid compute is on (V13) and how the monotonic clock behaves while an instance is frozen are unverified (items (1) and
   (8) of the Phase 7 decision above). (5) *The Vercel environment.* Setting `GROQ_API_KEY` and `GROQ_MODEL` on the backend
-  project is the Author's step; Phase 7 set nothing in Vercel, Neon or GitHub. Until it is done the deployed backend logs
-  `fallback provider skipped, it cannot be built` at startup and answers from Gemini alone, so the demo has no fallback.
+  project is the Author's step; Phase 7 set nothing in Vercel, Neon or GitHub. **Done on 2026-10-23** in the new Vercel
+  account (see the item on the account move): the startup line `generator providers ready` lists `["gemini", "groq"]`,
+  `primary_only` false, and there is no `fallback provider skipped` WARNING. No production request has used Groq yet.
   **The runbook discrepancy is settled (PR #129):** the Vercel runbook told the Author **not** to set `GROQ_API_KEY`,
   true while Groq was only the eval judge. It now documents the pair as the **optional** step 3.2a (the two
   `vercel env add` commands, the key typed at the prompt, the redeploy, and a check: the startup line

@@ -129,8 +129,11 @@ git checkout -- .gitignore
 
 The project name decides the domain only when it is free. On the first run both names were taken:
 the backend project `grounded` got `grounded-snowy.vercel.app`, and the frontend project was created
-as `grounded-11zh`. Use the domain that Settings, Domains shows, wherever this runbook says
-`BACKEND_URL` or `FRONTEND_URL`.
+as `grounded-11zh`. On the second run (a new account, 2026-10-23) both projects were created with the
+name `grounded` although another name was meant, so they were renamed afterwards in Settings, General
+(`grounded-api`, `grounded-web`); a rename keeps the domain, which stayed `grounded-tan.vercel.app` and
+`grounded-alpha.vercel.app`. Check the name on the import screen just before Deploy, and use the domain
+that the project's Overview shows wherever this runbook says `BACKEND_URL` or `FRONTEND_URL`.
 
 ### 3.2 Production variables
 
@@ -659,7 +662,7 @@ kept per region, so traffic from one source spread over several regions can exce
 one region. **Unverified:** what Hobby does after the 1,000,000 included requests (the first rule shows a
 "Rate Limiting Pricing" dialog: read it before you select Continue), and the exact dashboard labels below.
 
-**Steps** (frontend project `grounded-11zh`, the public origin; the backend project does not need one):
+**Steps** (frontend project `grounded-web`, the public origin; the backend project does not need one):
 
 1. Dashboard, the frontend project, **Firewall**, **Configure**, **+ New Rule**.
 2. Name it `ask-flood`. Condition: request path equals `/api/ask`.
@@ -687,6 +690,12 @@ for a flood and cannot reach a visitor who stays inside the backend's own limit.
 it in the same place; nothing else depends on it.
 
 ## Results
+
+These results are from the **first** deployment, in the first Vercel account. Vercel paused that team on
+2026-10-16 for exceeding the Hobby Fluid Active CPU allowance (4 hours a month, shared by all the team's
+projects; PRD §12), and the demo moved to a second account on 2026-10-23 (frontend
+`https://grounded-alpha.vercel.app`, backend `https://grounded-tan.vercel.app`). The tables below are left
+as they were measured; the second deployment is under [Second deployment](#second-deployment-2026-10-23).
 
 First deployment, 2026-10-12, run by the Author with the agent reading logs and reports (`vercel logs`,
 `vercel inspect`, `gh run view`; nothing written to production by the agent). The two projects:
@@ -834,6 +843,32 @@ Regions in `x-vercel-id` (expected `cle1`, D53): `fra1::cle1`
 | 9 | ask | warm | HTTP 200 | 2.76 s | 2.40 s | no |
 | 10 | ask | warm | HTTP 200 | 2.63 s | 2.28 s | no |
 
+### Second deployment (2026-10-23)
+
+A new Hobby account, the same recipe (steps 1 to 6, with the optional 3.2a), run by the Author in PowerShell
+with the agent reading logs (`vercel logs`, `gh run view`). Step 7 and the V-checklist were not repeated, and
+the cold start was not measured again.
+
+| | Backend | Frontend |
+|---|---|---|
+| Project | `grounded-api` | `grounded-web` |
+| Production domain | `https://grounded-tan.vercel.app` | `https://grounded-alpha.vercel.app` |
+| Production variables | 11 (the nine of 3.2 and the Groq pair of 3.2a), 5 of them Secret | 2 |
+| Preview variables | the 7 Config placeholders of 3.3 | none |
+
+- `/healthz` `200 {"status":"ok"}`; `/readyz` with the secret `200`, index `0.141.1@4949e8a3`; `/v1/ask`
+  without the secret `401 unauthorized`. Every `x-vercel-id` was `fra1::cle1::…`.
+- 3.2a: the startup line `generator providers ready` with `providers` `["gemini", "groq"]` and `primary_only`
+  false, and no `fallback provider skipped` WARNING.
+- Step 6: an uncached question through the page was answered by `gemini-3.5-flash-lite` in 2.73 s, with
+  `validation_retries` 0 and `fallback_used` false (a cached question through `/api/ask` answered in 0.67 s).
+- `housekeeping` by hand: `retention` and `keep-warm` green (`attempt 1/4: HTTP 200`), after the repository
+  variable `BACKEND_URL` and the secret `PROXY_SHARED_SECRET` were updated.
+- Seen on the way: a GitHub user is the Login Connection of one Vercel account at a time (connecting it to the
+  new account removed it from the old one, without an error); on Windows a secret copied to the clipboard is
+  overwritten when the next command is copied from a guide, so the clipboard is filled on the same line as the
+  `vercel env add` prompt (`$env:NAME | Set-Clipboard; vercel env add NAME production --sensitive`).
+
 ## When something fails
 
 | Symptom | What it means | What to do |
@@ -845,6 +880,7 @@ Regions in `x-vercel-id` (expected `cle1`, D53): `fra1::cle1`
 | `/readyz` 401 | The request had no `X-Proxy-Secret`, or a value that differs from the backend's `PROXY_SHARED_SECRET` (D54c) | Step 4: export the production value and send the header; for `housekeeping.yml`, the repository secret `PROXY_SHARED_SECRET` (Neon runbook step 10) |
 | Frontend `500 proxy_misconfigured` | `BACKEND_URL` or `PROXY_SHARED_SECRET` is unset in the Production environment of the frontend, or the deployment predates them | Step 5.1, then a new deployment |
 | Frontend `502 upstream_unavailable` | `BACKEND_URL` points at a protected deployment URL (an HTML login page), or at nothing | Use the production domain |
+| Every URL of both projects answers `402 DEPLOYMENT_DISABLED` | The team is paused by Vercel's fair use (Hobby: 4 hours of Fluid Active CPU a month for the whole team; the team's Usage page says until when). A project you paused yourself answers `503 DEPLOYMENT_PAUSED` instead | Find the project that uses the CPU (Usage); wait for the window to end, upgrade, or move the projects (PRD §12, 2026-10-23) |
 | A deployment stays in Initializing for minutes | Usually on Vercel's side: check vercel-status.com. The previous deployment keeps serving with its own variables | Wait; if it does not start, cancel it and redeploy later |
 | Frontend `504 upstream_timeout` | The backend did not answer within 35 s | Step 9 tells whether it is the cold start |
 | The cold ask of step 9 is `504 deadline_exceeded` | Our own backend 504: the 25 s deadline or the 2 s retrieval timeout fired (D53, D54a) | Look up the printed `request_id` in `request_logs` (Neon runbook step 4 shows how to connect as the owner): `latency_retrieval_ms` near 2000 and `latency_llm_ms` NULL is the retrieval timeout (raise `RETRIEVAL_TIMEOUT_S`, V17); otherwise the stage timings show where the 25 s went |
