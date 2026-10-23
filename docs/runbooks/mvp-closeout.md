@@ -282,6 +282,9 @@ else. No cold-start, live latency or live cost figure exists yet.
 
 ## Results
 
+The demo moved to another Vercel account on 2026-10-23 (`https://grounded-alpha.vercel.app`, PRD §12); the
+evidence below is from the first deployment and stays as it was recorded.
+
 All on 2026-10-12, by the Author, through `https://grounded-11zh.vercel.app/api/ask`, from PowerShell
 (the forms above) and a phone on mobile data; the SQL as the owner. The question of parts 1 and 2 was
 the cached smoke-test question, so neither part spent quota.

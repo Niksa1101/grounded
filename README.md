@@ -12,7 +12,7 @@
 
 | | |
 |---|---|
-| Live demo | <https://grounded-11zh.vercel.app> (free tiers: 20 questions a day per visitor, a shared daily budget, and the first question after a quiet period takes a few seconds longer) |
+| Live demo | <https://grounded-alpha.vercel.app> (free tiers: 20 questions a day per visitor, a shared daily budget, and the first question after a quiet period takes a few seconds longer) |
 | Metrics dashboard | _TBD (Phase 8)_ |
 | Docs | [Product spec (PRD)](docs/PRD.md) · [Technical design](docs/Tech.md) · [Database](docs/DB.md) · [Rules for contributors & agents](AGENTS.md) · [Runbooks](docs/runbooks/) |
 
@@ -63,12 +63,12 @@ flowchart LR
     API --> DB[(Neon Postgres<br/>pgvector + FTS<br/>rate limit · budget · cache · logs)]
     API -. "optional, off in the demo" .-> RR[Cohere rerank]
     API --> LLM[Gemini Flash-Lite]
-    API -. "built (Phase 7), waits for the Groq key<br/>fallback on 429/5xx/timeout" .-> LLM2[Groq]
+    API -. "fallback on 429/5xx/timeout (Phase 7)" .-> LLM2[Groq]
     ING[Ingest CLI<br/>pinned FastAPI tag] --> DB
     CI[GitHub Actions<br/>tests · retrieval eval · promptfoo gate] -. "judge today" .-> LLM2
 ```
 
-Dotted edges are not in the request path of the deployed demo: rerank is built but switched off, and the fallback is built (Phase 7) but waits for the Author to set the Groq key and model in Vercel, so Groq is the eval judge only until then ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
+Dotted edges are not in the normal request path of the deployed demo: rerank is built but switched off, and Groq answers only when Gemini fails (the fallback is configured in the demo since 2026-10-23); Groq is also the CI eval judge ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
 Request flow: validate → rate-limit → cache lookup → budget check → embed → hybrid retrieve (dense ∪ FTS → RRF) →
 (optional rerank →) build context → reserve budget → structured generation → validate/retry → map citations → score confidence → log →
 respond. Details and the contracts: [docs/Tech.md §1](docs/Tech.md).
@@ -565,9 +565,10 @@ exhausted too, which is the all-providers-open `503`.
 
 **What is not measured.** No real fallback was ever exercised against live Groq, and no real Gemini 429 has been recorded:
 every 429 in the tests and in the demo is scripted, and the committed 429 and 5xx fixtures are hand-made. The deployed demo
-has **no fallback yet**: it needs `GROQ_API_KEY` and `GROQ_MODEL` in Vercel, which is the Author's step (optional, with the
-commands, the redeploy and a log check, in [step 3.2a of the Vercel runbook](docs/runbooks/vercel-deploy.md#32a-optional-enable-the-groq-fallback-your-production-decision)); without them the
-backend logs `fallback provider skipped, it cannot be built` at startup and runs on Gemini alone. `groq` cannot be the
+has the fallback **configured** since 2026-10-23: `GROQ_API_KEY` and `GROQ_MODEL` are set in Vercel ([step 3.2a of the Vercel
+runbook](docs/runbooks/vercel-deploy.md#32a-optional-enable-the-groq-fallback-your-production-decision)), and the startup line
+`generator providers ready` lists `["gemini", "groq"]` with no `fallback provider skipped` WARNING. Configured is not measured:
+no production request has been answered by Groq yet. `groq` cannot be the
 *first* provider (the answer-cache key does not hold its reasoning effort), and `grounded ask` and the evals run the first
 provider alone, without breakers. The open items are in [PRD §12, "Phase 7 closed"](docs/PRD.md#12-assumptions-and-open-items).
 
@@ -590,6 +591,7 @@ so there is no production failure here: the systematic analysis from request log
 | **The generation gate did not see weakened instructions** | Six prompt edits that weaken the instructions moved no gated metric; the one edit that tripped the gate was a prompt/schema format mismatch (PRD §12, 4.12; the second demonstration above) | The gate is not a substitute for reading a prompt diff, and another model could behave differently |
 | **The judge was shown to be thin where it matters** | Correctness agreement with the Author is the weak spot of the [judge–human agreement](#judge-human-agreement), and no real claim in the sample was `NOT_SUPPORTED` | The faithfulness baseline means "the judge found no unsupported claim", not a verified zero hallucination rate |
 | **A red `eval` could be merged** | The demo PR #86 showed `MERGEABLE` because `eval` was not a required check; making it required (#88, 2026-10-10) turned it `BLOCKED` (PRD §12) | The label `run-eval` is still the weak point: a quality-affecting PR without it is not evaluated |
+| **The demo was down for a week because of another project** | Vercel paused the whole Hobby team on 2026-10-16 for Fluid Active CPU (4 hours a month), used by a different project of the Author's; both URLs answered `402 DEPLOYMENT_DISABLED` and the daily keep-warm failed from 2026-10-16 to 2026-10-23 (PRD §12) | A Hobby team's allowance is shared by all its projects. The demo now lives in an account of its own |
 | **Citation precision is the weakest scored generation metric** | the generation table above (it has no PRD §8 target) | Not analysed yet |
 
 ### Limitations
@@ -602,9 +604,13 @@ so there is no production failure here: the systematic analysis from request log
 - **Cold start.** The first request after idle pays a serverless function start plus a Neon wake (Neon scales to zero after 5
   minutes): 7.04 s end to end once, against about 2.5 s warm ([cost and latency](#cost-and-latency)); the ask page shows a
   "waking up" state.
-- **No fallback in the deployed demo yet.** The router and its breaker are built and tested (Phase 7), but the backend has no
-  Groq key or model in Vercel, so it answers from Gemini alone: a Gemini outage or an exhausted quota is still a `503` there
-  until that is set. Nothing has been measured against live Groq ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
+- **The fallback is configured, not measured.** Since 2026-10-23 the deployed backend has Groq as its second provider (the
+  startup log line shows both), but no production request has been answered by Groq yet, and Groq's free quota is small and
+  shared with the CI judge, so a long Gemini outage still ends in a `503` ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
+- **Vercel Hobby fair use.** Hobby includes 4 hours of Fluid Active CPU a month for the whole team. When the team that hosted
+  the demo went over it (another project of the Author's used the CPU), Vercel paused **every** project of the team from
+  2026-10-16 until the window's end (2026-11-14), and both URLs answered `402 DEPLOYMENT_DISABLED`. The demo moved to another
+  Vercel account on 2026-10-23 (PRD §12).
 - **Single region.** Both Vercel projects run in `cle1`, next to Neon in AWS `us-east-2`. Hobby allows one region and no
   failover; what happens to a project pinned to `cle1` during a `cle1` outage is unverified (PRD §12).
 - **The rate limiter is per client address, in fixed windows.** Up to twice the per-minute limit can pass across a minute
@@ -761,9 +767,11 @@ runbook [docs/runbooks/vercel-deploy.md](docs/runbooks/vercel-deploy.md), which 
 to verify on the first deployment (client IP in the platform logs, the forwarded-for header, the build and bundle, the Neon
 pooler) and the cold-start measurement: `grounded measure-cold-start` times the function start, the Neon wake and a real
 question after an idle period, and says plainly when the 10 s between the backend deadline and the proxy timeout is not
-enough. The first deployment (2026-10-12): frontend <https://grounded-11zh.vercel.app>, backend
-`https://grounded-snowy.vercel.app` (its `/v1` and `/readyz` need the proxy secret). The measured numbers are in the
-runbook's [Results](docs/runbooks/vercel-deploy.md#results).
+enough. Since 2026-10-23 the demo runs in another Vercel account: frontend <https://grounded-alpha.vercel.app>, backend
+`https://grounded-tan.vercel.app` (its `/v1` and `/readyz` need the proxy secret). The first deployment (2026-10-12, frontend
+`grounded-11zh.vercel.app`, backend `grounded-snowy.vercel.app`) was in a team that Vercel paused on 2026-10-16 for exceeding
+the Hobby Active CPU allowance (PRD §12). The measured numbers, all from the first deployment, are in the runbook's
+[Results](docs/runbooks/vercel-deploy.md#results).
 
 ## Operations
 
@@ -800,7 +808,7 @@ target); `EVAL_RECORD_RUNS` is unset, so CI does not write `eval_runs`. The keep
 | 4 | promptfoo generation eval + CI quality gate | ✅ done ([closeout](tickets/phase-4/4.12-closeout.md)) |
 | 5 | UI, abuse protection, deployment. **MVP** | ✅ done, live ([closeout](docs/runbooks/mvp-closeout.md); [MVP status](#mvp-status)) |
 | 6 | Re-ranking with measured lift | ✅ done: nDCG@5 0.665 to 0.807 (n = 25), off in the demo ([Re-ranking: what it bought](#re-ranking-what-it-bought)) |
-| 7 | Provider fallback + circuit breaker | ✅ done: a simulated 429 on Gemini is answered by Groq and the breaker skips Gemini until reset, and the fallback rate is in the logs; nothing measured against live Groq, and no fallback in the deployed demo until the Groq key is set ([Resilience](#resilience-fallback-and-circuit-breaker-draft)) |
+| 7 | Provider fallback + circuit breaker | ✅ done: a simulated 429 on Gemini is answered by Groq and the breaker skips Gemini until reset, and the fallback rate is in the logs; configured in the deployed demo since 2026-10-23, nothing measured against live Groq ([Resilience](#resilience-fallback-and-circuit-breaker-draft)) |
 | 8 | Observability dashboard, cost, calibration | ⬜ |
 | 9 | Failure-mode analysis, polish | ⬜ |
 
