@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fakeMetrics } from "./metrics-dev-fixtures";
 import {
+  FAILURE_BACKOFF_MS,
   loadMetrics,
   METRICS_REVALIDATE_S,
   parseWindowParam,
+  resetFailureBackoff,
   serveMetrics,
   type MetricsConfig,
 } from "./metrics-source";
@@ -26,6 +28,7 @@ function get(query = ""): Request {
 
 beforeEach(() => {
   vi.spyOn(console, "error").mockImplementation(() => {});
+  resetFailureBackoff();
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -54,13 +57,17 @@ describe("loadMetrics", () => {
   });
 
   it("maps a 401 to misconfigured and other failures to unavailable", async () => {
+    const fresh = (cfg: MetricsConfig) => {
+      resetFailureBackoff(); // each case on its own
+      return loadMetrics("7d", cfg);
+    };
     const answer = (status: number, body: unknown) => vi.fn().mockResolvedValue(Response.json(body, { status }));
     const err = { error: { code: "internal_error", message: "secret backend detail" }, request_id: "x" };
-    expect(await loadMetrics("7d", config(answer(401, err)))).toEqual({ ok: false, code: "proxy_misconfigured" });
-    expect(await loadMetrics("7d", config(answer(500, err)))).toEqual({ ok: false, code: "upstream_unavailable" });
-    expect(await loadMetrics("7d", config(answer(504, err)))).toEqual({ ok: false, code: "upstream_timeout" });
+    expect(await fresh(config(answer(401, err)))).toEqual({ ok: false, code: "proxy_misconfigured" });
+    expect(await fresh(config(answer(500, err)))).toEqual({ ok: false, code: "upstream_unavailable" });
+    expect(await fresh(config(answer(504, err)))).toEqual({ ok: false, code: "upstream_timeout" });
     // A 200 that is not the summary (a platform page, another API) is not trusted.
-    expect(await loadMetrics("7d", config(answer(200, { hello: 1 })))).toEqual({
+    expect(await fresh(config(answer(200, { hello: 1 })))).toEqual({
       ok: false,
       code: "upstream_unavailable",
     });
@@ -72,6 +79,26 @@ describe("loadMetrics", () => {
       ok: false,
       code: "upstream_timeout",
     });
+  });
+
+  it("after a failure, answers it again without a backend call for the backoff, per window", async () => {
+    let now = 1_000_000;
+    const fetchImpl = vi.fn().mockRejectedValue(new TypeError("fetch failed"));
+    const cfg = config(fetchImpl, { now: () => now });
+
+    expect(await loadMetrics("7d", cfg)).toEqual({ ok: false, code: "upstream_unavailable" });
+    now += FAILURE_BACKOFF_MS - 1;
+    expect(await loadMetrics("7d", cfg)).toEqual({ ok: false, code: "upstream_unavailable" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+
+    await loadMetrics("1d", cfg); // another window is asked
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+
+    now += 1; // the 7d backoff is over: ask again, and a success clears it
+    fetchImpl.mockImplementation(async () => Response.json(SUMMARY));
+    expect(await loadMetrics("7d", cfg)).toEqual({ ok: true, data: SUMMARY });
+    expect(await loadMetrics("7d", cfg)).toEqual({ ok: true, data: SUMMARY });
+    expect(fetchImpl).toHaveBeenCalledTimes(4);
   });
 
   it("is unavailable when the network fails", async () => {
@@ -99,10 +126,20 @@ describe("serveMetrics", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     const text = await response.text();
     expect(JSON.parse(text)).toEqual({
-      error: { code: "bad_request", message: "window must be one of 1d, 7d or 30d." },
+      error: { code: "bad_request", message: "The only query parameter is window: 1d, 7d or 30d." },
       request_id: null,
     });
     expect(text).not.toContain("script");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("refuses any other query parameter, so only the canonical URLs reach the backend", async () => {
+    const fetchImpl = vi.fn();
+    for (const query of ["?window=1d&n=1", "?n=1", "?window=1d&window=7d", "?window=7d&junk"]) {
+      const response = await serveMetrics(get(query), config(fetchImpl));
+      expect(response.status).toBe(422);
+      expect(await response.text()).not.toContain("n=1");
+    }
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
@@ -132,9 +169,11 @@ describe("serveMetrics", () => {
 
 describe("parseWindowParam", () => {
   it("defaults when absent and refuses anything outside the enum", () => {
-    expect(parseWindowParam(null)).toBe("7d");
-    expect(parseWindowParam("1d")).toBe("1d");
-    expect(parseWindowParam("")).toBeNull();
-    expect(parseWindowParam("365d")).toBeNull();
+    const parse = (query: string) => parseWindowParam(new URLSearchParams(query));
+    expect(parse("")).toBe("7d");
+    expect(parse("window=1d")).toBe("1d");
+    expect(parse("window=")).toBeNull();
+    expect(parse("window=365d")).toBeNull();
+    expect(parse("window=1d&x=1")).toBeNull();
   });
 });

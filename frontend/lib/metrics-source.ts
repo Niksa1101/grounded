@@ -1,14 +1,35 @@
 // Server side of the dashboard: one function that reads GET /v1/metrics/summary with the proxy
 // secret (used by the /metrics page and by GET /api/metrics), and the JSON the Route Handler
 // answers with. Like lib/ask-proxy.ts it never reads process.env (the callers pass the config), so
-// a unit test drives it without a Next server, and no client component imports it.
+// a unit test drives it without a Next server. `server-only` makes a client import a build error.
+import "server-only";
+
 import type { MetricsWindow, ProxyErrorCode, ProxyErrorResponse } from "./api";
-import { DEFAULT_WINDOW, isMetricsSummary, isWindow, type MetricsResult } from "./metrics";
+import {
+  DEFAULT_WINDOW,
+  isMetricsSummary,
+  isWindow,
+  type MetricsFailure,
+  type MetricsResult,
+} from "./metrics";
 
 // Tech §14: the dashboard is revalidated every 60 s. Next's Data Cache keys a fetch by its URL and
-// init, so the page and the Route Handler share one cached entry per window: the backend (and the
-// Neon database behind it) is asked at most about once a minute per window, whatever the traffic.
+// init, so the page and the Route Handler share one cached entry per window: while the backend
+// answers, it (and the Neon database behind it) is asked at most about once a minute per window,
+// whatever the traffic. The Data Cache stores only 200s, so it does not bound the failure case;
+// FAILURE_BACKOFF_MS below does.
 export const METRICS_REVALIDATE_S = 60;
+
+// After a failed call, this server instance answers the same failure for this long without asking
+// the backend again: during an outage every request would otherwise be a backend call (and a
+// possible Neon wake). Per instance and per window; a new instance asks once.
+export const FAILURE_BACKOFF_MS = 60_000;
+const recentFailures = new Map<MetricsWindow, { until: number; code: MetricsFailure }>();
+
+/** Tests only: forget the failures of earlier calls. */
+export function resetFailureBackoff(): void {
+  recentFailures.clear();
+}
 
 // Long enough for a cold backend (function start about 2.6 s plus the Neon wake, Tech §18), short
 // enough that a page regeneration or a visitor does not hang on a stuck one. The route's
@@ -20,6 +41,7 @@ export interface MetricsConfig {
   sharedSecret: string | undefined;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  now?: () => number;
 }
 
 /**
@@ -55,6 +77,21 @@ export async function loadMetrics(
     console.error("metrics: BACKEND_URL and PROXY_SHARED_SECRET must both be set");
     return { ok: false, code: "proxy_misconfigured" };
   }
+  const now = (config.now ?? Date.now)();
+  const held = recentFailures.get(window);
+  if (held && now < held.until) return { ok: false, code: held.code };
+  const result = await fetchSummary(window, backendUrl, sharedSecret, config);
+  if (result.ok) recentFailures.delete(window);
+  else recentFailures.set(window, { until: now + FAILURE_BACKOFF_MS, code: result.code });
+  return result;
+}
+
+async function fetchSummary(
+  window: MetricsWindow,
+  backendUrl: string,
+  sharedSecret: string,
+  config: MetricsConfig,
+): Promise<MetricsResult> {
   const url = `${backendUrl.replace(/\/+$/, "")}/v1/metrics/summary?window=${window}`;
   const doFetch = config.fetchImpl ?? fetch;
   try {
@@ -97,18 +134,25 @@ function failure(status: number, code: ProxyErrorCode, message: string): Respons
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
 }
 
-/** The `window` query parameter: absent is the default, anything outside the enum is refused. */
-export function parseWindowParam(raw: string | null): MetricsWindow | null {
+/**
+ * The query string: `window` alone, at most once (absent is the default). Anything else is refused,
+ * so only the three canonical URLs exist: a junk parameter would otherwise make a new CDN cache key,
+ * and so a new function invocation, per request.
+ */
+export function parseWindowParam(params: URLSearchParams): MetricsWindow | null {
+  const keys = [...params.keys()];
+  if (keys.some((key) => key !== "window") || keys.length > 1) return null;
+  const raw = params.get("window");
   if (raw === null) return DEFAULT_WINDOW;
   return isWindow(raw) ? raw : null;
 }
 
 /** GET /api/metrics?window=: validate, load (Data Cache, 60 s), answer JSON. */
 export async function serveMetrics(request: Request, config: MetricsConfig): Promise<Response> {
-  const window = parseWindowParam(new URL(request.url).searchParams.get("window"));
+  const window = parseWindowParam(new URL(request.url).searchParams);
   if (window === null) {
-    // The value is not echoed (the backend's 422 rule, Tech §13).
-    return failure(422, "bad_request", "window must be one of 1d, 7d or 30d.");
+    // Nothing of the query is echoed (the backend's 422 rule, Tech §13).
+    return failure(422, "bad_request", "The only query parameter is window: 1d, 7d or 30d.");
   }
   const result = await loadMetrics(window, config);
   if (!result.ok) {
