@@ -546,9 +546,11 @@ $$;
 
 - **No private column, no eval row.** No view selects `question`, `question_hash`, `ip_hash` or `id` (the request id),
   and every view keeps `source IN ('web', 'api')`: CI's `eval` rows are not users. The integration tests
-  (`tests/integration/test_dashboard_views.py`) assert the exact column set of each view. A view reads `request_logs`
-  with its owner's rights, so SELECT on the views is all a reader of the dashboard needs, and it reaches only the
-  columns the view selects.
+  (`tests/integration/test_dashboard_views.py`) assert the exact column set of each view. **The views are the query
+  contract, not a privilege boundary:** in production `app` still has SELECT on `request_logs` itself (§5, the
+  runtime writes and reads its rows), so the privacy line holds because `GET /v1/metrics/summary` (8.02) reads only
+  the views, never the table. (A view reads its table with its owner's rights, so SELECT on the views alone would be
+  enough for a reader; the tests show it on a role without the table grant.)
 - **`v_request_stats_daily`**, one row per **UTC day**: `(created_at AT TIME ZONE 'utc')::date` does not depend on the
   session `TimeZone` (`date_trunc('day', created_at)` would cut the day at the session's midnight), and a `date` cannot
   be shifted into a client's zone. `validation_retries` counts the requests with at least one retry (`> 0`), not the
@@ -565,6 +567,8 @@ $$;
   small sample gives a number that moves smoothly as rows arrive; `percentile_disc` returns one of the observed values
   and jumps between them. Latencies are integers; the result is `double precision`.
 - The views have no `ORDER BY`: a reader orders (`ORDER BY day`).
+- **Changing a column the views select** (its type, or dropping it) needs the view rebuilt in the same migration:
+  see §10.
 
 ## 9. Retention and housekeeping
 
@@ -635,6 +639,11 @@ and then deleted by the ingest CLI (`grounded index prune`). Chunks and document
 - Checksums are sha256 over the file with CRLF normalized to LF (`.gitattributes` also forces LF), so a Windows checkout doesn't look like an edit.
 - The runner (`grounded.infra.migrations`) uses **sync** psycopg: it is offline tooling, not the request path. It takes a Postgres advisory lock so two concurrent runs can't interleave. Files run with no bind parameters, so psycopg uses the simple query protocol and a file may hold several statements.
 - Destructive changes (dropping columns/tables) need an explicit Author decision and a note in the PR.
+- **Columns under a view.** Postgres refuses to alter the type of, or drop, a column a view selects. A migration that
+  does either to a `request_logs` column a dashboard view (§8) selects must, in the same file, `DROP VIEW` the view,
+  make the change, `CREATE VIEW` it again **and repeat the guarded `DO` grant of `0005`**: a dropped view loses its
+  grants, and production never re-runs the §5 role block (it runs once, when the role is created). `CREATE OR
+  REPLACE VIEW` is no way around it: it can only append columns at the end, not change or remove one.
 - Production migrations run from CI (`workflow_dispatch`): `.github/workflows/migrate.yml` runs `grounded migrate` and nothing else, from `main` only, with `DATABASE_URL_DIRECT` behind the same guard as `ingest.yml` (Tech §17; `ingest.yml` also migrates before it ingests). Or locally with the owner's direct URL. Never from the runtime process.
 
 ## 11. Capacity estimate

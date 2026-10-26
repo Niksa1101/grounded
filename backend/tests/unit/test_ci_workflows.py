@@ -249,7 +249,7 @@ def test_ingest_activates_only_on_request_and_never_overlaps_itself() -> None:
         r"        type: boolean",
         text,
     )
-    assert "group: ingest-neon-production\n  cancel-in-progress: false" in text
+    assert "group: neon-production-writes\n  cancel-in-progress: false" in text
     ingest = step_named("ingest.yml", "Ingest")
     assert 'if [ "$ACTIVATE" = "true" ]; then' in ingest  # the flag is conditional, never fixed
     assert re.findall(r"--activate", ingest) == ["--activate"]
@@ -329,10 +329,21 @@ def test_migrate_has_read_only_permissions_and_never_overlaps_itself() -> None:
     text = code(MIGRATE)
 
     assert re.search(r"(?m)^permissions:\n  contents: read$", text)
-    assert "write" not in text.split("\njobs:\n", 1)[0]
-    assert "group: migrate-neon-production\n  cancel-in-progress: false" in text
+    assert not re.search(r"(?m)^\s+[\w-]+: write$", text)  # no write permission anywhere
+    assert "group: neon-production-writes\n  cancel-in-progress: false" in text
     # The optional approval gate of ingest.yml: a manual production write may wait for a click.
     assert re.search(r"(?m)^    environment: neon-production$", text)
+
+
+def test_migrate_and_ingest_share_one_concurrency_group_so_writes_never_overlap() -> None:
+    pattern = r"(?m)^concurrency:\n  group: (.+)\n  cancel-in-progress: (.+)$"
+
+    groups = {name: re.findall(pattern, code(name)) for name in ("ingest.yml", MIGRATE)}
+
+    assert groups == {
+        "ingest.yml": [("neon-production-writes", "false")],
+        MIGRATE: [("neon-production-writes", "false")],
+    }
 
 
 def test_migrate_guards_the_connection_like_ingest_before_anything_is_installed() -> None:

@@ -4,9 +4,8 @@
 # Neon without an ingest run.
 #
 # - Trigger: `workflow_dispatch` only, from `main` only (the job's `if`). The Author starts it. An
-#   agent may dispatch it only with the Author's explicit go-ahead for that migration (given for
-#   0005_dashboard_views on 2026-10-26; AGENTS.md §5, §11). A PR, a push or a schedule cannot reach
-#   the secret below.
+#   agent may dispatch it only with the Author's explicit go-ahead for that run (AGENTS.md §5,
+#   §11). A PR, a push or a schedule cannot reach the secret below.
 # - `DATABASE_URL_DIRECT` (the owner role's DIRECT, non-pooled Neon URL) is a repository secret, as
 #   in Tech §17. It is passed to two steps and to nothing else: the guard (the same one as
 #   ingest.yml, kept in step with it by a test) and the migrate step. Not the job, not a third-party
@@ -15,8 +14,10 @@
 # - The environment `neon-production` is the optional approval gate of ingest.yml: give it a
 #   required reviewer and every run waits for the Author's click. Without protection rules it
 #   changes nothing.
-# - Two runs never overlap (the concurrency group; a queued run waits, none is cancelled). The
-#   migration runner's advisory lock also serializes it with ingest.yml's migrate step.
+# - Two production writes never overlap: this workflow and ingest.yml share the concurrency group
+#   `neon-production-writes` (no cancel), so a run waits for the other workflow's run too. GitHub
+#   keeps one waiting run per group: a third dispatch while one waits replaces the waiting one.
+#   The migration runner's advisory lock serializes the migrate steps as well.
 # - The output (what this run applied, and the count already up to date) goes to the job summary.
 name: migrate
 
@@ -27,7 +28,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: migrate-neon-production
+  group: neon-production-writes
   cancel-in-progress: false
 
 jobs:

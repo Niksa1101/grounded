@@ -9,8 +9,9 @@ afterwards) ``app`` can read the views and still cannot reach a private column t
 
 The content tests run in one transaction that starts by deleting every ``request_logs`` row and is
 rolled back at the end, so rows other tests committed cannot change an aggregate. The grant tests
-use databases of their own and the cluster-wide role ``app``, which must not exist beforehand: a
-role another session or a developer created is never dropped by these tests.
+use databases of their own and the cluster-wide role ``app``, under an advisory lock on the
+maintenance database so that two pytest sessions never race on the role. A role ``app`` these tests
+did not create is never dropped: the test fails and says how to remove it.
 """
 
 from __future__ import annotations
@@ -406,60 +407,108 @@ def test_a_window_aggregate_over_request_metrics_takes_the_window_as_a_bound_par
 
 # --- the guarded grant ----------------------------------------------------------------------------
 
+# The role `app` is cluster-wide, so two pytest sessions with different TEST_DATABASE_URLs (which do
+# not wait for each other, tests/db_lock.py) would race on it. Both grant tests take this session
+# advisory lock on the maintenance database first; the server releases it when the connection
+# closes, also when the process is killed.
+_ROLE_LOCK_KEY = "grounded-tests-cluster-role-app"
+_ROLE_LOCK_TIMEOUT = "10min"
+# Marks a role these tests created, so a leftover of an interrupted run can be told from a role a
+# developer made (which is never dropped here).
+_ROLE_MARKER = "created by tests/integration/test_dashboard_views.py"
+
 
 def _admin_url(test_database_url: str) -> str:
     return make_conninfo(test_database_url, dbname="postgres")
 
 
-def _app_role_exists(admin_url: str) -> bool:
-    with psycopg.connect(admin_url, autocommit=True) as admin:
-        return admin.execute("SELECT 1 FROM pg_roles WHERE rolname = 'app'").fetchone() is not None
+def _scratch_name(test_database_url: str, tag: str) -> str:
+    dbname = str(conninfo_to_dict(test_database_url)["dbname"])
+    return f"{dbname.removesuffix('_test')}_views_{tag}_test"
 
 
-def _require_no_app_role(admin_url: str) -> None:
-    if _app_role_exists(admin_url):
-        pytest.fail(
-            "a role named app already exists in the local cluster; these tests create and drop "
-            "their own. If it is a leftover, drop it (DROP ROLE app) and run again."
-        )
+def _drop_database(admin: psycopg.Connection[Any], name: str) -> None:
+    admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name)))
+
+
+def _drop_marked_app_role(admin: psycopg.Connection[Any], test_database_url: str) -> None:
+    """Drop this file's ``app``, first its scratch database, then its privileges anywhere else.
+
+    A run interrupted while the role existed can leave grants behind in other local databases too:
+    the next session's ``grounded_test`` is migrated with the role present, so ``0005`` grants it
+    there. ``DROP OWNED BY`` works per database, so it runs in each one ``pg_shdepend`` names.
+    """
+    _drop_database(admin, _scratch_name(test_database_url, "app"))
+    databases = admin.execute(
+        "SELECT DISTINCT d.datname FROM pg_shdepend s JOIN pg_database d ON d.oid = s.dbid"
+        " WHERE s.refclassid = 'pg_authid'::regclass"
+        " AND s.refobjid = (SELECT oid FROM pg_roles WHERE rolname = 'app')"
+        " ORDER BY d.datname"
+    ).fetchall()
+    for (database,) in databases:
+        url = make_conninfo(test_database_url, dbname=database)
+        with psycopg.connect(url, autocommit=True) as conn:
+            conn.execute("DROP OWNED BY app")
+    admin.execute("DROP ROLE app")
+
+
+@pytest.fixture
+def no_app_role(test_database_url: str) -> Iterator[psycopg.Connection[Any]]:
+    """Hold the cluster lock for the test and make sure no role ``app`` exists.
+
+    A role ``app`` carrying this file's marker is the leftover of an interrupted run (nobody else
+    can be using it while the lock is held): it is dropped with its privileges and its scratch
+    database. Any other ``app`` fails the test with the commands to remove it, and is left alone.
+    """
+    with psycopg.connect(_admin_url(test_database_url), autocommit=True) as admin:
+        admin.execute(sql.SQL("SET lock_timeout = {}").format(sql.Literal(_ROLE_LOCK_TIMEOUT)))
+        admin.execute("SELECT pg_advisory_lock(hashtext(%s))", (_ROLE_LOCK_KEY,))
+        row = admin.execute(
+            "SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = 'app'"
+        ).fetchone()
+        if row is not None and row[0] == _ROLE_MARKER:
+            _drop_marked_app_role(admin, test_database_url)
+        elif row is not None:
+            scratch = _scratch_name(test_database_url, "app")
+            pytest.fail(
+                "a role named app already exists in the local cluster, and these tests did not "
+                "create it. If it is a leftover, remove it as a superuser and run again: "
+                f"DROP DATABASE IF EXISTS {scratch}; DROP OWNED BY app; DROP ROLE app; "
+                "(DROP OWNED BY app in every database where it holds privileges, DB.md §5)."
+            )
+        yield admin
 
 
 @contextmanager
 def scratch_database(test_database_url: str, tag: str) -> Iterator[str]:
     """An empty database of its own, dropped afterwards (a role cannot be dropped while it holds
     privileges in a database, so this closes before the role does)."""
-    dbname = str(conninfo_to_dict(test_database_url)["dbname"])
-    name = f"{dbname.removesuffix('_test')}_views_{tag}_test"
+    name = _scratch_name(test_database_url, tag)
     admin_url = _admin_url(test_database_url)
-    drop = sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(name))
     with psycopg.connect(admin_url, autocommit=True) as admin:
-        admin.execute(drop)
+        _drop_database(admin, name)
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     try:
         yield make_conninfo(test_database_url, dbname=name)
     finally:
         with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute(drop)
+            _drop_database(admin, name)
 
 
 @contextmanager
-def app_role(test_database_url: str) -> Iterator[None]:
-    admin_url = _admin_url(test_database_url)
-    _require_no_app_role(admin_url)
-    with psycopg.connect(admin_url, autocommit=True) as admin:
-        admin.execute("CREATE ROLE app")
+def app_role(admin: psycopg.Connection[Any], test_database_url: str) -> Iterator[None]:
+    """Create ``app`` (marked as this file's), and drop it with its scratch database afterwards."""
+    admin.execute("CREATE ROLE app")
+    admin.execute(sql.SQL("COMMENT ON ROLE app IS {}").format(sql.Literal(_ROLE_MARKER)))
     try:
         yield
     finally:
-        with psycopg.connect(admin_url, autocommit=True) as admin:
-            admin.execute("DROP ROLE app")
+        _drop_marked_app_role(admin, test_database_url)
 
 
 def test_without_an_app_role_the_migration_applies_on_a_fresh_database_and_grants_nothing(
-    test_database_url: str,
+    test_database_url: str, no_app_role: psycopg.Connection[Any]
 ) -> None:
-    _require_no_app_role(_admin_url(test_database_url))
-
     with scratch_database(test_database_url, "noapp") as url:
         assert migrate(url).applied[-1] == "0005_dashboard_views"
 
@@ -474,7 +523,7 @@ def test_without_an_app_role_the_migration_applies_on_a_fresh_database_and_grant
 
 
 def test_with_an_app_role_the_migration_from_0004_grants_select_on_the_views_only(
-    test_database_url: str, tmp_path: Path
+    test_database_url: str, no_app_role: psycopg.Connection[Any], tmp_path: Path
 ) -> None:
     up_to_0004 = tmp_path / "migrations"
     up_to_0004.mkdir()
@@ -482,7 +531,10 @@ def test_with_an_app_role_the_migration_from_0004_grants_select_on_the_views_onl
         if path.name < "0005":
             shutil.copy(path, up_to_0004)
 
-    with app_role(test_database_url), scratch_database(test_database_url, "app") as url:
+    with (
+        app_role(no_app_role, test_database_url),
+        scratch_database(test_database_url, "app") as url,
+    ):
         assert migrate(url, up_to_0004).applied[-1] == "0004_deadline_outcome"
         with psycopg.connect(url) as conn:
             insert(conn)  # a database at the previous version that already holds rows

@@ -3,7 +3,7 @@
 Ticket 5.09. **The Author runs every step below.** An agent writes this file and the workflows
 [`ingest.yml`](../../.github/workflows/ingest.yml) and [`migrate.yml`](../../.github/workflows/migrate.yml)
 but never runs them against Neon production (AGENTS.md §5, §11); the one exception is a dispatch of
-`migrate.yml` for a migration the Author explicitly gave the go-ahead for (step 11). Commands are
+`migrate.yml` with the Author's explicit go-ahead for that run (step 11). Commands are
 copy-pasteable, one per block, and meant for Git Bash, Linux or macOS. Never paste a password or a connection string into a file, a commit, a PR or a chat.
 
 What you end up with: the schema (migrations `0001`–`0005`) in the Neon `production` branch, an
@@ -462,7 +462,8 @@ and nothing else, from `main` only, behind the guard of `ingest.yml` (empty, non
 and local URLs are refused, the host is masked) and the `neon-production` approval gate if you set
 one up. The migrations run in order, each in its own transaction, and an applied file is never run
 again (DB.md §10), so a dispatch with nothing pending changes nothing. An agent dispatches it only
-with your explicit go-ahead for that migration (given for `0005` on 2026-10-26).
+with your explicit go-ahead for that run. It shares its concurrency group with `ingest.yml`, so it
+waits while an ingest runs.
 
 ```bash
 gh workflow run migrate.yml --ref main
