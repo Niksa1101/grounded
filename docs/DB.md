@@ -562,7 +562,9 @@ $$;
 - **`v_request_metrics`**, one row per user request, public columns only. The daily view cannot give a p95 over 7 or
   30 days (percentiles do not add up across days), so `GET /v1/metrics/summary` (8.02) aggregates this view over its
   window with a bound parameter, e.g. `WHERE created_at > now() - make_interval(days => %s)`, and computes stage
-  percentiles with `FILTER (WHERE NOT cache_hit)`. The window filter can use `request_logs_source_created_idx`.
+  percentiles with `FILTER (WHERE NOT cache_hit)` (as built: also without `rate_limited`, `budget_exhausted` and
+  `bad_request` rows, which never entered the pipeline; the rules are in Tech §13). The window filter can use
+  `request_logs_source_created_idx`.
 - **Why `percentile_cont`.** It interpolates between the two nearest values (the p95 of 100, 200, …, 700 is 670), so a
   small sample gives a number that moves smoothly as rows arrive; `percentile_disc` returns one of the observed values
   and jumps between them. Latencies are integers; the result is `double precision`.

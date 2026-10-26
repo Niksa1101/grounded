@@ -23,7 +23,8 @@ the rate limiter, which is strict, never unlimited.
 ``request_logs`` row (``unauthorized`` is not an outcome in DB.md §4: unauthenticated callers must
 not be able to fill the table). ``/readyz`` checks the secret alone (``check_proxy_secret``, PRD
 D54c): it queries the database, so it must not add a free path that wakes Neon. (``/v1/ask`` touches
-the database by design, so that risk is accepted, PRD D56b.)
+the database by design, so that risk is accepted, PRD D56b.) ``/v1/metrics/summary`` does the same
+through the ``require_proxy_secret`` dependency: it needs no client identity, so it reads no IP.
 ``/healthz`` touches nothing and stays public.
 """
 
@@ -93,6 +94,13 @@ def check_proxy_secret(request: Request, settings: Settings) -> bool:
     if not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
         raise ProxyAuthError("invalid")
     return True
+
+
+def require_proxy_secret(request: Request) -> None:
+    """``check_proxy_secret`` as a route dependency, for routes that need no client identity
+    (``/v1/metrics/summary``). FastAPI solves dependencies before it validates query parameters,
+    so a caller without the secret gets the 401 before it learns any parameter rule."""
+    check_proxy_secret(request, get_settings_dep(request))
 
 
 def authenticate(request: Request, settings: Settings | None = None) -> ClientIdentity:

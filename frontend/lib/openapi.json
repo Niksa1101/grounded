@@ -169,6 +169,77 @@
           }
         }
       }
+    },
+    "/v1/metrics/summary": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Metrics Summary",
+        "description": "Aggregates only: request counts, rates, stage latency, shadow cost, a daily series and the\nlatest eval run per (suite, config). Never question text, a hash of it, an IP hash or a\nrequest id.",
+        "operationId": "metrics_summary_v1_metrics_summary_get",
+        "parameters": [
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1d",
+                "7d",
+                "30d"
+              ],
+              "type": "string",
+              "description": "Rolling period of the aggregates.",
+              "default": "7d",
+              "title": "Window"
+            },
+            "description": "Rolling period of the aggregates."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricsSummary"
+                }
+              }
+            }
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Internal Server Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -326,6 +397,95 @@
         ],
         "title": "Claim"
       },
+      "Cost": {
+        "properties": {
+          "shadow_usd_total": {
+            "type": "number",
+            "title": "Shadow Usd Total"
+          },
+          "per_1k_questions_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per 1K Questions Usd"
+          },
+          "per_1k_uncached_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per 1K Uncached Usd"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "shadow_usd_total",
+          "per_1k_questions_usd",
+          "per_1k_uncached_usd"
+        ],
+        "title": "Cost",
+        "description": "Shadow cost in USD (Tech \u00a714: what the requests would cost at paid list prices).\n\n``shadow_usd_total`` sums every user request of the window, failed ones included (a failed\nrequest may have been billed). ``per_1k_questions_usd`` divides it by the served requests,\ncache hits included: what the demo really costs per thousand answers. ``per_1k_uncached_usd``\ndivides the same total by the served requests that were not cache hits, comparable with the\neval's ``cost_per_1k_usd`` (no cache there). Both are ``null`` on a zero denominator."
+      },
+      "DailyStats": {
+        "properties": {
+          "day": {
+            "type": "string",
+            "format": "date",
+            "title": "Day"
+          },
+          "requests": {
+            "type": "integer",
+            "title": "Requests"
+          },
+          "p50_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95 Ms"
+          },
+          "shadow_usd": {
+            "type": "number",
+            "title": "Shadow Usd"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "day",
+          "requests",
+          "p50_ms",
+          "p95_ms",
+          "shadow_usd"
+        ],
+        "title": "DailyStats",
+        "description": "One UTC day of ``v_request_stats_daily`` (DB.md \u00a78), as that view defines it: all user\nrequests of the day, cache hits and throttled ones included. A day without requests is present\nwith ``requests`` 0, ``shadow_usd`` 0 and null percentiles, so a chart has no gaps."
+      },
       "ErrorBody": {
         "properties": {
           "code": {
@@ -382,6 +542,83 @@
           "request_id"
         ],
         "title": "ErrorResponse"
+      },
+      "EvalRunSummary": {
+        "properties": {
+          "suite": {
+            "type": "string",
+            "enum": [
+              "retrieval",
+              "generation"
+            ],
+            "title": "Suite"
+          },
+          "config": {
+            "type": "string",
+            "title": "Config"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "git_sha": {
+            "type": "string",
+            "title": "Git Sha"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pass",
+              "fail",
+              "inconclusive"
+            ],
+            "title": "Status"
+          },
+          "case_count": {
+            "type": "integer",
+            "title": "Case Count"
+          },
+          "metrics": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Metrics"
+          },
+          "report_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Report Url"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "suite",
+          "config",
+          "created_at",
+          "git_sha",
+          "status",
+          "case_count",
+          "metrics",
+          "report_url"
+        ],
+        "title": "EvalRunSummary",
+        "description": "The latest ``eval_runs`` row of one (suite, config) (DB.md \u00a74): aggregates only."
       },
       "HealthResponse": {
         "properties": {
@@ -486,6 +723,161 @@
         ],
         "title": "Meta"
       },
+      "MetricsSummary": {
+        "properties": {
+          "window": {
+            "type": "string",
+            "enum": [
+              "1d",
+              "7d",
+              "30d"
+            ],
+            "title": "Window"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          },
+          "requests": {
+            "$ref": "#/components/schemas/RequestCounts"
+          },
+          "rates": {
+            "$ref": "#/components/schemas/Rates"
+          },
+          "latency_ms": {
+            "$ref": "#/components/schemas/StageLatency"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/Cost"
+          },
+          "daily": {
+            "items": {
+              "$ref": "#/components/schemas/DailyStats"
+            },
+            "type": "array",
+            "title": "Daily"
+          },
+          "evals": {
+            "items": {
+              "$ref": "#/components/schemas/EvalRunSummary"
+            },
+            "type": "array",
+            "title": "Evals"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "window",
+          "generated_at",
+          "requests",
+          "rates",
+          "latency_ms",
+          "cost",
+          "daily",
+          "evals"
+        ],
+        "title": "MetricsSummary",
+        "description": "``window`` is a rolling period ending at ``generated_at`` (the database's clock) for every\nfield but ``daily``, which lists whole UTC days: the last 1, 7 or 30, today included."
+      },
+      "Percentiles": {
+        "properties": {
+          "p50": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P50"
+          },
+          "p95": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P95"
+          },
+          "n": {
+            "type": "integer",
+            "title": "N"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "p50",
+          "p95",
+          "n"
+        ],
+        "title": "Percentiles",
+        "description": "``n``: the rows the stage ran in (a NULL stage is ignored); p50/p95 are ``null`` at n = 0."
+      },
+      "Rates": {
+        "properties": {
+          "cache_hit": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Hit"
+          },
+          "fallback": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fallback"
+          },
+          "validation_retry": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Retry"
+          },
+          "validation_failure": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Validation Failure"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "cache_hit",
+          "fallback",
+          "validation_retry",
+          "validation_failure"
+        ],
+        "title": "Rates",
+        "description": "Ratios in [0, 1]; ``null`` on a zero denominator.\n\n- ``cache_hit``: cache hits / served requests.\n- ``fallback``: generated requests that called a provider other than the primary / generated.\n- ``validation_retry``: generated requests with ``validation_retries > 0`` / generated.\n- ``validation_failure``: generated requests with outcome ``validation_failed`` / generated."
+      },
       "ReadinessResponse": {
         "properties": {
           "status": {
@@ -523,6 +915,81 @@
           "active_index_version"
         ],
         "title": "ReadinessResponse"
+      },
+      "RequestCounts": {
+        "properties": {
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "answered": {
+            "type": "integer",
+            "title": "Answered"
+          },
+          "partial": {
+            "type": "integer",
+            "title": "Partial"
+          },
+          "insufficient_context": {
+            "type": "integer",
+            "title": "Insufficient Context"
+          },
+          "throttled": {
+            "type": "integer",
+            "title": "Throttled"
+          },
+          "errors": {
+            "type": "integer",
+            "title": "Errors"
+          },
+          "cache_hits": {
+            "type": "integer",
+            "title": "Cache Hits"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "answered",
+          "partial",
+          "insufficient_context",
+          "throttled",
+          "errors",
+          "cache_hits"
+        ],
+        "title": "RequestCounts",
+        "description": "User requests in the window (``source`` web or api; CI's eval rows are never counted).\n\n``answered + partial + insufficient_context + throttled + errors == total``: ``throttled`` is\n``rate_limited`` and ``budget_exhausted``, ``errors`` every other outcome (``bad_request``,\n``validation_failed``, ``provider_unavailable``, ``internal_error``, ``deadline_exceeded``).\n``cache_hits`` is a subset of the three served outcomes."
+      },
+      "StageLatency": {
+        "properties": {
+          "total": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "embed": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "retrieval": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "rerank": {
+            "$ref": "#/components/schemas/Percentiles"
+          },
+          "llm": {
+            "$ref": "#/components/schemas/Percentiles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "total",
+          "embed",
+          "retrieval",
+          "rerank",
+          "llm"
+        ],
+        "title": "StageLatency",
+        "description": "Milliseconds over the *timed* requests of the window (cache hits excluded)."
       }
     }
   }
