@@ -1,3 +1,5 @@
+import "server-only";
+
 import { MetricsDashboard } from "@/components/metrics-dashboard";
 import type { MetricsWindow } from "@/lib/api";
 import { classifyMetrics, type MetricsResult } from "@/lib/metrics";

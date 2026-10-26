@@ -52,6 +52,25 @@ describe("MetricsDashboard", () => {
     expect(html).toContain("faithfulness</span> 0.912");
   });
 
+  it("links an eval report only when its URL is https", () => {
+    const result = fakeMetrics("full", "7d")!;
+    if (!result.ok) throw new Error("fixture");
+    const evals = result.data.evals.map((run, i) => ({
+      ...run,
+      report_url: ["javascript:alert(1)", "http://ci.example/run/2"][i],
+    }));
+    const view = classifyMetrics({ ok: true, data: { ...result.data, evals } });
+    const html = renderToStaticMarkup(<MetricsDashboard window="7d" view={view} />);
+    expect(html).not.toContain("javascript:");
+    expect(html).not.toContain("ci.example");
+    expect(html).not.toContain(">Report<");
+    expect(render("full")).toContain('href="https://github.com/example/grounded/actions/runs/1"');
+  });
+
+  it("says rejected requests are outside the latency", () => {
+    expect(render("full")).toContain("cache hits, throttled and rejected requests excluded");
+  });
+
   it("marks the shown window in the window links", () => {
     const html = render("full", "30d");
     expect(html).toMatch(/<a aria-current="page"[^>]*href="\/metrics\/30d"/);
