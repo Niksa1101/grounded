@@ -169,9 +169,11 @@ export interface components {
         };
         /**
          * DailyStats
-         * @description One UTC day of ``v_request_stats_daily`` (DB.md §8), as that view defines it: all user
-         *     requests of the day, cache hits and throttled ones included. A day without requests is present
-         *     with ``requests`` 0, ``shadow_usd`` 0 and null percentiles, so a chart has no gaps.
+         * @description One UTC day, from ``v_request_metrics``. ``requests`` and ``shadow_usd`` cover every user
+         *     request of the day; ``p50_ms``/``p95_ms`` only its *timed* requests (no cache hits, nothing
+         *     outside the pipeline), the same rows as ``latency_ms.total``, and are ``null`` when there are
+         *     none. A day without requests is present with ``requests`` 0 and ``shadow_usd`` 0, so a chart
+         *     has no gaps.
          */
         DailyStats: {
             /**

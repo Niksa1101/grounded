@@ -484,7 +484,7 @@
           "shadow_usd"
         ],
         "title": "DailyStats",
-        "description": "One UTC day of ``v_request_stats_daily`` (DB.md \u00a78), as that view defines it: all user\nrequests of the day, cache hits and throttled ones included. A day without requests is present\nwith ``requests`` 0, ``shadow_usd`` 0 and null percentiles, so a chart has no gaps."
+        "description": "One UTC day, from ``v_request_metrics``. ``requests`` and ``shadow_usd`` cover every user\nrequest of the day; ``p50_ms``/``p95_ms`` only its *timed* requests (no cache hits, nothing\noutside the pipeline), the same rows as ``latency_ms.total``, and are ``null`` when there are\nnone. A day without requests is present with ``requests`` 0 and ``shadow_usd`` 0, so a chart\nhas no gaps."
       },
       "ErrorBody": {
         "properties": {

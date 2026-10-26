@@ -319,6 +319,30 @@ async def test_daily_lists_every_utc_day_of_the_window_in_order(
     assert len((await fetch_metrics_summary(conn, "30d")).daily) == 30
 
 
+async def test_daily_percentiles_use_the_timed_rows_like_the_window_latency(
+    conn: psycopg.AsyncConnection[Any],
+) -> None:
+    # The review's case: one slow generated answer among fast cache hits and refused requests. The
+    # day's p50 is the generated answer's, not a cache hit's 3 ms.
+    await insert_generated(conn, age=timedelta(0), latency_total_ms=3000)
+    for _ in range(3):
+        await insert(conn, age=timedelta(0), cache_hit=True, latency_total_ms=3)
+    for outcome, status in (("rate_limited", 429), ("bad_request", 422)):
+        await insert(
+            conn, age=timedelta(0), outcome=outcome, http_status=status, latency_total_ms=2
+        )
+    # A day of cache hits only: counted, but it has no latency to show.
+    for _ in range(2):
+        await insert(conn, age=timedelta(days=1), cache_hit=True, latency_total_ms=3)
+
+    summary = await fetch_metrics_summary(conn, "7d")
+
+    today, yesterday = summary.daily[-1], summary.daily[-2]
+    assert (today.requests, today.p50_ms, today.p95_ms) == (6, 3000, 3000)
+    assert today.p50_ms == summary.latency_ms.total.p50
+    assert (yesterday.requests, yesterday.p50_ms, yesterday.p95_ms) == (2, None, None)
+
+
 async def test_evals_are_the_latest_row_per_suite_and_config_with_a_tie_breaker(
     conn: psycopg.AsyncConnection[Any],
 ) -> None:

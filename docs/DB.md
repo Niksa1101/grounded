@@ -555,7 +555,9 @@ $$;
   session `TimeZone` (`date_trunc('day', created_at)` would cut the day at the session's midnight), and a `date` cannot
   be shifted into a client's zone. `validation_retries` counts the requests with at least one retry (`> 0`), not the
   retries; `validation_failures` counts the requests whose outcome is `validation_failed` (no provider's output passed
-  validation). Both rates are shown, over `requests`.
+  validation). Both rates are shown, over `requests`. Its `p50_ms`/`p95_ms` are over every user request of the day,
+  cache hits and throttled rows included, so `GET /v1/metrics/summary` does **not** read this view (8.02): its daily
+  series comes from `v_request_metrics` with the endpoint's latency filter (Tech §13). The view stays for SQL users.
 - **`v_stage_latency_7d`**, one row: stage percentiles over the last 7 days, **without cache hits** (a cache hit skips
   the stages). A stage that did not run is `NULL` and `percentile_cont` ignores it, so `rerank_*` are over the
   reranked requests only; with no row at all every column is `NULL`.
