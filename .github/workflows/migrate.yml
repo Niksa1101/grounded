@@ -1,0 +1,97 @@
+# Applies pending migrations to PRODUCTION Neon (ticket 8.01, Tech.md §17, DB.md §10; runbook:
+# docs/runbooks/neon-production.md, step 11). It runs `grounded migrate` and nothing else: no
+# ingest, no activation, no retention. A schema change ships with its PR; this is how it reaches
+# Neon without an ingest run.
+#
+# - Trigger: `workflow_dispatch` only, from `main` only (the job's `if`). The Author starts it. An
+#   agent may dispatch it only with the Author's explicit go-ahead for that migration (given for
+#   0005_dashboard_views on 2026-10-26; AGENTS.md §5, §11). A PR, a push or a schedule cannot reach
+#   the secret below.
+# - `DATABASE_URL_DIRECT` (the owner role's DIRECT, non-pooled Neon URL) is a repository secret, as
+#   in Tech §17. It is passed to two steps and to nothing else: the guard (the same one as
+#   ingest.yml, kept in step with it by a test) and the migrate step. Not the job, not a third-party
+#   action. The guard refuses an empty value, a non-Postgres URL, a pooled (`-pooler`) host and a
+#   local one before anything is installed, and masks the host in the log.
+# - The environment `neon-production` is the optional approval gate of ingest.yml: give it a
+#   required reviewer and every run waits for the Author's click. Without protection rules it
+#   changes nothing.
+# - Two runs never overlap (the concurrency group; a queued run waits, none is cancelled). The
+#   migration runner's advisory lock also serializes it with ingest.yml's migrate step.
+# - The output (what this run applied, and the count already up to date) goes to the job summary.
+name: migrate
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: migrate-neon-production
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    environment: neon-production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      # Not prod: APP_ENV=prod demands the runtime's secrets, and this job is not the runtime.
+      # DATABASE_URL stays unset (Settings' local default), so nothing can fall back to a real
+      # database by accident: the command reads DATABASE_URL_DIRECT, checked first.
+      APP_ENV: test
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Fail before any install if the secret is missing or is the wrong kind of URL.
+      - name: Guard the production connection
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: |
+          url="$DATABASE_URL_DIRECT"
+          rest=${url#*://}
+          rest=${rest##*@}
+          host=${rest%%[:/?]*}
+          if [ -n "$host" ]; then echo "::add-mask::$host"; fi
+          if [ -z "$url" ]; then
+            echo "::error title=DATABASE_URL_DIRECT is not set::Create the repository secret first (runbook step 1)."
+            exit 1
+          fi
+          case "$url" in
+            postgresql://*|postgres://*) ;;
+            *) echo "::error title=DATABASE_URL_DIRECT is not a Postgres URL::It must start with postgresql://"; exit 1 ;;
+          esac
+          case "$url" in
+            *-pooler*) echo "::error title=DATABASE_URL_DIRECT is the pooled URL::Use the direct connection string (no -pooler in the host)."; exit 1 ;;
+          esac
+          case "$host" in
+            ""|localhost|127.*|*::1*) echo "::error title=DATABASE_URL_DIRECT is not a remote host::Refusing."; exit 1 ;;
+          esac
+          echo "The production connection looks like a direct, remote URL."
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - name: Install dependencies
+        run: uv sync --frozen
+      # Each pending file in its own transaction (DB.md §10). The output names the host, which the
+      # guard masked, and never the credentials. `tee` shows the lines of a run that fails half-way
+      # too; pipefail keeps the command's exit code.
+      - name: Migrate Neon
+        env:
+          DATABASE_URL_DIRECT: ${{ secrets.DATABASE_URL_DIRECT }}
+        run: |
+          set -o pipefail
+          uv run grounded migrate | tee "$RUNNER_TEMP/migrate.txt"
+          {
+            echo "### Migrations on Neon"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/migrate.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

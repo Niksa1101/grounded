@@ -106,3 +106,12 @@ def test_the_runbook_names_the_secrets_the_workflow_reads_and_the_workflow_file(
         assert f"`{name}`" in RUNBOOK
     assert "ingest.yml" in RUNBOOK
     assert "EVAL_RECORD_RUNS" in RUNBOOK  # the optional last step, which the Author sets
+
+
+def test_the_runbook_names_the_migrate_workflow_and_its_one_secret() -> None:
+    migrate = (ROOT / ".github" / "workflows" / "migrate.yml").read_text(encoding="utf-8")
+
+    assert set(re.findall(r"secrets\.([A-Z_]+)", migrate)) == {"DATABASE_URL_DIRECT"}
+    assert "gh workflow run migrate.yml --ref main" in RUNBOOK
+    # The views of 0005 are in the expected privileges, so the catalog query must list views too.
+    assert "c.relkind IN ('r', 'v')" in RUNBOOK

@@ -110,7 +110,7 @@ Tables by lifecycle:
 Not in the database, on purpose:
 - **Embedding cache, rerank cache, eval LLM-response cache.** These are SQLite files under `.cache/` used by ingest/eval locally and, for the embedding cache, restored in CI via `actions/cache`. This keeps CI independent of production and avoids re-embedding the corpus on every run. The rerank cache is a local convenience for manual `hybrid_rerank` runs: no CI job restores or writes it (Tech §8, PRD D55), and it is never created in prod.
 
-## 4. Schema (migrations `0001_init.sql` to `0004_deadline_outcome.sql`)
+## 4. Schema (migrations `0001_init.sql` to `0005_dashboard_views.sql`)
 
 ```sql
 -- 0001_init.sql
@@ -323,6 +323,8 @@ ALTER TABLE request_logs ADD CONSTRAINT request_logs_outcome_check CHECK (outcom
 
 `tests/integration/test_schema.py` checks that the CHECK names exactly the values of `Outcome` (`observability/request_log.py`).
 
+**`0005_dashboard_views.sql`** (decided by the Author on 2026-10-26, written in 8.01) adds no table and changes no column: it creates the three read-only views of the dashboard over `request_logs` and grants `app` SELECT on them when the role exists. The views and the reasons behind them are in §8, the grant in §5.
+
 No secondary index: the table holds the windows of two days at most, so the retention delete (§9) scans a few thousand rows, and an index would only add write cost to a table written on every request. The pseudonymous `ip_hash` is kept 2 days here, well inside the 30-day rule of `request_logs`.
 
 Design notes:
@@ -359,19 +361,27 @@ GRANT INSERT, SELECT ON request_logs TO app;
 -- For the rate-limit table of migration 0003 (5.04); `SELECT` because `ON CONFLICT … DO UPDATE … RETURNING` reads the row.
 -- No DELETE: the retention job runs as the owner (§9):
 GRANT SELECT, INSERT, UPDATE ON rate_limit_counters TO app;
--- Added by the dashboard-views migration (Phase 8):
--- GRANT SELECT ON v_request_stats_daily, v_stage_latency_7d TO app;
+-- The dashboard views of migration 0005 (§8). 0005 grants this itself where `app` exists already;
+-- on a fresh environment the role is created after the migrations, so this line grants it:
+GRANT SELECT ON v_request_stats_daily, v_stage_latency_7d, v_request_metrics TO app;
 ```
 
 | Role | Used by | Can |
 |---|---|---|
 | owner (Neon default) | migrations, ingest CLI, retention job, CI on `main` writing `eval_runs` | everything |
-| `app` | FastAPI runtime | read index, write logs/cache/budget |
+| `app` | FastAPI runtime | read index, write logs/cache/budget, read the dashboard views |
 
 The runtime can never modify the index or delete telemetry.
 
 The production procedure is `docs/runbooks/neon-production.md` (5.09). Its SQL block is a copy of the block above, and
 `tests/unit/test_neon_runbook.py` fails when the two differ, so they change together.
+
+**Why the view grant is in two places (8.01).** A `GRANT … TO app` fails where the role does not exist, and it does not
+exist locally, in CI or on a fresh Neon branch before the runbook. So `0005` grants inside a guarded block
+(`DO $$ … IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app') THEN GRANT … END IF; … $$`): where `app` exists
+(production, which got the role before `0005`), the migration grants; where it does not, the block does nothing and
+the role block above grants the same SELECT when the role is created. Both orders end with the same privileges, and
+`GRANT` can be repeated. `tests/integration/test_dashboard_views.py` applies `0005` without the role and with it.
 
 ## 6. Retrieval queries
 
@@ -467,14 +477,18 @@ The runtime caches the active `index_version_id` and refreshes it every 5 minute
 
 ## 8. Dashboard views (Phase 8, Agent)
 
+Migration `0005_dashboard_views.sql` (8.01). The statements below are the ones in the file, without its comments
+(`tests/unit/test_dashboard_views_docs.py` keeps the two identical):
+
 ```sql
 CREATE VIEW v_request_stats_daily AS
 SELECT
-    date_trunc('day', created_at)                                          AS day,
+    (created_at AT TIME ZONE 'utc')::date                                  AS day,
     count(*)                                                               AS requests,
     count(*) FILTER (WHERE cache_hit)                                      AS cache_hits,
     count(*) FILTER (WHERE fallback_used)                                  AS fallbacks,
     count(*) FILTER (WHERE validation_retries > 0)                         AS validation_retries,
+    count(*) FILTER (WHERE outcome = 'validation_failed')                  AS validation_failures,
     count(*) FILTER (WHERE outcome = 'insufficient_context')               AS refusals,
     count(*) FILTER (WHERE outcome IN ('rate_limited','budget_exhausted')) AS throttled,
     percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_total_ms)         AS p50_ms,
@@ -499,9 +513,58 @@ SELECT
 FROM request_logs
 WHERE source IN ('web', 'api') AND NOT cache_hit
   AND created_at > now() - interval '7 days';
+
+CREATE VIEW v_request_metrics AS
+SELECT
+    created_at,
+    outcome,
+    http_status,
+    cache_hit,
+    fallback_used,
+    validation_retries,
+    provider,
+    model,
+    latency_total_ms,
+    latency_embed_ms,
+    latency_retrieval_ms,
+    latency_rerank_ms,
+    latency_llm_ms,
+    input_tokens,
+    output_tokens,
+    shadow_cost_usd
+FROM request_logs
+WHERE source IN ('web', 'api');
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'app') THEN
+        GRANT SELECT ON v_request_stats_daily, v_stage_latency_7d, v_request_metrics TO app;
+    END IF;
+END
+$$;
 ```
-The views ship in a later migration (`000N_dashboard_views.sql`). They never expose `question` or `ip_hash`.
-Percentiles over cached requests are excluded from stage latency, since a cache hit skips the stages.
+
+- **No private column, no eval row.** No view selects `question`, `question_hash`, `ip_hash` or `id` (the request id),
+  and every view keeps `source IN ('web', 'api')`: CI's `eval` rows are not users. The integration tests
+  (`tests/integration/test_dashboard_views.py`) assert the exact column set of each view. A view reads `request_logs`
+  with its owner's rights, so SELECT on the views is all a reader of the dashboard needs, and it reaches only the
+  columns the view selects.
+- **`v_request_stats_daily`**, one row per **UTC day**: `(created_at AT TIME ZONE 'utc')::date` does not depend on the
+  session `TimeZone` (`date_trunc('day', created_at)` would cut the day at the session's midnight), and a `date` cannot
+  be shifted into a client's zone. `validation_retries` counts the requests with at least one retry (`> 0`), not the
+  retries; `validation_failures` counts the requests whose outcome is `validation_failed` (no provider's output passed
+  validation). Both rates are shown, over `requests`.
+- **`v_stage_latency_7d`**, one row: stage percentiles over the last 7 days, **without cache hits** (a cache hit skips
+  the stages). A stage that did not run is `NULL` and `percentile_cont` ignores it, so `rerank_*` are over the
+  reranked requests only; with no row at all every column is `NULL`.
+- **`v_request_metrics`**, one row per user request, public columns only. The daily view cannot give a p95 over 7 or
+  30 days (percentiles do not add up across days), so `GET /v1/metrics/summary` (8.02) aggregates this view over its
+  window with a bound parameter, e.g. `WHERE created_at > now() - make_interval(days => %s)`, and computes stage
+  percentiles with `FILTER (WHERE NOT cache_hit)`. The window filter can use `request_logs_source_created_idx`.
+- **Why `percentile_cont`.** It interpolates between the two nearest values (the p95 of 100, 200, …, 700 is 670), so a
+  small sample gives a number that moves smoothly as rows arrive; `percentile_disc` returns one of the observed values
+  and jumps between them. Latencies are integers; the result is `double precision`.
+- The views have no `ORDER BY`: a reader orders (`ORDER BY day`).
 
 ## 9. Retention and housekeeping
 
@@ -565,14 +628,14 @@ and then deleted by the ingest CLI (`grounded index prune`). Chunks and document
 ## 10. Migrations
 
 - Files: `backend/migrations/NNNN_short_name.sql` (4-digit, sequential). Forward-only; no down migrations.
-- Applied so far: `0001_init` (the schema), `0002_index_integrity` (index integrity, R.05), `0003_rate_limit` (rate-limit counters, 5.04), `0004_deadline_outcome` (the `deadline_exceeded` outcome, R.20), all in §4.
+- Applied so far: `0001_init` (the schema), `0002_index_integrity` (index integrity, R.05), `0003_rate_limit` (rate-limit counters, 5.04), `0004_deadline_outcome` (the `deadline_exceeded` outcome, R.20), all in §4, and `0005_dashboard_views` (the dashboard views and their guarded grant, 8.01; §8, §5).
 - Runner (`grounded migrate`) applies pending files in order, each in its own transaction, and records `version` + `checksum` in `schema_migrations`.
 - A pending file numbered below the newest applied one aborts the run (e.g. a late-merged branch): renumber it instead.
 - **Never edit an applied migration.** If the checksum differs from the recorded one, the runner aborts. Fixes go into a new migration.
 - Checksums are sha256 over the file with CRLF normalized to LF (`.gitattributes` also forces LF), so a Windows checkout doesn't look like an edit.
 - The runner (`grounded.infra.migrations`) uses **sync** psycopg: it is offline tooling, not the request path. It takes a Postgres advisory lock so two concurrent runs can't interleave. Files run with no bind parameters, so psycopg uses the simple query protocol and a file may hold several statements.
 - Destructive changes (dropping columns/tables) need an explicit Author decision and a note in the PR.
-- Production migrations run from CI (`workflow_dispatch`) or locally with the owner's direct URL, never from the runtime process.
+- Production migrations run from CI (`workflow_dispatch`): `.github/workflows/migrate.yml` runs `grounded migrate` and nothing else, from `main` only, with `DATABASE_URL_DIRECT` behind the same guard as `ingest.yml` (Tech §17; `ingest.yml` also migrates before it ingests). Or locally with the owner's direct URL. Never from the runtime process.
 
 ## 11. Capacity estimate
 

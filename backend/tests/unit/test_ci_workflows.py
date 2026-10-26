@@ -20,6 +20,10 @@ text: PyYAML is not a dependency of the project.
 ``housekeeping.yml`` (ticket 5.11), the third workflow that writes to production, is pinned in
 ``test_housekeeping_workflow.py``, which reuses the helpers above; only the list of steps that may
 see the secret lives here, with the other two workflows'.
+
+``migrate.yml`` (ticket 8.01), the fourth, applies pending migrations to Neon by a manual dispatch
+from ``main`` and does nothing else: the last section pins its trigger, its guard (the one of
+``ingest.yml``), the two steps that see the secret and that ``grounded migrate`` is its one command.
 """
 
 from __future__ import annotations
@@ -86,6 +90,9 @@ INGEST_STEPS_WITH_THE_SECRET = {
 HOUSEKEEPING_STEPS_WITH_THE_SECRET = {"Guard the production connection", "Retention"}
 
 
+MIGRATE_STEPS_WITH_THE_SECRET = {"Guard the production connection", "Migrate Neon"}
+
+
 @pytest.mark.parametrize("workflow", sorted(p.name for p in WORKFLOWS.glob("*.yml")))
 def test_the_production_secret_is_referenced_only_by_the_steps_that_need_it(
     workflow: str,
@@ -102,6 +109,10 @@ def test_the_production_secret_is_referenced_only_by_the_steps_that_need_it(
     elif workflow == "ingest.yml":
         # The one workflow made to write to production: four steps, each with its own env entry.
         assert {step_title(b) for b in holders} == INGEST_STEPS_WITH_THE_SECRET
+        assert all(f"{SECRET}: ${{{{ secrets.{SECRET} }}}}" in b for b in holders)
+    elif workflow == "migrate.yml":
+        # Migrations only: the guard and the command.
+        assert {step_title(b) for b in holders} == MIGRATE_STEPS_WITH_THE_SECRET
         assert all(f"{SECRET}: ${{{{ secrets.{SECRET} }}}}" in b for b in holders)
     else:
         assert holders == []  # a PR workflow, the cache seeding, the retrieval eval: none of them
@@ -296,3 +307,64 @@ def test_ingest_uses_the_cache_keys_of_warm_cache_yml() -> None:
         encoding="utf-8"
     )
     assert embeddings_key in save
+
+
+# --- migrate.yml: pending migrations to production Neon, nothing else (ticket 8.01) ---------------
+
+MIGRATE = "migrate.yml"
+
+
+def test_migrate_starts_only_from_a_manual_dispatch_on_main() -> None:
+    text = code(MIGRATE)
+    triggers = text.split("\njobs:\n", 1)[0]
+
+    assert re.search(r"(?m)^on:\n  workflow_dispatch:$", triggers)
+    assert "inputs:" not in triggers  # nothing to choose: it applies what is pending
+    for other in ("pull_request", "push", "schedule", "workflow_run", "workflow_call"):
+        assert not re.search(rf"(?m)^  {other}:", triggers)
+    assert "if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'" in text
+
+
+def test_migrate_has_read_only_permissions_and_never_overlaps_itself() -> None:
+    text = code(MIGRATE)
+
+    assert re.search(r"(?m)^permissions:\n  contents: read$", text)
+    assert "write" not in text.split("\njobs:\n", 1)[0]
+    assert "group: migrate-neon-production\n  cancel-in-progress: false" in text
+    # The optional approval gate of ingest.yml: a manual production write may wait for a click.
+    assert re.search(r"(?m)^    environment: neon-production$", text)
+
+
+def test_migrate_guards_the_connection_like_ingest_before_anything_is_installed() -> None:
+    title = "Guard the production connection"
+    names = re.findall(r"(?m)^      - name: (.*)$", "".join(steps(MIGRATE)))
+    guard = step_named(MIGRATE, title)
+
+    assert guard == step_named("ingest.yml", title)
+    for refusal in ('-z "$url"', "postgresql://*", "*-pooler*", "localhost"):
+        assert refusal in guard
+    assert "::add-mask::$host" in guard
+    assert names == [title, "Install dependencies", "Migrate Neon"]
+
+
+def test_migrate_runs_grounded_migrate_and_no_other_command() -> None:
+    commands = re.findall(r"\bgrounded (\S+)", "\n".join(run_blocks(MIGRATE)))
+    block = step_named(MIGRATE, "Migrate Neon")
+
+    assert commands == ["migrate"]
+    assert "set -o pipefail" in block  # tee must not hide a failed migration
+    assert '>> "$GITHUB_STEP_SUMMARY"' in block
+    assert code(MIGRATE).count(f"secrets.{SECRET}") == 2  # the guard and the command
+    assert set(re.findall(r"secrets\.([A-Z_]+)", code(MIGRATE))) == {SECRET}
+
+
+def test_migrate_never_prints_a_secret_and_pins_every_action() -> None:
+    for script in run_blocks(MIGRATE):
+        assert "${{" not in script, script
+        for line in script.splitlines():
+            if re.search(r"\b(echo|printf|tee)\b", line):
+                assert not re.search(r"\$\{?(DATABASE_URL_DIRECT|url)\b", line), line
+    uses = re.findall(r"(?m)^\s+(?:- )?uses: (\S+)", code(MIGRATE))
+    assert uses
+    for action in uses:
+        assert re.fullmatch(r".+@[0-9a-f]{40}", action), action
