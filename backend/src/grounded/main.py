@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from grounded.api.errors import install_error_handlers
 from grounded.api.routes_ask import router as ask_router
 from grounded.api.routes_health import router as health_router
+from grounded.api.routes_metrics import router as metrics_router
 from grounded.generation.providers.base import LLMProvider
 from grounded.generation.router import SYSTEM_CLOCK, RouterClock
 from grounded.infra.logging import configure_logging
@@ -98,4 +99,5 @@ def create_app(
     install_error_handlers(app)
     app.include_router(health_router)
     app.include_router(ask_router)
+    app.include_router(metrics_router)
     return app

@@ -68,6 +68,28 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/metrics/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Metrics Summary
+         * @description Aggregates only: request counts, rates, stage latency, shadow cost, a daily series and the
+         *     latest eval run per (suite, config). Never question text, a hash of it, an IP hash or a
+         *     request id.
+         */
+        get: operations["metrics_summary_v1_metrics_summary_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -127,6 +149,47 @@ export interface components {
                 [key: string]: number;
             };
         };
+        /**
+         * Cost
+         * @description Shadow cost in USD (Tech §14: what the requests would cost at paid list prices).
+         *
+         *     ``shadow_usd_total`` sums every user request of the window, failed ones included (a failed
+         *     request may have been billed). ``per_1k_questions_usd`` divides it by the served requests,
+         *     cache hits included: what the demo really costs per thousand answers. ``per_1k_uncached_usd``
+         *     divides the same total by the served requests that were not cache hits, comparable with the
+         *     eval's ``cost_per_1k_usd`` (no cache there). Both are ``null`` on a zero denominator.
+         */
+        Cost: {
+            /** Shadow Usd Total */
+            shadow_usd_total: number;
+            /** Per 1K Questions Usd */
+            per_1k_questions_usd: number | null;
+            /** Per 1K Uncached Usd */
+            per_1k_uncached_usd: number | null;
+        };
+        /**
+         * DailyStats
+         * @description One UTC day, from ``v_request_metrics``. ``requests`` and ``shadow_usd`` cover every user
+         *     request of the day; ``p50_ms``/``p95_ms`` only its *timed* requests (no cache hits, nothing
+         *     outside the pipeline), the same rows as ``latency_ms.total``, and are ``null`` when there are
+         *     none. A day without requests is present with ``requests`` 0 and ``shadow_usd`` 0, so a chart
+         *     has no gaps.
+         */
+        DailyStats: {
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Requests */
+            requests: number;
+            /** P50 Ms */
+            p50_ms: number | null;
+            /** P95 Ms */
+            p95_ms: number | null;
+            /** Shadow Usd */
+            shadow_usd: number;
+        };
         /** ErrorBody */
         ErrorBody: {
             /**
@@ -147,6 +210,39 @@ export interface components {
              * Format: uuid
              */
             request_id: string;
+        };
+        /**
+         * EvalRunSummary
+         * @description The latest ``eval_runs`` row of one (suite, config) (DB.md §4): aggregates only.
+         */
+        EvalRunSummary: {
+            /**
+             * Suite
+             * @enum {string}
+             */
+            suite: "retrieval" | "generation";
+            /** Config */
+            config: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Git Sha */
+            git_sha: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pass" | "fail" | "inconclusive";
+            /** Case Count */
+            case_count: number;
+            /** Metrics */
+            metrics: {
+                [key: string]: number;
+            };
+            /** Report Url */
+            report_url: string | null;
         };
         /** HealthResponse */
         HealthResponse: {
@@ -190,6 +286,62 @@ export interface components {
             /** Shadow Cost Usd */
             shadow_cost_usd: number;
         };
+        /**
+         * MetricsSummary
+         * @description ``window`` is a rolling period ending at ``generated_at`` (the database's clock) for every
+         *     field but ``daily``, which lists whole UTC days: the last 1, 7 or 30, today included.
+         */
+        MetricsSummary: {
+            /**
+             * Window
+             * @enum {string}
+             */
+            window: "1d" | "7d" | "30d";
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            requests: components["schemas"]["RequestCounts"];
+            rates: components["schemas"]["Rates"];
+            latency_ms: components["schemas"]["StageLatency"];
+            cost: components["schemas"]["Cost"];
+            /** Daily */
+            daily: components["schemas"]["DailyStats"][];
+            /** Evals */
+            evals: components["schemas"]["EvalRunSummary"][];
+        };
+        /**
+         * Percentiles
+         * @description ``n``: the rows the stage ran in (a NULL stage is ignored); p50/p95 are ``null`` at n = 0.
+         */
+        Percentiles: {
+            /** P50 */
+            p50: number | null;
+            /** P95 */
+            p95: number | null;
+            /** N */
+            n: number;
+        };
+        /**
+         * Rates
+         * @description Ratios in [0, 1]; ``null`` on a zero denominator.
+         *
+         *     - ``cache_hit``: cache hits / served requests.
+         *     - ``fallback``: generated requests that called a provider other than the primary / generated.
+         *     - ``validation_retry``: generated requests with ``validation_retries > 0`` / generated.
+         *     - ``validation_failure``: generated requests with outcome ``validation_failed`` / generated.
+         */
+        Rates: {
+            /** Cache Hit */
+            cache_hit: number | null;
+            /** Fallback */
+            fallback: number | null;
+            /** Validation Retry */
+            validation_retry: number | null;
+            /** Validation Failure */
+            validation_failure: number | null;
+        };
         /** ReadinessResponse */
         ReadinessResponse: {
             /**
@@ -204,6 +356,42 @@ export interface components {
             database: "ok" | "error";
             /** Active Index Version */
             active_index_version: string | null;
+        };
+        /**
+         * RequestCounts
+         * @description User requests in the window (``source`` web or api; CI's eval rows are never counted).
+         *
+         *     ``answered + partial + insufficient_context + throttled + errors == total``: ``throttled`` is
+         *     ``rate_limited`` and ``budget_exhausted``, ``errors`` every other outcome (``bad_request``,
+         *     ``validation_failed``, ``provider_unavailable``, ``internal_error``, ``deadline_exceeded``).
+         *     ``cache_hits`` is a subset of the three served outcomes.
+         */
+        RequestCounts: {
+            /** Total */
+            total: number;
+            /** Answered */
+            answered: number;
+            /** Partial */
+            partial: number;
+            /** Insufficient Context */
+            insufficient_context: number;
+            /** Throttled */
+            throttled: number;
+            /** Errors */
+            errors: number;
+            /** Cache Hits */
+            cache_hits: number;
+        };
+        /**
+         * StageLatency
+         * @description Milliseconds over the *timed* requests of the window (cache hits excluded).
+         */
+        StageLatency: {
+            total: components["schemas"]["Percentiles"];
+            embed: components["schemas"]["Percentiles"];
+            retrieval: components["schemas"]["Percentiles"];
+            rerank: components["schemas"]["Percentiles"];
+            llm: components["schemas"]["Percentiles"];
         };
     };
     responses: never;
@@ -350,6 +538,56 @@ export interface operations {
             };
             /** @description Gateway Timeout */
             504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    metrics_summary_v1_metrics_summary_get: {
+        parameters: {
+            query?: {
+                /** @description Rolling period of the aggregates. */
+                window?: "1d" | "7d" | "30d";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MetricsSummary"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
