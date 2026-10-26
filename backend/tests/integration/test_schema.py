@@ -239,6 +239,7 @@ def test_0002_applies_over_a_database_that_already_holds_v1_data(
             "0002_index_integrity",
             "0003_rate_limit",
             "0004_deadline_outcome",
+            "0005_dashboard_views",
         ]
 
         with psycopg.connect(url) as conn:

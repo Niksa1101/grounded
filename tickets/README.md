@@ -234,7 +234,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [7.03](phase-7/7.03-router.md) | Provider router — implementation | Author | A (written by G at the Author's "write it", 2026-10-14) | done | [#126](https://github.com/Niksa1101/grounded/pull/126) |
 | [7.04](phase-7/7.04-router-wiring.md) | Router in the pipeline, fallback metrics, demo and Phase 7 closeout | Build + Closeout | G | done | [#127](https://github.com/Niksa1101/grounded/pull/127) (7.04a: the wiring, errors, logs and service tests), [#128](https://github.com/Niksa1101/grounded/pull/128) (7.04b: the local demo and the Phase 7 closeout) |
 | **8** | **[Observability dashboard, cost, calibration](phase-8/README.md)** | | | | |
-| [8.01](phase-8/8.01-dashboard-views.md) | Dashboard views migration | Build | G | todo | |
+| [8.01](phase-8/8.01-dashboard-views.md) | Dashboard views migration | Build | G | done | [#132](https://github.com/Niksa1101/grounded/pull/132) |
 | [8.02](phase-8/8.02-metrics-api.md) | `GET /v1/metrics/summary` | Build | G | todo | |
 | [8.03](phase-8/8.03-metrics-page.md) | Next.js `/metrics` page and `/api/metrics` proxy | Build | G | todo | |
 | [8.04](phase-8/8.04-calibration.md) | Confidence calibration report | Author | A (+G data export) | todo | |

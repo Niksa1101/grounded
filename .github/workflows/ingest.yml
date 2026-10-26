@@ -22,6 +22,8 @@
 #   This workflow only RESTORES the corpus clone and saves the embeddings cache when the run
 #   added vectors. A cold cache plus the daily quota ends with exit 3 and nothing written to Neon.
 # - Two runs must never overlap (the concurrency group; a queued run waits, none is cancelled).
+#   The group `neon-production-writes` is shared with migrate.yml, so neither workflow writes to
+#   Neon while the other runs.
 name: ingest
 
 on:
@@ -42,7 +44,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: ingest-neon-production
+  group: neon-production-writes
   cancel-in-progress: false
 
 jobs:

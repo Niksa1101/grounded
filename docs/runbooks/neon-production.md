@@ -1,11 +1,12 @@
 # Runbook: Neon production (migrate, `app` role, index)
 
-Ticket 5.09. **The Author runs every step below.** An agent writes this file and the workflow
-[`ingest.yml`](../../.github/workflows/ingest.yml) but never runs them against Neon production
-(AGENTS.md §5, §11). Commands are copy-pasteable, one per block, and meant for Git Bash, Linux or
-macOS. Never paste a password or a connection string into a file, a commit, a PR or a chat.
+Ticket 5.09. **The Author runs every step below.** An agent writes this file and the workflows
+[`ingest.yml`](../../.github/workflows/ingest.yml) and [`migrate.yml`](../../.github/workflows/migrate.yml)
+but never runs them against Neon production (AGENTS.md §5, §11); the one exception is a dispatch of
+`migrate.yml` with the Author's explicit go-ahead for that run (step 11). Commands are
+copy-pasteable, one per block, and meant for Git Bash, Linux or macOS. Never paste a password or a connection string into a file, a commit, a PR or a chat.
 
-What you end up with: the schema (migrations `0001`–`0004`) in the Neon `production` branch, an
+What you end up with: the schema (migrations `0001`–`0005`) in the Neon `production` branch, an
 active index version, a least-privilege `app` role whose **pooled** URL is Vercel's `DATABASE_URL`,
 and proof that `app` can do what the runtime needs and nothing more.
 
@@ -33,6 +34,7 @@ let the public runtime read and write every table.
 | 8 | Set Vercel's `DATABASE_URL` | Vercel |
 | 9 | Optional: record eval runs | GitHub |
 | 10 | Housekeeping: first manual run, then enable the daily schedule | GitHub |
+| 11 | Later migrations: run `migrate.yml` | GitHub |
 
 The role comes after the first workflow run because the grants name tables that the migrations
 create.
@@ -120,7 +122,7 @@ gh run watch
 ```
 
 In the run: the preflight step says how many texts the cache lacks (expect `0 texts to embed`), the
-migrate step lists `0001_init`, `0002_index_integrity`, `0003_rate_limit` and `0004_deadline_outcome` as applied, the ingest
+migrate step lists `0001_init`, `0002_index_integrity`, `0003_rate_limit`, `0004_deadline_outcome` and `0005_dashboard_views` as applied, the ingest
 step ends with `Stored index version N (ready).` and `Active: no`, and the job summary shows the
 index versions table. The host of the connection string is masked in the log.
 
@@ -207,6 +209,7 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON answer_cache TO app;
 GRANT SELECT, INSERT, UPDATE ON daily_usage TO app;
 GRANT INSERT, SELECT ON request_logs TO app;
 GRANT SELECT, INSERT, UPDATE ON rate_limit_counters TO app;
+GRANT SELECT ON v_request_stats_daily, v_stage_latency_7d, v_request_metrics TO app;
 ```
 
 Still in `psql`, copy the shell variable into a `psql` variable, set the password from it, and drop
@@ -246,13 +249,17 @@ Then build the runtime URL: take the owner's **pooled** string from the Console 
 postgresql://app:<password>@ep-<id>-pooler.us-east-2.aws.neon.tech/<database>?sslmode=require
 ```
 
-A later grant (for example the Phase 8 views) is a new statement added to DB.md §5 **and** to this
-file in the same PR, then applied here as the owner.
+A later grant is a new statement added to DB.md §5 **and** to this file in the same PR. The last
+line above (the dashboard views of migration `0005`) shows the pattern for a grant on objects a
+migration creates: the migration grants it itself where `app` already exists (a guarded block, DB.md
+§5), and this block grants it on a fresh environment, where the role is created after the migrations.
+Either order ends with the same privileges, so on an environment that had the role before `0005`
+(the production of 2026-10-12) nothing needs to be run here: step 11 is enough.
 
 ## 7. Least-privilege checks (the Author's manual check)
 
 First, the catalog view, as the **owner** (open `psql "$DATABASE_URL_DIRECT"` again). It lists what
-`app` may do on every table of the `public` schema:
+`app` may do on every table and view of the `public` schema:
 
 ```sql
 SELECT c.relname AS table_name,
@@ -261,7 +268,7 @@ FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
 CROSS JOIN (VALUES ('SELECT', 1), ('INSERT', 2), ('UPDATE', 3), ('DELETE', 4), ('TRUNCATE', 5))
     AS p(priv, ord)
-WHERE c.relkind = 'r' AND has_table_privilege('app', c.oid, p.priv)
+WHERE c.relkind IN ('r', 'v') AND has_table_privilege('app', c.oid, p.priv)
 GROUP BY c.relname
 ORDER BY c.relname;
 ```
@@ -279,6 +286,9 @@ missing from the result, such as `schema_migrations`, gives `app` nothing:
 | index_versions | SELECT |
 | rate_limit_counters | SELECT, INSERT, UPDATE |
 | request_logs | SELECT, INSERT |
+| v_request_metrics | SELECT |
+| v_request_stats_daily | SELECT |
+| v_stage_latency_7d | SELECT |
 
 Second, behave like the runtime. Connect as `app` through the **pooled** URL, which also proves the
 URL and the pooler work:
@@ -444,6 +454,30 @@ privacy notice. If the repository goes quiet, re-enable the workflow in the Acti
 run the first command of this step again with `dry_run=false`) and check the date of the last
 scheduled run now and then. The README lists this limitation.
 
+## 11. Later migrations: `migrate.yml` (ticket 8.01)
+
+A migration merged after the first run (from `0005_dashboard_views` on) reaches Neon through
+[`migrate.yml`](../../.github/workflows/migrate.yml): `grounded migrate` with `DATABASE_URL_DIRECT`
+and nothing else, from `main` only, behind the guard of `ingest.yml` (empty, non-Postgres, `-pooler`
+and local URLs are refused, the host is masked) and the `neon-production` approval gate if you set
+one up. The migrations run in order, each in its own transaction, and an applied file is never run
+again (DB.md §10), so a dispatch with nothing pending changes nothing. An agent dispatches it only
+with your explicit go-ahead for that run. It shares its concurrency group with `ingest.yml`, so it
+waits while an ingest runs.
+
+```bash
+gh workflow run migrate.yml --ref main
+```
+
+```bash
+gh run watch
+```
+
+The migrate step and the job summary list what the run applied (`applied  0005_dashboard_views`) and
+end with `Done: N applied, M already up to date.` For `0005`: `app` existed already, so the
+migration granted it SELECT on the three views. To check it, run the catalog query of step 7 as the
+owner: the three `v_…` rows must be there with `SELECT`.
+
 ## Windows: PowerShell and `psql` through Docker
 
 The commands above are for Git Bash, Linux or macOS. On Windows in PowerShell (5.1), the first run
@@ -506,6 +540,8 @@ Pitfalls seen on the first run:
 | A probe in step 7 that must fail succeeds | `app` has a grant it should not | revoke it (`REVOKE … ON <table> FROM app`), fix DB.md §5 and this file together if the doc was wrong |
 | The `app` password or an owner URL leaked | | owner: reset the password in the Neon console and update the secret; `app`: as the owner, the same commands as step 6 with a new password (`read -rs`, then in `psql` `\getenv`, `ALTER ROLE app PASSWORD :'app_password'` and `\unset`, then `unset`), update Vercel and redeploy |
 | The `housekeeping` guard step fails | same as the ingest guard: `DATABASE_URL_DIRECT` is missing, pooled or local | fix the secret (step 1) |
+| The `migrate` guard step fails | the same guard again | fix the secret (step 1) |
+| The step 7 catalog query has no `v_…` rows after `0005` | `app` was created after `0005` without the last line of the step 6 block | run that `GRANT SELECT ON v_request_stats_daily, …` line as the owner |
 | `retention` fails with a connection error | the direct URL is wrong or Neon is unreachable (the job stops after 10 minutes at the latest) | fix the secret or wait, then re-run; nothing was changed (one transaction) |
 | `keep-warm` fails with `HTTP 000` after four tries | no answer: the backend URL is wrong, or the deployment is down | open the URL in a browser; fix `BACKEND_URL` or the deployment |
 | `keep-warm` fails with `PROXY_SHARED_SECRET is not set` or `Keep-warm rejected (401)` | the repository secret is missing, or differs from the backend's `PROXY_SHARED_SECRET` in Vercel | step 10: `gh secret set PROXY_SHARED_SECRET` with the Vercel value |
@@ -538,3 +574,4 @@ Tick each box as you do it; the acceptance criteria of ticket 5.09 are the last 
 - [ ] Optional: `EVAL_RECORD_RUNS` set, deliberately
 - [ ] `BACKEND_URL` variable set; `housekeeping.yml` run with `dry_run=true`, then `dry_run=false`: both jobs green (ticket 5.11 acceptance)
 - [ ] `HOUSEKEEPING_ENABLED=true` set after that run, deliberately; a calendar reminder to look at the scheduled runs within 60 days
+- [ ] `migrate.yml` run after each merged migration (`0005_dashboard_views`: the three views have `SELECT` for `app` in the step 7 query)
