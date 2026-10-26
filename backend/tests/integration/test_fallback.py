@@ -13,7 +13,7 @@ because an answer from the primary is cached (Tech §11).
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncGenerator, Iterator
+from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -35,9 +35,10 @@ from grounded.infra.provider_errors import (
     ProviderBadOutput,
     ProviderRateLimited,
     ProviderRequestRejected,
+    ProviderTimeout,
     ProviderUnavailable,
 )
-from grounded.ingest.embed import FakeEmbedder
+from grounded.ingest.embed import FakeEmbedder, TaskType, Vector
 from grounded.main import create_app
 from grounded.runtime import ProviderConfigError, open_runtime
 from grounded.schemas.llm import LLMAnswer, LLMClaim
@@ -499,6 +500,90 @@ async def test_a_deadline_shorter_than_one_call_is_a_504_before_any_call(env: En
     assert row["input_tokens"] is None
     # No budget unit for a call that was not made: the day's row was never even created.
     assert table(env, "SELECT * FROM daily_usage") == []
+
+
+class TimedEmbedder(FakeEmbedder):
+    """The query embedding takes ``takes_s`` on the pipeline's clock: it stands for everything a
+    request does before the LLM stage, which is otherwise 0 s on the fake clock."""
+
+    def __init__(self, clock: FakeClock, takes_s: float, *, dim: int) -> None:
+        super().__init__(dim=dim)
+        self._clock = clock
+        self._takes_s = takes_s
+
+    async def embed(self, texts: Sequence[str], task_type: TaskType) -> list[Vector]:
+        self._clock.advance(self._takes_s)
+        return await super().embed(texts, task_type)
+
+
+def timed_client(
+    env: Env, before_llm_s: float, primary: FakeLLMProvider, fallback: FakeLLMProvider
+) -> AbstractAsyncContextManager[httpx.AsyncClient]:
+    # The two numbers the arithmetic below depends on, pinned (they are the defaults, D53).
+    settings = make_settings(database_url=env.url, request_deadline_s=25.0, llm_timeout_s=12.0)
+    return app_client(
+        settings,
+        embedder=TimedEmbedder(env.clock, before_llm_s, dim=settings.embedding_dim),
+        provider=primary,
+        fallback_providers=[fallback],
+        clock=env.clock,
+        router_clock=env.hand.clock,
+    )
+
+
+def timeouts(env: Env, count: int) -> TimedProvider:
+    """A Gemini whose every call runs into its whole 12 s timeout."""
+    return TimedProvider(env.clock, 12.0, [ProviderTimeout("12 s") for _ in range(count)])
+
+
+async def test_a_primary_timeout_leaves_no_time_for_the_fallback_and_is_a_504(
+    env: Env, caplog: pytest.LogCaptureFixture
+) -> None:
+    # Pinned as it is today (Tech §10, "The deadline rule"). A timed-out primary used its whole
+    # LLM_TIMEOUT_S, so the fallback starts only if the request reached the LLM stage within
+    # REQUEST_DEADLINE_S - 2 x LLM_TIMEOUT_S, 1 s with the defaults. After 1.5 s, 11.5 s of 25 are
+    # left: Groq is not called and the request is the router's 504, not a fallback. The timeout
+    # still counts toward Gemini's breaker: the third one opens it, and the next request goes
+    # straight to Groq without calling Gemini.
+    caplog.set_level(logging.INFO)
+    primary, fallback = timeouts(env, 3), groq(good())
+    async with timed_client(env, 1.5, primary, fallback) as client:
+        refused = [await ask(client, question) for question in (Q1, Q2, Q3)]
+        answered = await ask(client, Q4)
+
+    assert [response.status_code for response in refused] == [504, 504, 504]
+    assert {response.json()["error"]["code"] for response in refused} == {"deadline_exceeded"}
+    refusals = [
+        r
+        for r in caplog.records
+        if r.getMessage() == "router refused an attempt, too little time left"
+    ]
+    assert [r.__dict__["time_left_s"] for r in refusals] == [pytest.approx(11.5)] * 3
+    assert answered.status_code == 200
+    meta = answered.json()["meta"]
+    assert (meta["provider"], meta["fallback_used"]) == ("groq", True)
+    assert (len(primary.calls), len(fallback.calls)) == (3, 1)  # the fourth skipped Gemini
+
+    *failed, last = rows(env)
+    assert [(r["outcome"], r["provider"], r["fallback_used"]) for r in failed] == [
+        ("deadline_exceeded", "gemini", False)
+    ] * 3
+    assert {r["latency_llm_ms"] for r in failed} == {12_000}  # the timeout, then no second call
+    assert (last["outcome"], last["provider"], last["fallback_used"]) == ("answered", "groq", True)
+
+
+async def test_a_primary_timeout_falls_back_when_the_llm_stage_starts_within_1_s(
+    env: Env,
+) -> None:
+    # The other side of the same arithmetic: after 0.5 s, 12.5 s are left, a whole Groq attempt.
+    primary, fallback = timeouts(env, 1), groq(good())
+    async with timed_client(env, 0.5, primary, fallback) as client:
+        response = await ask(client, Q1)
+
+    assert response.status_code == 200
+    meta = response.json()["meta"]
+    assert (meta["provider"], meta["fallback_used"]) == ("groq", True)
+    assert (len(primary.calls), len(fallback.calls)) == (1, 1)
 
 
 # --- the primary alone, and the rest of the contract ----

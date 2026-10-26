@@ -730,6 +730,14 @@ Source: planning Q&A, 2026-09-24. Changing any of these requires an explicit dec
   rule (the Author reviews it):** the router reads a `time_left` hook before every call and starts a call only if the
   time left holds its whole timeout; otherwise it raises `RouterDeadlineError`, which 7.04 maps to the 504, and it never
   shortens the timeout (Tech §10, "Contract (7.02)"). Not measured: how often the third attempt is refused in practice.
+  *Phase 7 review (2026-10-26):* the second attempt is refused too when the first one **timed out**. A timed-out
+  Gemini call used its whole 12 s, so Groq starts only if the request reached the LLM stage within 1 s
+  (`REQUEST_DEADLINE_S − 2 × LLM_TIMEOUT_S`), which embedding plus retrieval usually exceed. In practice a Gemini
+  timeout is then a 504, not a fallback (FR-15, D30), until `BREAKER_FAILURE_THRESHOLD` timeouts open Gemini's breaker
+  and later requests go straight to Groq; a 429 or a 5xx is unaffected. Pinned by a test as it is (Tech §10, "The
+  deadline rule"). **Open, the Author's call (D53):** keep it, or give the primary a shorter timeout than the fallback
+  so `REQUEST_DEADLINE_S − before_llm − T_primary ≥ T_fallback`. Not measured yet: how long requests take before the
+  LLM stage, and how often a Gemini attempt times out (`request_logs.latency_llm_ms` of the 504 rows).
   (7) *Time zones.* The midnight-Pacific reset needs `zoneinfo`. `tzdata` is locked for Windows only (a psycopg
   dependency, `uv.lock`); Linux uses the system database, which Vercel's Python runtime may or may not have
   (unverified). If the zone cannot be loaded, the reset counts as not derivable (900 s) and the router logs a warning;
