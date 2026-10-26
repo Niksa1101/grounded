@@ -1394,17 +1394,10 @@ def eval_calibration(
         raise _fail(f"Cannot calibrate {results}: {exc}") from exc
     markdown = render_calibration(report)
     if out is not None:
-        command = " ".join(
-            [
-                f"uv run grounded eval calibration --results ../eval/results/{results.name}",
-                *(f"--config {name}" for name in config or []),
-                *([f"--git-sha {git_sha}"] if git_sha else []),
-                f"--out {out.as_posix()}",
-            ]
-        )
+        header = published_header(results.name, out, configs=config or [], git_sha=git_sha)
         try:
             out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_bytes(f"{published_header(command)}\n\n{markdown}".encode())
+            out.write_bytes(f"{header}\n\n{markdown}".encode())
         except OSError as exc:
             raise _fail(f"Cannot write {out}: {exc}") from exc
     _echo_markdown(markdown)

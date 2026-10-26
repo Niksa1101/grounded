@@ -26,6 +26,7 @@ from grounded.evals.calibration import (
     bucket_of,
     build_report,
     calibrate,
+    published_header,
 )
 
 FIXTURE = (
@@ -37,8 +38,14 @@ START, END = "<!-- calibration-report:start -->", "<!-- calibration-report:end -
 runner = CliRunner()
 
 
-def claim(confidence: float, outcome: Outcome = "supported", **flags: bool) -> ClaimOutcome:
-    return ClaimOutcome(confidence, outcome, **flags)
+def claim(
+    confidence: float,
+    outcome: Outcome = "supported",
+    *,
+    decided_locally: bool = False,
+    cache_hit: bool = False,
+) -> ClaimOutcome:
+    return ClaimOutcome(confidence, outcome, decided_locally=decided_locally, cache_hit=cache_hit)
 
 
 # --- Buckets -------------------------------------------------------------------------------------
@@ -87,6 +94,21 @@ def test_counts_and_rates_per_bucket() -> None:
     assert (cal.overall.name, cal.overall.n, cal.overall.supported) == ("all", 6, 4)
     assert cal.cache_hits == 1
     assert cal.monotonic is True  # 0.5, 0.5, 1.0: equal rates do not break it
+
+
+def test_answers_counts_the_distinct_answers_behind_n() -> None:
+    cal = calibrate(
+        [
+            ClaimOutcome(0.9, "supported", answer="q1"),
+            ClaimOutcome(0.95, "supported", answer="q1"),
+            ClaimOutcome(0.85, "not_supported", answer="q2"),
+            ClaimOutcome(0.9, "judge_failed", answer="q3"),  # no verdict: not behind n
+            ClaimOutcome(0.6, "supported", answer="q1"),
+        ]
+    )
+    assert (cal.buckets[2].n, cal.buckets[2].answers) == (3, 2)
+    assert (cal.buckets[1].n, cal.buckets[1].answers) == (1, 1)
+    assert (cal.overall.n, cal.overall.answers) == (4, 2)
 
 
 def test_an_empty_bucket_has_no_rate_and_is_skipped_by_the_monotonic_check() -> None:
@@ -154,9 +176,10 @@ def test_reads_the_recorded_run() -> None:
     hybrid = report.configs[0]
     assert hybrid.answers == 7
     low, mid, high = hybrid.calibration.buckets
-    assert (low.n, low.supported, low.decided_locally) == (1, 0, 1)
-    assert (mid.n, mid.supported, mid.judge_failed) == (2, 2, 3)
-    assert (high.n, high.supported) == (3, 2)
+    assert (low.n, low.answers, low.supported, low.decided_locally) == (1, 1, 0, 1)
+    assert (mid.n, mid.answers, mid.supported, mid.judge_failed) == (2, 2, 2, 3)
+    assert (high.n, high.answers, high.supported) == (3, 2, 2)  # q003 gives two of the three
+    assert (hybrid.calibration.overall.n, hybrid.calibration.overall.answers) == (6, 4)
     assert hybrid.calibration.monotonic is False
     no_rag = report.configs[1].calibration
     assert (no_rag.overall.n, no_rag.overall.not_judged, no_rag.monotonic) == (0, 7, None)
@@ -167,24 +190,29 @@ def test_configs_can_be_picked_and_ordered() -> None:
     assert [c.identity.config for c in report.configs] == ["no_rag"]
 
 
-def _faithfulness_claims(document: dict[str, Any], question: str) -> list[dict[str, Any]]:
+def _hybrid_q003(document: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The answer's claims and the judge's per-claim records of hybrid q003 (two claims)."""
     for row in document["results"]["results"]:
-        if row["provider"]["label"] == "hybrid" and row["metadata"]["golden"]["id"] == question:
+        if row["provider"]["label"] == "hybrid" and row["metadata"]["golden"]["id"] == "q003":
             for component in row["gradingResult"]["componentResults"]:
                 if component["assertion"]["metric"] == "faithfulness":
-                    return component["judge"]["claims"]
-    raise AssertionError(f"no hybrid {question} in the fixture")
+                    return row["metadata"]["claims"], component["judge"]["claims"]
+    raise AssertionError("no hybrid q003 in the fixture")
 
 
 def _changed(tmp_path: Path, change: str) -> Path:
     document = json.loads(FIXTURE.read_bytes())
-    claims = _faithfulness_claims(document, "q003")
+    answer, records = _hybrid_q003(document)
     if change == "verdict":
-        claims[0]["verdict"] = "PARTIALLY_SUPPORTED"
-    elif change == "confidence":
-        claims[0]["confidence"] = 1.5
+        records[0]["verdict"] = "PARTIALLY_SUPPORTED"
+    elif change == "confidence":  # out of range on both sides, so only the range check trips
+        records[0]["confidence"] = answer[0]["confidence"] = 1.5
+    elif change == "mismatch":
+        records[0]["confidence"] = 0.123
+    elif change == "index":
+        records[1]["claim_index"] = 0
     elif change == "count":
-        claims.pop()
+        records.pop()
     path = tmp_path / "changed.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     return path
@@ -195,6 +223,8 @@ def _changed(tmp_path: Path, change: str) -> Path:
     [
         ("verdict", "unknown verdict 'PARTIALLY_SUPPORTED'"),
         ("confidence", "hybrid q003 claim 0: confidence 1.5 is not in"),
+        ("mismatch", r"claim 0: the judge record has confidence 0\.123, the answer 0\.8"),
+        ("index", r"claim indices \[0, 0\] are not 0\.\.1, once each"),
         ("count", "the judge recorded 1 claim"),
     ],
 )
@@ -223,13 +253,24 @@ def test_the_command_prints_the_tables_and_writes_them_with_out(tmp_path: Path) 
     )
     assert result.exit_code == 0, result.output
     assert "git abc123" in result.output
-    assert "| mid | 0.5 to 0.8 | 2 | 2 | 1.000 | 0 | 3 | 0 |" in result.output
-    assert "| low | < 0.5 | 0 | 0 | — | 0 | 0 | 7 |" in result.output
+    assert "| mid | 0.5 to 0.8 | 2 | 2 | 2 | 1.000 | 0 | 3 | 0 |" in result.output
+    assert "| low | < 0.5 | 0 | 0 | 0 | — | 0 | 0 | 7 |" in result.output
     assert "Monotonic: no (over low, mid, high)." in result.output
     header, _, body = out.read_bytes().decode("utf-8").partition("\n\n")
     assert header.startswith("> Generated, do not edit: the output of `uv run grounded eval")
-    assert f"--results ../eval/results/{FIXTURE.name} --git-sha abc123 --out" in header
+    expected = f"--results ../eval/results/{FIXTURE.name} --git-sha abc123 --out <dir>/v9.md`"
+    assert expected in header
+    assert str(tmp_path) not in header  # no local path leaks into a committed file
+    assert str(FIXTURE.parent) not in header
     assert body == result.output
+
+
+def test_the_header_names_an_output_inside_the_repository_from_backend() -> None:
+    header = published_header("run.json", CALIBRATION_DIR / "v1.md", configs=["hybrid"])
+    assert (
+        "`uv run grounded eval calibration --results ../eval/results/run.json --config hybrid "
+        "--out ../eval/calibration/v1.md`"
+    ) in header
 
 
 @pytest.mark.parametrize(

@@ -240,27 +240,27 @@ that file. It holds counts only, no question, claim or answer text.
 <!-- calibration-report:start -->
 Confidence calibration of `20261008T155539Z-generation.json` (sha256 4d571ae1a34b): the run of 2026-10-08 15:56 UTC, git 2a7d381f75f40791f6185a1e1ef80320a1cdfed8, golden set v1 (sha256 8f084817), judge groq / openai/gpt-oss-120b (judge_faithfulness_v1@84103412), promptfoo 0.123.1.
 
-Buckets (Tech §9.8): low = confidence < 0.5, mid = 0.5 ≤ confidence ≤ 0.8 (both edges belong to mid), high = confidence > 0.8. n = claims with a judge verdict; supported rate = SUPPORTED / n (— when n = 0). NOT_SUPPORTED counts as not supported, including the verdicts given without a call because the claim had no usable source (decided locally). A verdict replayed from the eval cache counts like the others. Left out of n and counted on their own: claims whose judge call failed, and claims of answers the judge does not grade (faithfulness not applicable). Monotonic: the supported rate never falls from low to mid to high, over the buckets with n > 0.
+Buckets (Tech §9.8): low = confidence < 0.5, mid = 0.5 ≤ confidence ≤ 0.8 (both edges belong to mid), high = confidence > 0.8. n = claims with a judge verdict; answers = the distinct answers those n claims come from (claims of one answer are not independent); supported rate = SUPPORTED / n (— when n = 0). NOT_SUPPORTED counts as not supported, including the verdicts given without a call because the claim had no usable source (decided locally). A verdict replayed from the eval cache counts like the others. Left out of n and counted on their own: claims whose judge call failed, and claims of answers the judge does not grade (faithfulness not applicable). Monotonic: the supported rate never falls from low to mid to high, over the buckets with n > 0.
 
 **hybrid**: generator gemini / gemini-3.5-flash-lite, prompt answer_v1@08cc49e5, index 0.141.1@4949e8a3, retrieval config 2f0b02bd, 30 answers.
 
-| Bucket | Confidence | n | Supported | Supported rate | Decided locally | Judge failed | Not judged |
-|---|---|---:|---:|---:|---:|---:|---:|
-| low | < 0.5 | 0 | 0 | — | 0 | 0 | 0 |
-| mid | 0.5 to 0.8 | 16 | 16 | 1.000 | 0 | 0 | 0 |
-| high | > 0.8 | 37 | 37 | 1.000 | 0 | 0 | 0 |
-| all | 0 to 1 | 53 | 53 | 1.000 | 0 | 0 | 0 |
+| Bucket | Confidence | n | Answers | Supported | Supported rate | Decided locally | Judge failed | Not judged |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| low | < 0.5 | 0 | 0 | 0 | — | 0 | 0 | 0 |
+| mid | 0.5 to 0.8 | 16 | 9 | 16 | 1.000 | 0 | 0 | 0 |
+| high | > 0.8 | 37 | 19 | 37 | 1.000 | 0 | 0 | 0 |
+| all | 0 to 1 | 53 | 23 | 53 | 1.000 | 0 | 0 | 0 |
 
 Monotonic: yes (over mid, high). Verdicts replayed from the eval cache: 4 of 53.
 
 **no_rag**: generator gemini / gemini-3.5-flash-lite, prompt answer_no_rag_v1@5f725a9d, index none, retrieval config no_rag, 30 answers.
 
-| Bucket | Confidence | n | Supported | Supported rate | Decided locally | Judge failed | Not judged |
-|---|---|---:|---:|---:|---:|---:|---:|
-| low | < 0.5 | 0 | 0 | — | 0 | 0 | 72 |
-| mid | 0.5 to 0.8 | 0 | 0 | — | 0 | 0 | 0 |
-| high | > 0.8 | 0 | 0 | — | 0 | 0 | 0 |
-| all | 0 to 1 | 0 | 0 | — | 0 | 0 | 72 |
+| Bucket | Confidence | n | Answers | Supported | Supported rate | Decided locally | Judge failed | Not judged |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| low | < 0.5 | 0 | 0 | 0 | — | 0 | 0 | 72 |
+| mid | 0.5 to 0.8 | 0 | 0 | 0 | — | 0 | 0 | 0 |
+| high | > 0.8 | 0 | 0 | 0 | — | 0 | 0 | 0 |
+| all | 0 to 1 | 0 | 0 | 0 | — | 0 | 0 | 72 |
 
 Monotonic: not testable (0 of 3 buckets have n > 0, it needs two). Verdicts replayed from the eval cache: 0 of 0.
 <!-- calibration-report:end -->
@@ -272,23 +272,28 @@ unsupported claims.**
   that have claims show 1.000. A rate that is 1.000 everywhere cannot fall. The table shows that the judge never
   contradicted a confident claim in this run; it does not show that a higher score means a claim is more likely to be
   supported, because there was no unsupported claim for a lower bucket to hold more of.
-- **n per bucket, and what it allows.** low 0, mid 16, high 37 (53 claims from the 23 answered `hybrid` questions). One
+- **n per bucket, and what it allows.** low 0, mid 16, high 37: 53 claims from 23 answers (the `Answers` column). One
   claim moves the mid rate by 1/16 (about 0.06) and the high rate by 1/37 (about 0.03), so a difference between the two
-  smaller than that is not a claim, and with both at 1.000 there is no difference to claim. Zero unsupported claims out
-  of 16 is still consistent with an unsupported rate of up to about 3/16 (19%) in mid and 3/37 (8%) in high: the "rule
-  of three", a 95% bound for independent trials, computed here from the n above. The claims are not independent (below),
-  so the true bounds are wider. The low bucket is empty for `hybrid`: no answered claim scored below 0.5.
-- **What it means for the UI's "Low confidence" flag (< 0.5).** In this run it flagged no `hybrid` claim and all 72
-  `no_rag` claims, which cite nothing and are capped at 0.2 by design (`CONFIDENCE_UNCITED_CAP`); the judge does not
-  grade `no_rag`, so they are counted as not judged. So the flag works as "no valid citation, or weak retrieval support"
-  and is not validated beyond that: whether a *cited* claim below 0.5 is less often supported was not measured, because
+  smaller than that is not a claim, and with both at 1.000 there is no difference to claim. Zero `NOT_SUPPORTED` out of
+  16 does not show the rate is zero. As a rough scale only: if the claims were independent draws, the "rule of three" (a
+  one-sided 95% bound for zero events) would put the rate at which this judge says `NOT_SUPPORTED` at up to about 3/16
+  (19%) in mid and 3/37 (8%) in high. The claims are not independent: the 16 mid claims come from 9 answers and the 37
+  high ones from 19, and counted per answer the same rule gives about 3/9 (33%) and 3/19 (16%); and these bound the
+  judge's verdicts, not the true unsupported rate. The low bucket is empty for `hybrid`: no answered claim scored below
+  0.5.
+- **What it means for the UI's "Low confidence" flag (< 0.5).** In this run no `hybrid` claim scored below 0.5, so the
+  demo would have flagged none of them. All 72 `no_rag` claims are below it: they cite nothing and are capped at 0.2 by
+  design (`CONFIDENCE_UNCITED_CAP`); `no_rag` is a CLI baseline the UI never shows, and the judge does not grade it, so
+  they are counted as not judged. By design the flag means "no valid citation, or weak retrieval support"; this run
+  exercised only the uncited case: whether a *cited* claim below 0.5 is less often supported was not measured, because
   there was none. The score is a heuristic, not a probability: a mid claim is not "70% likely" to be supported (here the
   mid rate is 1.000). Tech §9.8 asks only for the order of the buckets, not for the rate to match the score.
 - **Limitations.** One run of 30 questions. The verdicts come from an LLM judge whose agreement with the Author on real
-  faithfulness claims is 6 of 6, all `SUPPORTED` ([Judge-human agreement](#judge-human-agreement)): whether it catches a
-  subtly unsupported claim is not measured, and a judge that rarely says `NOT_SUPPORTED` makes every bucket look perfect.
-  The claims of one answer share a question, a retrieval and often the same chunks, so 53 claims are fewer than 53
-  independent observations. No claim was decided without a judge call and no judge call failed (both columns are 0); 4
+  faithfulness claims is 6 of 6, all `SUPPORTED` ([Judge-human agreement](#judge-human-agreement)). It said
+  `NOT_SUPPORTED` for all 4 synthetic controls there (a real claim shown with another question's sources), so it is not a
+  rubber stamp for gross mismatches; but whether it catches a subtly unsupported claim is not measured, and a judge that
+  rarely says `NOT_SUPPORTED` makes every bucket look perfect. The claims of one answer share a question, a retrieval and
+  often the same chunks, so 53 claims are fewer than 53 independent observations (they come from 23 answers). No claim was decided without a judge call and no judge call failed (both columns are 0); 4
   verdicts were replayed from the eval cache, which are the original calls' verdicts. `hybrid_rerank` was a separate run
   and is not in this table.
 

@@ -36,6 +36,7 @@ import math
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
+from pathlib import Path
 from typing import Final, Literal
 
 from pydantic import AliasPath, BaseModel, ConfigDict, Field, ValidationError
@@ -44,6 +45,7 @@ from grounded.evals.generation_results import PromptfooResultsError, parse_resul
 from grounded.evals.retrieval_runner import EVAL_DIR
 from grounded.schemas.generation_eval import GenerationConfigResult, GenerationRunInfo
 
+REPO_DIR: Final = EVAL_DIR.parent
 CALIBRATION_DIR: Final = EVAL_DIR / "calibration"
 LOW_BELOW: Final = 0.5  # Tech §9.8; the UI's "Low confidence" flag is the same cut
 HIGH_ABOVE: Final = 0.8
@@ -69,12 +71,14 @@ class ClaimOutcome:
     outcome: Outcome
     decided_locally: bool = False
     cache_hit: bool = False
+    answer: str = ""  # the answer (question id) the claim belongs to: claims of one answer cluster
 
 
 @dataclass(frozen=True, slots=True)
 class BucketRow:
     name: str  # a bucket, or "all"
     n: int  # claims with a verdict
+    answers: int  # distinct answers those n claims come from
     supported: int
     decided_locally: int
     judge_failed: int
@@ -119,6 +123,7 @@ def _row(name: str, claims: Sequence[ClaimOutcome]) -> BucketRow:
     return BucketRow(
         name,
         n=len(judged),
+        answers=len({c.answer for c in judged}),
         supported=sum(c.outcome == "supported" for c in judged),
         decided_locally=sum(c.decided_locally for c in judged),
         judge_failed=sum(c.outcome == "judge_failed" for c in claims),
@@ -160,7 +165,9 @@ class _Judge(_Wire):
 
 class _Component(_Wire):
     metric: str = Field(validation_alias=AliasPath("assertion", "metric"))
-    errored: bool = False  # not applicable: no judge record, so its claims are "not judged"
+    # True: the judge failed (claims without a record are "judge failed"). False with no judge
+    # record: not applicable, so the answer's claims are "not judged".
+    errored: bool = False
     judge: _Judge | None = None
 
 
@@ -201,18 +208,16 @@ def _claim_outcomes(row: _Row) -> list[ClaimOutcome]:
         raise CalibrationError(f"{where}: faithfulness appears twice")
     component = faithfulness[0] if faithfulness else None
     judged = component.judge.claims if component and component.judge else []
+    answer = row.question_id
     if not judged:
         failed = component is not None and component.errored
         outcome: Outcome = "judge_failed" if failed else "not_judged"
-        return [ClaimOutcome(c.confidence, outcome) for c in row.claims]
-    if len(judged) != len(row.claims):
-        raise CalibrationError(
-            f"{where}: the judge recorded {len(judged)} claim(s), the answer has {len(row.claims)}"
-        )
+        return [ClaimOutcome(c.confidence, outcome, answer=answer) for c in row.claims]
+    _check_records(where, judged, row.claims)
     outcomes: list[ClaimOutcome] = []
     for entry in judged:
         if entry.verdict is None:
-            outcomes.append(ClaimOutcome(entry.confidence, "judge_failed"))
+            outcomes.append(ClaimOutcome(entry.confidence, "judge_failed", answer=answer))
             continue
         if entry.verdict not in _VERDICTS:
             raise CalibrationError(
@@ -225,9 +230,31 @@ def _claim_outcomes(row: _Row) -> list[ClaimOutcome]:
                 _VERDICTS[entry.verdict],
                 decided_locally=entry.decided_locally,
                 cache_hit=entry.cache_hit,
+                answer=answer,
             )
         )
     return outcomes
+
+
+def _check_records(where: str, judged: list[_JudgedClaim], claims: list[_AnswerClaim]) -> None:
+    """The judge's per-claim records must be the answer's claims: one record per claim (indices
+    unique and in range) with the confidence the answer reported for that claim."""
+    if len(judged) != len(claims):
+        raise CalibrationError(
+            f"{where}: the judge recorded {len(judged)} claim(s), the answer has {len(claims)}"
+        )
+    indices = [entry.claim_index for entry in judged]
+    if sorted(indices) != list(range(len(claims))):
+        raise CalibrationError(
+            f"{where}: the judge's claim indices {indices} are not 0..{len(claims) - 1}, once each"
+        )
+    for entry in judged:
+        reported = claims[entry.claim_index].confidence
+        if entry.confidence != reported:  # the same JSON number copied: exact equality holds
+            raise CalibrationError(
+                f"{where} claim {entry.claim_index}: the judge record has confidence "
+                f"{entry.confidence!r}, the answer {reported!r}"
+            )
 
 
 def build_report(
@@ -298,7 +325,9 @@ def render(report: CalibrationReport) -> str:
         f"{info.promptfoo_version}.",
         "",
         "Buckets (Tech §9.8): low = confidence < 0.5, mid = 0.5 ≤ confidence ≤ 0.8 (both edges "
-        "belong to mid), high = confidence > 0.8. n = claims with a judge verdict; supported "
+        "belong to mid), high = confidence > 0.8. n = claims with a judge verdict; answers = the "
+        "distinct answers those n claims come from (claims of one answer are not independent); "
+        "supported "
         "rate = SUPPORTED / n (— when n = 0). NOT_SUPPORTED counts as not supported, including the "
         "verdicts given without a call because the claim had no usable source (decided locally). "
         "A verdict replayed from the eval cache counts like the others. Left out of n and counted "
@@ -318,14 +347,15 @@ def _config_lines(item: ConfigCalibration) -> list[str]:
         f"**{who.config}**: generator {who.provider} / {who.model}, prompt {who.prompt_version}, "
         f"index {who.index_version}, retrieval config {retrieval}, {item.answers} answers.",
         "",
-        "| Bucket | Confidence | n | Supported | Supported rate | Decided locally | Judge failed "
-        "| Not judged |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Bucket | Confidence | n | Answers | Supported | Supported rate | Decided locally "
+        "| Judge failed | Not judged |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in (*cal.buckets, cal.overall):
         rate = "—" if row.rate is None else f"{row.rate:.3f}"
         lines.append(
-            f"| {row.name} | {_RANGES[row.name]} | {row.n} | {row.supported} | {rate} | "
+            f"| {row.name} | {_RANGES[row.name]} | {row.n} | {row.answers} | {row.supported} | "
+            f"{rate} | "
             f"{row.decided_locally} | {row.judge_failed} | {row.not_judged} |"
         )
     filled = [row.name for row in cal.buckets if row.n]
@@ -341,10 +371,30 @@ def _config_lines(item: ConfigCalibration) -> list[str]:
     return lines
 
 
-def published_header(command: str) -> str:
-    """The one-line header of a file written with ``--out``."""
-    return (
-        f"> Generated, do not edit: the output of `{command}` (run in `backend/`; the results file "
-        "is gitignored, its name and sha256 are on the first line below). A test fails when the "
-        "README block differs from this file."
+def published_header(
+    results_name: str, out: Path, *, configs: Sequence[str] = (), git_sha: str | None = None
+) -> str:
+    """The one-line header of a file written with ``--out``: the command, with no local path in
+    it. The results file is named at its canonical place (``eval/results/``, where the promptfoo
+    command writes it), and ``out`` relative to ``backend/`` when it is inside the repository."""
+    command = " ".join(
+        [
+            f"uv run grounded eval calibration --results ../eval/results/{results_name}",
+            *(f"--config {name}" for name in configs),
+            *([f"--git-sha {git_sha}"] if git_sha else []),
+            f"--out {_from_backend(out)}",
+        ]
     )
+    return (
+        f"> Generated, do not edit: the output of `{command}` (run in `backend/`; the results path "
+        "is the canonical location, eval/results/ is gitignored, and the file's name and sha256 "
+        "are on the first line below). A test fails when the README block differs from this file."
+    )
+
+
+def _from_backend(path: Path) -> str:
+    """``path`` as seen from ``backend/`` if it is inside the repository, else ``<dir>/<name>``."""
+    resolved = path.resolve()
+    if not resolved.is_relative_to(REPO_DIR):
+        return f"<dir>/{path.name}"
+    return "../" + resolved.relative_to(REPO_DIR).as_posix()
