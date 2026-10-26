@@ -257,6 +257,10 @@ uv run grounded eval diff --config hybrid --config hybrid_rerank --results ../ev
 ```
 
 ```bash
+uv run grounded eval calibration --results <promptfoo-output>.json --git-sha <commit> --out ../eval/calibration/<name>.md   # confidence buckets (low < 0.5, mid 0.5-0.8 inclusive, high > 0.8) against the judge's SUPPORTED rate, per config, with n and the monotonic flag (Tech §9.8). Reads the file only (no API, no DB); exit 1 on input it cannot read. --out writes the report under a header; v1.md is pasted into the README block
+```
+
+```bash
 APP_ENV=eval GENERATOR_PROVIDERS=gemini GROQ_MODEL=<pinned> JUDGE_MODEL=<pinned> uv run grounded eval export-verdicts --results <promptfoo-output>.json --git-sha <commit>   # draws the judge-agreement sample: blind eval/judge_agreement/v1.csv + v1.md, and the key in eval/results/ (gitignored). Up to --controls (4) real judge calls; --no-judge asks none; a re-run completes a key (Tech §15.4)
 ```
 

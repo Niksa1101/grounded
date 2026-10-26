@@ -237,7 +237,7 @@ Owner: **G** = Agent, **A** = Author, **A+G** = together, **D** = Author decides
 | [8.01](phase-8/8.01-dashboard-views.md) | Dashboard views migration | Build | G | todo | |
 | [8.02](phase-8/8.02-metrics-api.md) | `GET /v1/metrics/summary` | Build | G | todo | |
 | [8.03](phase-8/8.03-metrics-page.md) | Next.js `/metrics` page and `/api/metrics` proxy | Build | G | todo | |
-| [8.04](phase-8/8.04-calibration.md) | Confidence calibration report | Author | A (+G data export) | todo | |
+| [8.04](phase-8/8.04-calibration.md) | Confidence calibration report | Author | A (delegated to G, 2026-10-26) | done | [#136](https://github.com/Niksa1101/grounded/pull/136) |
 | [8.05](phase-8/8.05-closeout.md) | Cost and latency in README, Phase 8 closeout | Closeout | A | todo | |
 | **9** | **[Hardening and polish](phase-9/README.md)** | | | | |
 | [9.01](phase-9/9.01-failure-modes.md) | Failure-mode analysis from real data | Build | A+G | todo | |

@@ -45,6 +45,9 @@ from grounded.evals.ask_batch import (
     summarize,
     write_ask_batch,
 )
+from grounded.evals.calibration import CalibrationError, published_header
+from grounded.evals.calibration import build_report as build_calibration
+from grounded.evals.calibration import render as render_calibration
 from grounded.evals.diff import DiffError
 from grounded.evals.diff import compare as compare_runs
 from grounded.evals.diff import render as render_diff
@@ -1345,6 +1348,59 @@ def eval_agreement(
         problems = "\n".join(f"- {p}" for p in exc.problems)
         raise _fail(f"Not computed, the labels do not match the key:\n{problems}") from exc
     _echo_markdown(render_report(ratings, sample))
+
+
+@eval_app.command("calibration")
+def eval_calibration(
+    results: Annotated[
+        Path,
+        typer.Option(
+            help="promptfoo's JSON output of a judged generation run.", show_default=False
+        ),
+    ],
+    config: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--config",
+            help="Config(s) to report, in this order (repeat the option). Default: every config "
+            "in the file, hybrid first.",
+            show_default=False,
+        ),
+    ] = None,
+    git_sha: Annotated[
+        str | None,
+        typer.Option(help="The commit that produced the results file (it does not record one)."),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            help="Also write the report here, under a one-line header that names the command "
+            "(e.g. ../eval/calibration/v1.md).",
+            show_default=False,
+        ),
+    ] = None,
+) -> None:
+    """Confidence calibration (Tech.md §9.8): per config, the judge's supported rate in each
+    confidence bucket (low < 0.5, mid 0.5 to 0.8 inclusive, high > 0.8) with n, and whether it is
+    monotonic. Markdown to stdout.
+
+    Reads the file only: no model, no database, no cost. Refuses (exit 1) a file that is not a
+    readable promptfoo run, an unknown config, an unknown verdict and a confidence outside [0, 1].
+    """
+    try:
+        raw = results.read_bytes()
+        report = build_calibration(raw, source_name=results.name, configs=config, git_sha=git_sha)
+    except (OSError, CalibrationError) as exc:
+        raise _fail(f"Cannot calibrate {results}: {exc}") from exc
+    markdown = render_calibration(report)
+    if out is not None:
+        header = published_header(results.name, out, configs=config or [], git_sha=git_sha)
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(f"{header}\n\n{markdown}".encode())
+        except OSError as exc:
+            raise _fail(f"Cannot write {out}: {exc}") from exc
+    _echo_markdown(markdown)
 
 
 @eval_app.command("export-verdicts")
