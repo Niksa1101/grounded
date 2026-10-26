@@ -114,10 +114,6 @@ from grounded.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-# AGENTS.md §6.4: one retry on the same provider with error feedback, then the next provider. The
-# router makes it (7.04); the judge (``evals/judge.py``) applies the same bound to its own call.
-MAX_VALIDATION_RETRIES = 1
-
 # ``Meta`` has two required strings that describe the retrieval; a mode without retrieval fills them
 # with these markers, which no real index label or config hash can equal (those are
 # "<ref>@<8 hex>" and 64 hex characters).
@@ -623,7 +619,9 @@ class AskPipeline:
 
         The hooks are the pipeline's side of the contract. ``before_call`` reserves one budget unit
         before **every** call, so a retry and a fallback each reserve and a skipped provider
-        reserves nothing; the router calls it only for a call it is going to make. ``validate`` is
+        reserves nothing; the router calls it only for a call it is going to make (with no budget it
+        does nothing). ``time_left`` is infinite without a request deadline (eval mode, the CLI),
+        so the router's deadline gate never refuses there. ``validate`` is
         pure and cannot raise: ``map_citations`` over this request's labels, remembering the last
         mapping (the router validates the answering result last). ``on_attempt`` records each
         call as it ends: the trace follows the provider that answered (or the last that reported
@@ -665,18 +663,19 @@ class AskPipeline:
                 max_output_tokens=self._generation.max_output_tokens,
                 timeout_s=self._settings.call_timeout_s,
                 retry_user=lambda original, reason: prompt.render_retry(original, error=reason),
-                before_call=before_call if self._budget is not None else None,
+                before_call=before_call,
                 validate=validate,
                 on_attempt=on_attempt,
-                time_left=time_left if trace.deadline_s is not None else None,
+                time_left=time_left,
                 log_extra={"request_id": str(request_id)},
             )
         except AllProvidersUnavailable as exc:
             if self._primary_only and exc.causes:
                 # The router wraps what the provider raised; the eval harness and the golden
                 # batch read the provider's own error (``is_quota``, ``retry_after_s``,
-                # ``BackoffExhaustedError``).
-                raise exc.causes[-1] from exc
+                # ``BackoffExhaustedError``). No ``from``: its ``__cause__`` is the SDK error the
+                # adapter chained, which the traceback keeps (the wrapper becomes ``__context__``).
+                raise exc.causes[-1]  # noqa: B904
             raise
         return Generation(routed.result, mapping[-1], routed)
 

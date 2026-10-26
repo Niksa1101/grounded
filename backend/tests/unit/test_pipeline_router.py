@@ -182,12 +182,27 @@ async def test_outside_eval_the_failure_is_the_routers_with_the_provider_error_a
 
 
 async def test_the_unwrapped_error_still_prints_a_traceback(tmp_path: Path) -> None:
-    # ``raise causes[-1] from router_error`` makes a cycle in the cause chain (the router's own
-    # error was raised from the very same object); printing it must not loop or fail.
+    # Re-raising ``causes[-1]`` inside the handler makes a cycle in the chain (the router's own
+    # error was raised from the very same object, and becomes its ``__context__``); printing it
+    # must not loop or fail.
     provider = gemini(ProviderUnavailable("503"))
     with pytest.raises(ProviderUnavailable) as caught:
         await ask(pipeline(provider, eval_settings(tmp_path)))
     assert "ProviderUnavailable" in "".join(traceback.format_exception(caught.value))
+
+
+async def test_the_unwrapped_error_keeps_the_sdk_error_it_was_raised_from(tmp_path: Path) -> None:
+    # An adapter raises ``ProviderUnavailable(...) from <the SDK's exception>``. The re-raise must
+    # not replace that cause with the router's wrapper, or an eval traceback loses the HTTP error.
+    sdk_error = ConnectionError("upstream reset")
+    error = ProviderUnavailable("503")
+    error.__cause__ = sdk_error  # what ``raise error from sdk_error`` in the adapter leaves
+    with pytest.raises(ProviderUnavailable) as caught:
+        await ask(pipeline(gemini(error), eval_settings(tmp_path)))
+    assert caught.value is error
+    assert caught.value.__cause__ is sdk_error
+    assert isinstance(caught.value.__context__, AllProvidersUnavailable)
+    assert "upstream reset" in "".join(traceback.format_exception(caught.value))
 
 
 # --- the real eval path against a failing provider ------------------------------------------------

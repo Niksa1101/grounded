@@ -49,7 +49,6 @@ from typing import Any
 from pydantic import BaseModel
 
 from grounded.generation.context import escape_attribute, escape_content
-from grounded.generation.pipeline import MAX_VALIDATION_RETRIES
 from grounded.generation.prompts import (
     Prompt,
     load_judge_correctness_prompt,
@@ -77,6 +76,11 @@ logger = logging.getLogger(__name__)
 # FR-22: the judge runs at temperature 0. It is a property of the judge, not a tunable, so it is not
 # a setting (and not ``LLM_TEMPERATURE``, which is the generator's).
 JUDGE_TEMPERATURE = 0.0
+
+# AGENTS.md §6.4: one retry on the same provider with error feedback. The judge's own loop below
+# reads this bound; the generator's retry is the provider router's (Tech §10), which makes exactly
+# one by construction, so changing this number changes the judge only.
+MAX_VALIDATION_RETRIES = 1
 
 # The verdict for a claim with no usable source (rubric rule 6), decided without a call.
 NO_SOURCE_REASON = "The claim cites no source, so there is nothing that could support it."
