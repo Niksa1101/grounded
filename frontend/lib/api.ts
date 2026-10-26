@@ -8,9 +8,15 @@ export type AskResponse = components["schemas"]["AskResponse"];
 export type Citation = components["schemas"]["Citation"];
 export type ErrorBody = components["schemas"]["ErrorBody"];
 export type ErrorResponse = components["schemas"]["ErrorResponse"];
+export type MetricsSummary = components["schemas"]["MetricsSummary"];
+export type MetricsWindow = MetricsSummary["window"];
+export type Percentiles = components["schemas"]["Percentiles"];
+export type DailyStats = components["schemas"]["DailyStats"];
+export type EvalRunSummary = components["schemas"]["EvalRunSummary"];
 
-// Errors the Route Handler itself produces (lib/ask-proxy.ts). They are not part of the backend's
-// contract (Tech §13): the request never got an answer from it, so there is no backend request id.
+// Errors the Route Handlers themselves produce (lib/ask-proxy.ts, lib/metrics-source.ts). They are
+// not part of the backend's contract (Tech §13): the backend never answered the request (or its
+// answer is not passed on), so there is no backend request id.
 export type ProxyErrorCode =
   | "bad_request"
   | "upstream_timeout"
