@@ -35,7 +35,7 @@ Built unless marked *planned*:
 - **Structured output:** every answer is a Pydantic-validated object. Native JSON-schema generation, validation, one repair retry. If it is still invalid, the provider router falls back to a second provider (Groq); only when every provider fails is it a `502` ([Resilience](#resilience-fallback-and-circuit-breaker-draft)).
 - **Verifiable citations:** each claim cites source labels. The server validates them and maps them to exact `docs-page#section` links. The model never writes URLs.
 - **Honest refusals:** `answered | partial | insufficient_context`. Out-of-scope questions are refused, and that behavior is measured.
-- **Per-claim confidence:** computed server-side from retrieval signals. Whether it is calibrated is *planned* to be measured (Phase 8); today it is a documented heuristic.
+- **Per-claim confidence:** computed server-side from retrieval signals; a documented heuristic, not a probability. Its calibration against the judge was measured on the baseline run: the supported rate does not fall from bucket to bucket, but every judged claim was supported, so the check is weak ([Confidence calibration](#confidence-calibration)).
 - **Evals as a gate:** golden set, retrieval metrics (Recall@k, MRR, nDCG), generation metrics (faithfulness, correctness, refusal accuracy) via promptfoo, and a CI gate that fails a PR on regression.
 - **Protection on $0:** a per-client rate limit (5 a minute, 20 a day) and a global daily LLM budget (300 calls), the demo's configured values, whose counters are Postgres rows, an answer cache, input limits, a proxy secret between the two Vercel projects, and request telemetry with shadow cost. The public dashboard (p50/p95 per stage) is *planned* (Phase 8).
 
@@ -224,6 +224,77 @@ At least 10 items labeled: yes (n = 20).
 
 </details>
 
+### Confidence calibration
+
+> **Written by the agent at the Author's request (ticket 8.04, 2026-10-26).** The block between the markers is the output
+> of `grounded eval calibration`, pasted verbatim; the sentences around it are the reading.
+
+Does the server-side confidence of a claim ([How confidence is computed](#how-confidence-is-computed)) track whether the
+judge found the claim supported by its sources? Tech §9.8 buckets the claims (low < 0.5, mid 0.5 to 0.8 inclusive,
+high > 0.8) and asks for a supported rate that does not fall from low to high. The data is the generation baseline run
+above (2026-10-08, the same run the judge-agreement sample came from); no model was called again. The command reads its
+promptfoo results file, which is gitignored, so the output is committed as
+[eval/calibration/v1.md](eval/calibration/v1.md) under the exact command, and a test fails if this block drifts from
+that file. It holds counts only, no question, claim or answer text.
+
+<!-- calibration-report:start -->
+Confidence calibration of `20261008T155539Z-generation.json` (sha256 4d571ae1a34b): the run of 2026-10-08 15:56 UTC, git 2a7d381f75f40791f6185a1e1ef80320a1cdfed8, golden set v1 (sha256 8f084817), judge groq / openai/gpt-oss-120b (judge_faithfulness_v1@84103412), promptfoo 0.123.1.
+
+Buckets (Tech §9.8): low = confidence < 0.5, mid = 0.5 ≤ confidence ≤ 0.8 (both edges belong to mid), high = confidence > 0.8. n = claims with a judge verdict; supported rate = SUPPORTED / n (— when n = 0). NOT_SUPPORTED counts as not supported, including the verdicts given without a call because the claim had no usable source (decided locally). A verdict replayed from the eval cache counts like the others. Left out of n and counted on their own: claims whose judge call failed, and claims of answers the judge does not grade (faithfulness not applicable). Monotonic: the supported rate never falls from low to mid to high, over the buckets with n > 0.
+
+**hybrid**: generator gemini / gemini-3.5-flash-lite, prompt answer_v1@08cc49e5, index 0.141.1@4949e8a3, retrieval config 2f0b02bd, 30 answers.
+
+| Bucket | Confidence | n | Supported | Supported rate | Decided locally | Judge failed | Not judged |
+|---|---|---:|---:|---:|---:|---:|---:|
+| low | < 0.5 | 0 | 0 | — | 0 | 0 | 0 |
+| mid | 0.5 to 0.8 | 16 | 16 | 1.000 | 0 | 0 | 0 |
+| high | > 0.8 | 37 | 37 | 1.000 | 0 | 0 | 0 |
+| all | 0 to 1 | 53 | 53 | 1.000 | 0 | 0 | 0 |
+
+Monotonic: yes (over mid, high). Verdicts replayed from the eval cache: 4 of 53.
+
+**no_rag**: generator gemini / gemini-3.5-flash-lite, prompt answer_no_rag_v1@5f725a9d, index none, retrieval config no_rag, 30 answers.
+
+| Bucket | Confidence | n | Supported | Supported rate | Decided locally | Judge failed | Not judged |
+|---|---|---:|---:|---:|---:|---:|---:|
+| low | < 0.5 | 0 | 0 | — | 0 | 0 | 72 |
+| mid | 0.5 to 0.8 | 0 | 0 | — | 0 | 0 | 0 |
+| high | > 0.8 | 0 | 0 | — | 0 | 0 | 0 |
+| all | 0 to 1 | 0 | 0 | — | 0 | 0 | 72 |
+
+Monotonic: not testable (0 of 3 buckets have n > 0, it needs two). Verdicts replayed from the eval cache: 0 of 0.
+<!-- calibration-report:end -->
+
+**Reading: monotonic, but only in the weakest sense, and it cannot show that confidence separates supported from
+unsupported claims.**
+
+- **Monotonic: yes, because every rate is the same.** All 53 judged `hybrid` claims were `SUPPORTED`, so both buckets
+  that have claims show 1.000. A rate that is 1.000 everywhere cannot fall. The table shows that the judge never
+  contradicted a confident claim in this run; it does not show that a higher score means a claim is more likely to be
+  supported, because there was no unsupported claim for a lower bucket to hold more of.
+- **n per bucket, and what it allows.** low 0, mid 16, high 37 (53 claims from the 23 answered `hybrid` questions). One
+  claim moves the mid rate by 1/16 (about 0.06) and the high rate by 1/37 (about 0.03), so a difference between the two
+  smaller than that is not a claim, and with both at 1.000 there is no difference to claim. Zero unsupported claims out
+  of 16 is still consistent with an unsupported rate of up to about 3/16 (19%) in mid and 3/37 (8%) in high: the "rule
+  of three", a 95% bound for independent trials, computed here from the n above. The claims are not independent (below),
+  so the true bounds are wider. The low bucket is empty for `hybrid`: no answered claim scored below 0.5.
+- **What it means for the UI's "Low confidence" flag (< 0.5).** In this run it flagged no `hybrid` claim and all 72
+  `no_rag` claims, which cite nothing and are capped at 0.2 by design (`CONFIDENCE_UNCITED_CAP`); the judge does not
+  grade `no_rag`, so they are counted as not judged. So the flag works as "no valid citation, or weak retrieval support"
+  and is not validated beyond that: whether a *cited* claim below 0.5 is less often supported was not measured, because
+  there was none. The score is a heuristic, not a probability: a mid claim is not "70% likely" to be supported (here the
+  mid rate is 1.000). Tech §9.8 asks only for the order of the buckets, not for the rate to match the score.
+- **Limitations.** One run of 30 questions. The verdicts come from an LLM judge whose agreement with the Author on real
+  faithfulness claims is 6 of 6, all `SUPPORTED` ([Judge-human agreement](#judge-human-agreement)): whether it catches a
+  subtly unsupported claim is not measured, and a judge that rarely says `NOT_SUPPORTED` makes every bucket look perfect.
+  The claims of one answer share a question, a retrieval and often the same chunks, so 53 claims are fewer than 53
+  independent observations. No claim was decided without a judge call and no judge call failed (both columns are 0); 4
+  verdicts were replayed from the eval cache, which are the original calls' verdicts. `hybrid_rerank` was a separate run
+  and is not in this table.
+
+What would make the check informative is a run with unsupported claims in it, for example a harder golden set. Changing
+the heuristic after this table is a separate Author change with its own eval (ticket 8.04); nothing here changed it.
+
 ### Retrieval ablation: reading
 
 **Reading: hybrid did not beat dense here.** That misses the Phase 2 target (hybrid ≥ dense on Recall@5 and MRR).
@@ -386,7 +457,8 @@ Sorted by the nDCG@5 delta (losses first), then by question id. A rank is the 1-
   the product, and the measurement supports turning it on. It stays off in the deployed demo for now: the Trial key may not be
   used in production (D55), and a production key means real cost, so switching the demo on is a separate decision for the
   Author, not part of Phase 6. Two follow-ups are noted in PRD §12: the q003 label for golden set `v2`, and whether the rerank
-  score should get a weight in the confidence heuristic once calibration is measured (Phase 8).
+  score should get a weight in the confidence heuristic, which the calibration of 8.04 does not settle (it had no
+  unsupported claim to separate, [Confidence calibration](#confidence-calibration)).
 
 ### CI quality gate
 - **Every PR:** lint, types, unit + integration tests, retrieval eval vs baseline (the `retrieval-eval` job: a fresh
@@ -484,8 +556,8 @@ The confidence is the weighted mean of the components (the weights are relative,
 with no valid citation is capped at `CONFIDENCE_UNCITED_CAP` (at most 0.2) whatever else it has. With several
 citations the best chunk counts for `retrieval` and `agreement` and every extra source raises `citations`, so adding a
 citation never lowers the score (an average over the cited chunks would). `min_confidence` of an answer is the lowest
-claim confidence. Whether the number is calibrated is measured in Phase 8; until then it is a documented heuristic,
-not a probability. Details and the invariants: [docs/Tech.md §9.8](docs/Tech.md).
+claim confidence. It is a documented heuristic, not a probability; how it lines up with the judge's verdicts is in
+[Confidence calibration](#confidence-calibration) (8.04). Details and the invariants: [docs/Tech.md §9.8](docs/Tech.md).
 
 ## Cost and latency
 
